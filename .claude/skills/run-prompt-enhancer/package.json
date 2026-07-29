@@ -1,0 +1,10 @@
+{
+  "name": "run-prompt-enhancer-driver",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright driver for the run-prompt-enhancer skill. Not part of the app's own dependency graph.",
+  "type": "module",
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}
