@@ -328,7 +328,7 @@ export default function App() {
         ? `\n\nSpoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them${delivery.trim() ? `; delivery/voice: ${delivery.trim()}` : ''}:\n"${dialogue.trim()}"`
         : '')
       + (negative.trim()
-        ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. If the output format includes a real negative-prompt field, also add these terms there.`
+        ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format.`
         : '')
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
