@@ -62,7 +62,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   const doFetch = (includeTemperature) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
-      model, messages, max_tokens: 2000, stream: false,
+      model, messages, max_tokens: 4096, stream: false,
       ...(includeTemperature ? { temperature } : {}),
       ...formatParam,
     }),
@@ -88,8 +88,14 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     throw new Error(msg)
   }
   const data = await res.json()
-  const rawText = data.choices?.[0]?.message?.content || ''
-  if (!rawText) throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+  const msg = data.choices?.[0]?.message || {}
+  const rawText = msg.content || ''
+  if (!rawText) {
+    if (msg.reasoning) {
+      throw new Error(`${model} ran out of output length while "thinking" and never produced a final answer (its reasoning got cut off mid-thought). Try a less reasoning-heavy model, or a build/config with a larger context/output limit.`)
+    }
+    throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+  }
   const text = stripThinking(rawText)
   const usage = data.usage
     ? { input_tokens: data.usage.prompt_tokens ?? '?', output_tokens: data.usage.completion_tokens ?? '?' }

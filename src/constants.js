@@ -63,6 +63,17 @@ DESCRIBE ACTIVE STATES, NOT ABSENCES OR DELAYS
 "unblinking" → "gaze steady and fixed"; "a half-beat too slow" → "slow, heavy blinks."
 Convert absences/delays into the positive visible state.
 
+CAMERA MARKERS
+The scene text may contain one or more inline markers in the form [camera: <description>],
+e.g. "[camera: a slow dolly-in toward the subject]". These are camera-direction annotations,
+NOT visible on-screen text or objects — strip the bracket syntax entirely from your output and
+never describe it as a literal thing in the frame. Use each marker to govern the camera
+behavior for the narrative moment where it appears in the text. If multiple markers appear,
+weave them into ONE continuous, evolving camera path in chronological order — never as a hard
+cut or a spliced sequence. Respect the existing ONE primary move (two max at 8s+) ceiling: if
+there are more distinct markers than the duration can plausibly support, merge compatible ones
+into a single flowing move, or keep only the most narratively important one or two.
+
 CONTENT, roughly in order: (1) short anchoring phrase for subject + setting; (2) camera
 behavior — incorporate requested moves; ONE primary move (two max at 8s+); natural-language
 velocity; sequential connectors to spread one move; (3) subject motion, physical visible
@@ -314,6 +325,17 @@ Convert absences and delays into the positive visible state. Also avoid abstract
 labels ("sad", "nervous", "confused") — convert them to visible physical cues ("jaw
 tightens", "eyes dart to the door", "hands press flat on the table").
 
+CAMERA MARKERS
+The scene text may contain one or more inline markers in the form [camera: <description>],
+e.g. "[camera: a slow dolly-in toward the subject]". These are camera-direction annotations,
+NOT visible on-screen text or objects — strip the bracket syntax entirely from your output and
+never describe it as a literal thing in the frame. Use each marker to govern the camera
+behavior for the narrative moment where it appears in the text. If multiple markers appear,
+weave them into ONE continuous, evolving camera path in chronological order — never as a hard
+cut or a spliced sequence. Respect the existing ONE primary move (two max at 8s+) ceiling: if
+there are more distinct markers than the duration can plausibly support, merge compatible ones
+into a single flowing move, or keep only the most narratively important one or two.
+
 CONTENT, roughly in order: (1) short anchoring phrase for subject + setting; (2) camera
 behavior — incorporate requested moves; ONE primary move (two max at 8s+); natural-language
 velocity; sequential connectors to spread one move; (3) subject motion, physical visible
@@ -397,6 +419,7 @@ export const STYLE_OPTIONS = [
   { id: 'energetic',  label: 'Energetic',  hint: 'lively, dynamic, vivid and upbeat' },
   { id: 'mysterious', label: 'Mysterious', hint: 'moody, enigmatic, shadowy, suspenseful' },
   { id: 'whimsical',  label: 'Whimsical',  hint: 'lighthearted and charming — a gentle, playful touch of fantasy, not crude cartoon gags' },
+  { id: 'nsfw',  label: 'NSFW',  hint: 'not safe for work — explicit content, nudity, violence, or other mature themes' },
 ]
 
 export const CREATIVITY_OPTIONS = [
@@ -560,6 +583,16 @@ plus four Master Shots: move left and zoom in; move right and zoom in; move forw
 up; move down and zoom out. Translate any requested camera moves into this vocabulary (or the
 nearest equivalent) and keep to ONE camera behavior per clip.
 
+CAMERA MARKERS
+The scene text may contain inline markers [camera: <description>] — camera-direction
+annotations, not visible text. Strip the bracket syntax from the output and never treat it as
+an object or on-screen text in the scene. If the input contains exactly one marker, use it as
+the camera behavior. If it contains multiple markers, either (a) synthesize compatible
+directions into a single Master Shot combo (e.g. a "move left" marker plus a later "zoom in"
+marker → move left and zoom in), or (b) if they aren't compatible, pick the single most
+narratively significant marker and ignore the rest. Still only ONE camera behavior per clip —
+never chain multiple distinct camera moves.
+
 DURATION
 Kling generates 5-second or 10-second clips. At 5s: one continuous action. At 10s: one main
 action plus at most one natural follow-through. Never script a chronological multi-beat
@@ -574,6 +607,9 @@ NEGATIVE PROMPT — always include one
   facial inconsistency. Extend based on the specific scene's failure risks.
 - Never contradict the positive prompt (don't exclude "dim light" when the scene asks for
   moody low-key lighting).
+- If the input includes an explicit "Things to avoid" list, fold those exact items into this
+  negative list too (in addition to the stability/consistency terms above), and make sure the
+  positive prompt doesn't depict them either.
 
 STYLE / MOOD: if specified, express it through lighting, atmosphere, and movement quality —
 within the word budget. If none is given, fit the scene.
@@ -662,6 +698,10 @@ Extend when relevant:
 - Anime / illustration request → add: realistic, photograph, 3d render, cgi
 - Portrait → add: multiple views, tiled, bad proportions
 - Landscape / architecture → add: people (if unwanted), watermark
+
+If the input includes an explicit "Things to avoid" list, append those exact items (converted
+to lowercase, underscored tag form) to the negative tag list, and make sure the positive tag
+list doesn't include them.
 
 REFERENCE IMAGE (when a stage-1 caption is provided)
 Merge the caption's tags into the positive list after the quality tokens and before subject count, then continue with any additional user-specified details.
@@ -782,6 +822,177 @@ When given a one-line idea (e.g. "a queen betrayed by her advisor, cold fury bui
 
 OUTPUT: always English even if the input is another language. Return only the finished prompt text — no preamble, no explanation.`;
 
+export const DEFAULT_FRAME_MODE_OPTIONS = [
+  { id: 'single', label: 'Single image', hint: null },
+  { id: 'firstlast', label: 'First → Last frame', hint: 'End-frame interpolation: the clip starts on the first frame and ends on the last. Both frames required.' },
+  { id: 'firstmidlast', label: 'First → Mid → Last frame', hint: 'Three-frame interpolation: the clip starts on the first frame, passes through the mid frame, and ends on the last. All three frames required.' },
+]
+
+export const MINIMAX_H3_FRAME_MODE_OPTIONS = [
+  { id: 'single', label: 'Text or First Frame', hint: 'No image = text-to-video (T2VA). Upload one image to animate forward from it as the exact opening frame (I2VA).' },
+  { id: 'last', label: 'Last Frame', hint: 'Upload one image as the exact ending frame (L2VA) — the writer infers a plausible path that lands on it.' },
+  { id: 'firstlast', label: 'First + Last', hint: 'Upload two images as the exact opening and ending frames (FL2VA) — the writer describes the transition between them.' },
+  { id: 'ref', label: 'Reference (≤3 images)', hint: 'Upload up to 3 images, each with an explicit role and preservation strength (Ref2VA) — for identity, product, environment, style, or pose reference rather than an exact frame.' },
+]
+
+export const MINIMAX_H3_RESOLUTIONS = [
+  { id: 'land169', label: '1366×768',  w: 1366, h: 768,  ratio: 1366 / 768,  note: 'Landscape · 16:9 · 768P (also renders at 2K, same ratio)' },
+  { id: 'port916', label: '768×1366',  w: 768,  h: 1366, ratio: 768 / 1366,  note: 'Portrait · 9:16 · 768P (also renders at 2K, same ratio)' },
+  { id: 'sq',      label: '768×768',   w: 768,  h: 768,  ratio: 1,           note: 'Square · 1:1 · 768P (also renders at 2K, same ratio)' },
+  { id: 'land43',  label: '1024×768',  w: 1024, h: 768,  ratio: 1024 / 768,  note: 'Landscape · 4:3 · 768P (also renders at 2K, same ratio)' },
+  { id: 'port34',  label: '768×1024',  w: 768,  h: 1024, ratio: 768 / 1024,  note: 'Portrait · 3:4 · 768P (also renders at 2K, same ratio)' },
+  { id: 'land219', label: '1792×768',  w: 1792, h: 768,  ratio: 1792 / 768,  note: 'Ultrawide · 21:9 · 768P (also renders at 2K, same ratio)' },
+]
+
+export const MINIMAX_H3_DURATIONS = [
+  { label: '4s',  value: '4 seconds' },
+  { label: '5s',  value: '5 seconds' },
+  { label: '6s',  value: '6 seconds' },
+  { label: '8s',  value: '8 seconds' },
+  { label: '10s', value: '10 seconds' },
+  { label: '12s', value: '12 seconds' },
+  { label: '15s', value: '15 seconds' },
+]
+
+export const MINIMAX_H3_REF_ROLES = [
+  { id: 'subject_identity', label: 'Subject / Identity',   hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)' },
+  { id: 'wardrobe',         label: 'Wardrobe / Clothing',  hint: 'Outfit design, fabric, and color to apply to the subject — may be worn by a different person in this photo; that person\'s identity is not carried over' },
+  { id: 'product_object',   label: 'Product / Object',     hint: 'Geometry, material, labels, logo placement' },
+  { id: 'environment',      label: 'Environment',          hint: 'Location, set, background' },
+  { id: 'style',            label: 'Style',                 hint: 'Palette, lighting, medium/aesthetic' },
+  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Framing or storyboard reference' },
+]
+
+export const MINIMAX_H3_PRESERVE_OPTIONS = [
+  { id: 'exact',       label: 'Exact',       marker: 'fully_preserved',     hint: 'Fully preserve — no deviation' },
+  { id: 'strong',      label: 'Strong',      marker: 'partially_preserved', hint: 'Preserve defining attributes; minor incidental variation allowed' },
+  { id: 'guide',       label: 'Guide',       marker: 'attribute_transfer',  hint: 'Transfer the requested attribute without copying unrelated content' },
+  { id: 'inspiration', label: 'Inspiration', marker: 'weak_reference',      hint: 'Weak reference for broad style or atmosphere only' },
+]
+
+export const VISION_PROMPT_MINIMAX_H3_REF = `You are a vision model describing a reference image for a downstream MiniMax H3 video-prompt writer.
+This image will be used to guide ONE aspect of a generated video (its exact role is decided separately) — describe it
+precisely and completely so any of these uses is possible: subject identity (face, hair, build, wardrobe details),
+product/object geometry, materials, and any visible labels or logos, environment/setting and its lighting, color
+palette and visual style/medium, pose and framing. Note exact visible on-image text in quotation marks. Be concrete
+and specific — 3 to 5 sentences. Do NOT speculate about motion, story, or what happens next.
+Output only the description, with no preamble or labels.`;
+
+export const SYSTEM_PROMPT_MINIMAX_H3 = `You are a specialist prompt compiler for MiniMax H3, a multimodal model that generates a short video with
+synchronized native stereo audio from text and, optionally, image references.
+
+INPUT
+The user message begins with a line "MODE: T2VA" | "I2VA" | "L2VA" | "FL2VA" | "Ref2VA" telling you which of H3's
+five generation modes to compile for. Everything else in the message (frame/reference descriptions, target duration,
+aspect ratio, the scene/action text, camera moves, style/creativity notes, spoken dialogue, ambient-sound notes,
+music notes) is raw material — read all of it before writing.
+
+GENERAL RULES
+1. Write all structural prose in English, present tense, describing the video in playback order. Preserve the
+   original language only inside dialogue enclosed by <d> tags and inside exact visible on-screen text (wrapped in
+   English double quotes, spelling/punctuation preserved exactly).
+2. Never invent product claims, technical functions, brand wording, legal text, or quoted speech beyond what's given.
+3. Make actions physically observable and temporally plausible for the given duration. Follow a beginning state →
+   trigger → action chain → reaction → ending state arc. Do not cram more beats than the duration can plausibly
+   hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s.
+4. Camera: express movement as motion type + amplitude ("with small/large amplitude") + speed ("at slow/fast
+   speed") in natural prose, using this vocabulary: Zoom In/Out, Push In/Pull Out, Pan Left/Right, Truck Left/Right,
+   Tilt Up/Down, Pedestal Up/Down, Arc Shot, Tracking Shot, Static Shot, Shake Slightly/Strongly, POV, Roll
+   Clockwise/Counterclockwise. One primary camera behavior per shot. Translate any requested camera moves into this
+   vocabulary.
+5. Cuts only when they introduce new information (subject, space, state, viewpoint, time) — prefer camera movement
+   over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, the camera cuts to …" with
+   strictly increasing timestamps that fall before the video ends. Standardize brackets across every mode to
+   prevent parser drift: always write shot markers as [Shot N] (square brackets) and picture references as
+   <Picture N> (angle brackets) — e.g. <Picture 1> (from [Shot 1]) — never plain "Shot N" or "Picture N".
+   CAMERA MARKERS: the scene/action text may contain inline markers [camera: <description>] —
+   camera-direction annotations, not visible text or dialogue; strip the bracket syntax from
+   every output field and never describe it as on-screen text. Treat each marker as a strong
+   (not absolute) signal for where a shot cut may belong at that narrative moment — but it is
+   still governed by the cuts-only-for-new-information rule above and by the duration/shot-count
+   budget in rule 3. Multiple markers placed close together with no real change in subject,
+   space, state, viewpoint, or time between them should become sequential camera behavior
+   within the SAME shot, not separate cuts. Only start a new [Shot N] when a marker coincides
+   with genuine new information.
+6. Dialogue: if the user message includes a "Spoken dialogue" section, treat its quoted text as verbatim words —
+   never rewrite, translate, or invent additional words. Assign a stable speaker ID in the order speakers first
+   appear (S1, then S2, S3…; infer separate speakers from line breaks or "Name:" prefixes in the quoted text).
+   Write speaker identity, delivery, and any acting beat outside the tag; put only the language tag and the exact
+   words inside the tag, e.g.: the engineer, with a clear measured voice (S1), says: <d>[English] Alignment
+   complete.</d>. For a voiceover, write "says in an off-screen voiceover" and state that the visible character's
+   lips stay closed.
+7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
+   here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
+8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
+   music" notes if given. If that field is empty, judge from the scene whether music serves it — if not, or if the
+   field says "none"/"silence"/no music, output exactly N/A.
+9. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
+   decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
+   plan, or ending condition.
+10. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences.
+
+MODE-SPECIFIC OUTPUT
+
+T2VA (no reference image):
+Output exactly, in order:
+integrated_multimodal_description: [Shot 1] …
+
+overall_soundscape: …
+
+non_diegetic_music: …
+Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive").
+
+I2VA (one FIRST FRAME description given):
+Begin with exactly:
+For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+Then the same three fields as T2VA. Develop forward from the given first frame — preserve its identity, clothing,
+objects, composition, and spatial anchors; do not restate its static contents, only what happens next.
+
+L2VA (one LAST FRAME description given):
+Begin with exactly:
+How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second
+mark of the target video.
+Replace N with the actual final shot number you use and S.SS with the given target duration formatted to two
+decimals (e.g. "8 seconds" → "8.00"). Then the same three fields. Infer a plausible earlier state and an explicit
+action/transition path that converges exactly onto the given last frame.
+
+FL2VA (a FIRST FRAME + LAST FRAME + CHANGE description given):
+Begin with exactly:
+How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 0.00-second
+mark of the target video; <Picture 2> (from [Shot N]) aligns with the S.SS-second mark of the target video.
+Replace N and S.SS as above. Then the same three fields. Prefer a single shot unless the user's scene text
+explicitly calls for cuts. Describe a continuous physical path from the first frame to the last without
+contradicting either endpoint; do not restate their static contents.
+
+Ref2VA (one or more reference images given, each labeled "Image N — role: …, preservation marker: …: <caption>"):
+Output exactly these six sections, in order:
+subject_definitions:
+One line per reference image: <Subject N> is defined from its role and caption, e.g. "<Subject 1> is the [role]
+from <Picture 1>, preserving [the specific attributes implied by its role and caption]." When a role is
+wardrobe/clothing, scope <Subject N> to the garment(s) only — cut, fabric, color, pattern, and fit — and
+explicitly state that the face, body, and identity of whoever is wearing it in that reference photo are NOT
+carried over; only the clothing transfers onto the video's actual subject (defined by a separate subject-identity
+reference, or by the scene text if none is given).
+
+summary:
+Begin with the task-type marker [reference generation]. One or two sentences describing what the target video
+shows, referencing the <Subject N> labels.
+
+retention_analysis:
+One line per <Subject N>, using EXACTLY the preservation marker given for that image (fully_preserved |
+partially_preserved | attribute_transfer | weak_reference) followed by a short reason.
+
+detailed_description:
+Describe the target video in playback order (roughly 350–500 words unless a shorter prompt length was requested),
+inserting <Subject N> labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2]… with the
+same cut-timestamp rules as above.
+
+overall_soundscape / non_diegetic_music: as above.
+
+Before writing, silently verify: the output matches the given MODE; every <Subject N>/<Picture N> label is defined
+before use and never changes meaning; all shot timestamps are valid and increasing; the ending condition is
+achieved; dialogue and visible text are unchanged from what was given.`;
+
 export const TARGETS = {
   ltx: {
     id: 'ltx', label: 'LTX-2.3 · Video', type: 'video', system: SYSTEM_PROMPT_LTX, buildSystem: buildLtxSystemPrompt,
@@ -850,6 +1061,15 @@ export const TARGETS = {
     subtitle: "Story idea → script → director's cut → LTX-2.3 shot prompts",
     resolutions: LTX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+  },
+  minimax_h3: {
+    id: 'minimax_h3', label: 'MiniMax H3 · Video', type: 'video', system: SYSTEM_PROMPT_MINIMAX_H3,
+    subtitle: 'Text, first/last frame, or up to 3 role-tagged references → MiniMax H3 audio-video prompt',
+    resolutions: MINIMAX_H3_RESOLUTIONS,
+    durations: MINIMAX_H3_DURATIONS,
+    durationHint: 'MiniMax H3 requires an integer duration from 4–15s. 4–6s: one shot. 7–10s: one developed shot or 2–3 shots. 11–15s: 2–4 shots.',
+    frameModeOptions: MINIMAX_H3_FRAME_MODE_OPTIONS,
+    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false },
   },
 }
 

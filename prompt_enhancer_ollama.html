@@ -1,35 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Prompt Enhancer · Local Ollama (2-stage)</title>
-<style>
-  html, body { margin: 0; background: #08080f; }
-  * { -webkit-font-smoothing: antialiased; }
-  input[type="range"] { accent-color: #7c6af7; }
-  select { -webkit-appearance: none; appearance: none; }
-</style>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/htm/dist/htm.umd.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prompt Enhancer · Local Ollama (2-stage)</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      background: #08080f;
+    }
+
+    * {
+      -webkit-font-smoothing: antialiased;
+    }
+
+    input[type="range"] {
+      accent-color: #7c6af7;
+    }
+
+    select {
+      -webkit-appearance: none;
+      appearance: none;
+    }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/htm/dist/htm.umd.js"></script>
 </head>
+
 <body>
-<div id="root"></div>
+  <div id="root"></div>
 
-<script>
-const { useState, useRef, useEffect } = React;
-const html = htm.bind(React.createElement);
+  <script>
+    const { useState, useRef, useEffect } = React;
+    const html = htm.bind(React.createElement);
 
-/* ===================================================================
-   TWO-STAGE pipeline:
-     Stage 1 (vision model, e.g. qwen2.5vl): describe the image frame(s).
-     Stage 2 (writer model, e.g. mistral-nemo): write the LTX/FLUX prompt
-             from that description + the user's controls.
-   Text-only inputs skip stage 1. Caption is shown read-only (collapsed).
-   =================================================================== */
+    /* ===================================================================
+       TWO-STAGE pipeline:
+         Stage 1 (vision model, e.g. qwen2.5vl): describe the image frame(s).
+         Stage 2 (writer model, e.g. mistral-nemo): write the LTX/FLUX prompt
+                 from that description + the user's controls.
+       Text-only inputs skip stage 1. Caption is shown read-only (collapsed).
+       =================================================================== */
 
-const SYSTEM_PROMPT_LTX = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
+    const SYSTEM_PROMPT_LTX = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
 
 CONTEXT
 You are given a TEXT DESCRIPTION of the first frame (produced by a vision model). It already
@@ -100,7 +116,7 @@ no contradictions; no negation in the positive prompt; don't itemize body parts 
 OUTPUT: always English even if the input is another language. No negative prompt (handled
 separately). Return only the prompt paragraph.`;
 
-const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
+    const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
 
 ABOUT FLUX.dev
 FLUX.dev is a text-to-image diffusion model with a T5 text encoder, so it understands
@@ -134,14 +150,14 @@ image (subject, composition, lighting, palette, style) — unless a variation is
 
 OUTPUT: always English. Return only the prompt. No preamble, no negative prompt.`;
 
-/* ---- Stage-1 vision (captioner) system prompts ---- */
-const VISION_PROMPT_LTX_SINGLE = `You are a vision model captioning the FIRST FRAME of a video clip for a downstream prompt writer.
+    /* ---- Stage-1 vision (captioner) system prompts ---- */
+    const VISION_PROMPT_LTX_SINGLE = `You are a vision model captioning the FIRST FRAME of a video clip for a downstream prompt writer.
 Describe ONLY what is visibly present: the main subject and its appearance/wardrobe, the setting/background,
 the lighting (direction and quality), the color palette, the framing/composition, and the overall mood.
 Be concrete and concise — 2 to 4 sentences. Do NOT speculate about motion, story, or what happens next.
 Do NOT add camera directions. Output only the description, with no preamble or labels.`;
 
-const VISION_PROMPT_LTX_FIRSTLAST = `You are a vision model captioning the FIRST and LAST frames of a video clip for a downstream prompt writer.
+    const VISION_PROMPT_LTX_FIRSTLAST = `You are a vision model captioning the FIRST and LAST frames of a video clip for a downstream prompt writer.
 For each frame describe its visible contents (subject, wardrobe, setting, lighting, palette, composition),
 then state what visibly differs between them. Be concrete and concise. Do NOT invent motion beyond what the
 two frames imply. Format your answer EXACTLY as:
@@ -150,215 +166,230 @@ LAST FRAME: <description>
 CHANGE: <what visibly differs between the two>
 Output only those three lines, no preamble.`;
 
-const VISION_PROMPT_FLUX = `You are a vision model describing a reference image so a downstream writer can reproduce it as a
+    const VISION_PROMPT_FLUX = `You are a vision model describing a reference image so a downstream writer can reproduce it as a
 FLUX.dev text-to-image prompt. Describe in precise, prompt-ready natural language: the main subject and its
 key attributes, composition/framing, setting, lighting, color palette, and medium/style (photographic or
 artistic; include lens or film cues if photographic). Be specific and concise. Output only the description,
 with no preamble.`;
 
-const DURATION_OPTIONS = [
-  { label: "97f · ~4s",  value: "97 frames (~4 seconds)" },
-  { label: "8s · 192f",  value: "8 seconds" },
-  { label: "12s · 288f", value: "12 seconds" },
-  { label: "16s · 384f", value: "16 seconds" },
-  { label: "20s · 480f", value: "20 seconds" },
-];
+    const DURATION_OPTIONS = [
+      { label: "97f · ~4s", value: "97 frames (~4 seconds)" },
+      { label: "8s · 192f", value: "8 seconds" },
+      { label: "12s · 288f", value: "12 seconds" },
+      { label: "16s · 384f", value: "16 seconds" },
+      { label: "20s · 480f", value: "20 seconds" },
+    ];
 
-const OUTPUT_COUNT_OPTIONS = [{ label: "1 prompt", value: 1 }, { label: "3 variants", value: 3 }];
-const VARIANT_TEMPS = [0.3, 0.7, 1.0];
+    const OUTPUT_COUNT_OPTIONS = [{ label: "1 prompt", value: 1 }, { label: "3 variants", value: 3 }];
+    const VARIANT_TEMPS = [0.3, 0.7, 1.0];
 
-const STYLE_OPTIONS = [
-  { id: "auto",       label: "Auto",       hint: "" },
-  { id: "funny",      label: "Funny",      hint: "witty and clever — humor from an ironic or unexpected situation, a deadpan detail, or comic incongruity in the scene; keep it smart and grounded, NOT slapstick, cartoonish, googly-eyed, or childish" },
-  { id: "serious",    label: "Serious",    hint: "grounded, restrained, realistic and sincere" },
-  { id: "dramatic",   label: "Dramatic",   hint: "high-stakes cinematic tension, bold lighting, strong emotion" },
-  { id: "calm",       label: "Calm",       hint: "serene, slow, peaceful, soft and gentle" },
-  { id: "surreal",    label: "Surreal",    hint: "dreamlike and uncanny — bend reality with unexpected, poetic juxtapositions (the one style where the scene may stop being literal)" },
-  { id: "energetic",  label: "Energetic",  hint: "lively, dynamic, vivid and upbeat" },
-  { id: "mysterious", label: "Mysterious", hint: "moody, enigmatic, shadowy, suspenseful" },
-  { id: "whimsical",  label: "Whimsical",  hint: "lighthearted and charming — a gentle, playful touch of fantasy, not crude cartoon gags" },
-];
+    const STYLE_OPTIONS = [
+      { id: "auto", label: "Auto", hint: "" },
+      { id: "funny", label: "Funny", hint: "witty and clever — humor from an ironic or unexpected situation, a deadpan detail, or comic incongruity in the scene; keep it smart and grounded, NOT slapstick, cartoonish, googly-eyed, or childish" },
+      { id: "serious", label: "Serious", hint: "grounded, restrained, realistic and sincere" },
+      { id: "dramatic", label: "Dramatic", hint: "high-stakes cinematic tension, bold lighting, strong emotion" },
+      { id: "calm", label: "Calm", hint: "serene, slow, peaceful, soft and gentle" },
+      { id: "surreal", label: "Surreal", hint: "dreamlike and uncanny — bend reality with unexpected, poetic juxtapositions (the one style where the scene may stop being literal)" },
+      { id: "energetic", label: "Energetic", hint: "lively, dynamic, vivid and upbeat" },
+      { id: "mysterious", label: "Mysterious", hint: "moody, enigmatic, shadowy, suspenseful" },
+      { id: "whimsical", label: "Whimsical", hint: "lighthearted and charming — a gentle, playful touch of fantasy, not crude cartoon gags" },
+      { id: 'nsfw', label: 'NSFW', hint: 'not safe for work — explicit content, nudity, violence, or other mature themes' },
+    ];
 
-const CREATIVITY_OPTIONS = [
-  { id: "faithful", label: "Faithful", hint: "Stay close — describe the image/scene accurately, deviate only a little" },
-  { id: "balanced", label: "Balanced", hint: "Natural interpretation (default)" },
-  { id: "loose",    label: "Loose",    hint: "Use the image only as rough guidance — invent freely and take creative risks" },
-];
+    const CREATIVITY_OPTIONS = [
+      { id: "faithful", label: "Faithful", hint: "Stay close — describe the image/scene accurately, deviate only a little" },
+      { id: "balanced", label: "Balanced", hint: "Natural interpretation (default)" },
+      { id: "loose", label: "Loose", hint: "Use the image only as rough guidance — invent freely and take creative risks" },
+    ];
 
-const CAMERA_GROUPS = [
-  { group: "Static", moves: [
-    { id: "locked",   label: "Locked-off",     desc: "Camera holds perfectly still",        prompt: "the camera holds in a locked-off frame" },
-    { id: "handheld", label: "Handheld drift", desc: "Faint organic breathing movement",    prompt: "the camera drifts subtly with a slight handheld feel" },
-  ]},
-  { group: "Toward / Away", moves: [
-    { id: "dolly_in",  label: "Dolly-in",  desc: "Camera pushes forward toward subject", prompt: "a slow dolly-in toward the subject" },
-    { id: "dolly_out", label: "Dolly-out", desc: "Camera retreats, reveals context",     prompt: "a slow pull-back dollying away from the subject" },
-    { id: "zoom_in",   label: "Zoom-in",   desc: "Focal length tightens (no movement)",  prompt: "a slow zoom-in tightening on the subject" },
-    { id: "zoom_out",  label: "Zoom-out",  desc: "Focal length widens",                  prompt: "a slow zoom-out widening the frame" },
-  ]},
-  { group: "Sideways / Around", moves: [
-    { id: "track_l", label: "Track left",  desc: "Camera moves laterally left",       prompt: "a slow lateral track to the left" },
-    { id: "track_r", label: "Track right", desc: "Camera moves laterally right",      prompt: "a slow lateral track to the right" },
-    { id: "pan_l",   label: "Pan left",    desc: "Camera rotates left on fixed axis", prompt: "a slow pan to the left" },
-    { id: "pan_r",   label: "Pan right",   desc: "Camera rotates right on fixed axis", prompt: "a slow pan to the right" },
-    { id: "orbit",   label: "Orbit / arc", desc: "Camera arcs around subject",        prompt: "a slow orbit arcing gently around the subject" },
-  ]},
-  { group: "Vertical", moves: [
-    { id: "tilt_up",   label: "Tilt up",    desc: "Camera angle rotates upward",     prompt: "a slow tilt up" },
-    { id: "tilt_down", label: "Tilt down",  desc: "Camera angle rotates downward",   prompt: "a slow tilt down" },
-    { id: "crane_up",  label: "Crane up",   desc: "Camera body rises through space", prompt: "a smooth crane up" },
-    { id: "crane_down",label: "Crane down", desc: "Camera body descends",            prompt: "a smooth crane down" },
-  ]},
-  { group: "Aerial / Ground", moves: [
-    { id: "drone",    label: "Drone descent", desc: "Camera flies down through space",   prompt: "a slow drone descent into the scene" },
-    { id: "overhead", label: "Overhead",      desc: "High shot looking straight down",   prompt: "an overhead aerial shot looking straight down" },
-    { id: "ground",   label: "Ground-level",  desc: "Camera glides inches above ground", prompt: "a ground-skimming tracking shot at floor level" },
-  ]},
-  { group: "Subject-relative", moves: [
-    { id: "ots",    label: "Over-the-shoulder", desc: "Camera behind one character framing another", prompt: "an over-the-shoulder framing" },
-    { id: "pov",    label: "POV",                desc: "Camera is the character's eyes",             prompt: "a first-person point-of-view perspective" },
-    { id: "follow", label: "Following shot",     desc: "Camera trails behind subject",               prompt: "a steady following shot trailing behind the subject" },
-    { id: "linger", label: "Lingering hold",     desc: "Camera holds longer than expected",          prompt: "the camera lingers on the subject in a slow hold" },
-  ]},
-  { group: "Focus", moves: [
-    { id: "rack",    label: "Rack focus",  desc: "Focus shifts between subjects",     prompt: "a slow rack focus shifting from foreground to background" },
-    { id: "shallow", label: "Shallow DOF", desc: "Subject sharp, background blurred", prompt: "shallow depth of field with the background softly blurred" },
-  ]},
-];
+    const CAMERA_GROUPS = [
+      {
+        group: "Static", moves: [
+          { id: "locked", label: "Locked-off", desc: "Camera holds perfectly still", prompt: "the camera holds in a locked-off frame" },
+          { id: "handheld", label: "Handheld drift", desc: "Faint organic breathing movement", prompt: "the camera drifts subtly with a slight handheld feel" },
+        ]
+      },
+      {
+        group: "Toward / Away", moves: [
+          { id: "dolly_in", label: "Dolly-in", desc: "Camera pushes forward toward subject", prompt: "a slow dolly-in toward the subject" },
+          { id: "dolly_out", label: "Dolly-out", desc: "Camera retreats, reveals context", prompt: "a slow pull-back dollying away from the subject" },
+          { id: "zoom_in", label: "Zoom-in", desc: "Focal length tightens (no movement)", prompt: "a slow zoom-in tightening on the subject" },
+          { id: "zoom_out", label: "Zoom-out", desc: "Focal length widens", prompt: "a slow zoom-out widening the frame" },
+        ]
+      },
+      {
+        group: "Sideways / Around", moves: [
+          { id: "track_l", label: "Track left", desc: "Camera moves laterally left", prompt: "a slow lateral track to the left" },
+          { id: "track_r", label: "Track right", desc: "Camera moves laterally right", prompt: "a slow lateral track to the right" },
+          { id: "pan_l", label: "Pan left", desc: "Camera rotates left on fixed axis", prompt: "a slow pan to the left" },
+          { id: "pan_r", label: "Pan right", desc: "Camera rotates right on fixed axis", prompt: "a slow pan to the right" },
+          { id: "orbit", label: "Orbit / arc", desc: "Camera arcs around subject", prompt: "a slow orbit arcing gently around the subject" },
+        ]
+      },
+      {
+        group: "Vertical", moves: [
+          { id: "tilt_up", label: "Tilt up", desc: "Camera angle rotates upward", prompt: "a slow tilt up" },
+          { id: "tilt_down", label: "Tilt down", desc: "Camera angle rotates downward", prompt: "a slow tilt down" },
+          { id: "crane_up", label: "Crane up", desc: "Camera body rises through space", prompt: "a smooth crane up" },
+          { id: "crane_down", label: "Crane down", desc: "Camera body descends", prompt: "a smooth crane down" },
+        ]
+      },
+      {
+        group: "Aerial / Ground", moves: [
+          { id: "drone", label: "Drone descent", desc: "Camera flies down through space", prompt: "a slow drone descent into the scene" },
+          { id: "overhead", label: "Overhead", desc: "High shot looking straight down", prompt: "an overhead aerial shot looking straight down" },
+          { id: "ground", label: "Ground-level", desc: "Camera glides inches above ground", prompt: "a ground-skimming tracking shot at floor level" },
+        ]
+      },
+      {
+        group: "Subject-relative", moves: [
+          { id: "ots", label: "Over-the-shoulder", desc: "Camera behind one character framing another", prompt: "an over-the-shoulder framing" },
+          { id: "pov", label: "POV", desc: "Camera is the character's eyes", prompt: "a first-person point-of-view perspective" },
+          { id: "follow", label: "Following shot", desc: "Camera trails behind subject", prompt: "a steady following shot trailing behind the subject" },
+          { id: "linger", label: "Lingering hold", desc: "Camera holds longer than expected", prompt: "the camera lingers on the subject in a slow hold" },
+        ]
+      },
+      {
+        group: "Focus", moves: [
+          { id: "rack", label: "Rack focus", desc: "Focus shifts between subjects", prompt: "a slow rack focus shifting from foreground to background" },
+          { id: "shallow", label: "Shallow DOF", desc: "Subject sharp, background blurred", prompt: "shallow depth of field with the background softly blurred" },
+        ]
+      },
+    ];
 
-const LTX_RESOLUTIONS = [
-  { id: "1080p",    label: "1920×1080", w: 1920, h: 1080, ratio: 16 / 9, note: "Full HD · 16:9 · high VRAM" },
-  { id: "720p",     label: "1280×720",  w: 1280, h: 720,  ratio: 16 / 9, note: "HD · 16:9 · lower VRAM" },
-  { id: "vertical", label: "1080×1920", w: 1080, h: 1920, ratio: 9 / 16, note: "Vertical · 9:16 · mobile" },
-  { id: "land32",   label: "768×512",   w: 768,  h: 512,  ratio: 3 / 2,  note: "Landscape · 3:2 · fast iteration" },
-  { id: "port23",   label: "512×768",   w: 512,  h: 768,  ratio: 2 / 3,  note: "Portrait · 2:3 · fast iteration" },
-  { id: "sq1024",   label: "1024×1024", w: 1024, h: 1024, ratio: 1,      note: "Square · 1:1" },
-  { id: "square",   label: "640×640",   w: 640,  h: 640,  ratio: 1,      note: "Square · 1:1 · fast iteration" },
-];
+    const LTX_RESOLUTIONS = [
+      { id: "1080p", label: "1920×1080", w: 1920, h: 1080, ratio: 16 / 9, note: "Full HD · 16:9 · high VRAM" },
+      { id: "720p", label: "1280×720", w: 1280, h: 720, ratio: 16 / 9, note: "HD · 16:9 · lower VRAM" },
+      { id: "vertical", label: "1080×1920", w: 1080, h: 1920, ratio: 9 / 16, note: "Vertical · 9:16 · mobile" },
+      { id: "land32", label: "768×512", w: 768, h: 512, ratio: 3 / 2, note: "Landscape · 3:2 · fast iteration" },
+      { id: "port23", label: "512×768", w: 512, h: 768, ratio: 2 / 3, note: "Portrait · 2:3 · fast iteration" },
+      { id: "sq1024", label: "1024×1024", w: 1024, h: 1024, ratio: 1, note: "Square · 1:1" },
+      { id: "square", label: "640×640", w: 640, h: 640, ratio: 1, note: "Square · 1:1 · fast iteration" },
+    ];
 
-const FLUX_RESOLUTIONS = [
-  { id: "sq",      label: "1024×1024", w: 1024, h: 1024, ratio: 1,          note: "Square · 1:1" },
-  { id: "land32",  label: "1216×832",  w: 1216, h: 832,  ratio: 1216 / 832, note: "Landscape · 3:2" },
-  { id: "port23",  label: "832×1216",  w: 832,  h: 1216, ratio: 832 / 1216, note: "Portrait · 2:3" },
-  { id: "land169", label: "1344×768",  w: 1344, h: 768,  ratio: 1344 / 768, note: "Landscape · 16:9" },
-  { id: "port916", label: "768×1344",  w: 768,  h: 1344, ratio: 768 / 1344, note: "Portrait · 9:16" },
-];
+    const FLUX_RESOLUTIONS = [
+      { id: "sq", label: "1024×1024", w: 1024, h: 1024, ratio: 1, note: "Square · 1:1" },
+      { id: "land32", label: "1216×832", w: 1216, h: 832, ratio: 1216 / 832, note: "Landscape · 3:2" },
+      { id: "port23", label: "832×1216", w: 832, h: 1216, ratio: 832 / 1216, note: "Portrait · 2:3" },
+      { id: "land169", label: "1344×768", w: 1344, h: 768, ratio: 1344 / 768, note: "Landscape · 16:9" },
+      { id: "port916", label: "768×1344", w: 768, h: 1344, ratio: 768 / 1344, note: "Portrait · 9:16" },
+    ];
 
-const TARGETS = {
-  ltx: {
-    id: "ltx", label: "LTX-2.3 · Video", type: "video", system: SYSTEM_PROMPT_LTX,
-    subtitle: "Describe your scene → get a cinematic LTX-2.3 prompt",
-    resolutions: LTX_RESOLUTIONS,
-    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true },
-  },
-  flux: {
-    id: "flux", label: "FLUX.dev · Image", type: "image", system: SYSTEM_PROMPT_FLUX,
-    subtitle: "Describe your image → get a detailed FLUX.dev prompt",
-    resolutions: FLUX_RESOLUTIONS,
-    show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-  },
-};
+    const TARGETS = {
+      ltx: {
+        id: "ltx", label: "LTX-2.3 · Video", type: "video", system: SYSTEM_PROMPT_LTX,
+        subtitle: "Describe your scene → get a cinematic LTX-2.3 prompt",
+        resolutions: LTX_RESOLUTIONS,
+        show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true },
+      },
+      flux: {
+        id: "flux", label: "FLUX.dev · Image", type: "image", system: SYSTEM_PROMPT_FLUX,
+        subtitle: "Describe your image → get a detailed FLUX.dev prompt",
+        resolutions: FLUX_RESOLUTIONS,
+        show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+      },
+    };
 
-const presetById = (id, presets) => presets.find(p => p.id === id);
-const snap32 = (n) => Math.round(n / 32) * 32;
-const btn = (active) => ({ padding: "6px 14px", borderRadius: 6, border: "1px solid", borderColor: active ? "#7c6af7" : "#333", background: active ? "#2d2060" : "#1a1a2e", color: active ? "#c4b8ff" : "#888", fontSize: 12, cursor: "pointer", transition: "all 0.15s" });
-const moveLabel = (id) => CAMERA_GROUPS.flatMap(g => g.moves).find(m => m.id === id)?.label || id;
-const selStyle = { width: "100%", boxSizing: "border-box", background: "#12121f", border: "1px solid #2e2e44", borderRadius: 8, padding: "9px 12px", color: "#e0e0f0", fontSize: 13, outline: "none", cursor: "pointer" };
+    const presetById = (id, presets) => presets.find(p => p.id === id);
+    const snap32 = (n) => Math.round(n / 32) * 32;
+    const btn = (active) => ({ padding: "6px 14px", borderRadius: 6, border: "1px solid", borderColor: active ? "#7c6af7" : "#333", background: active ? "#2d2060" : "#1a1a2e", color: active ? "#c4b8ff" : "#888", fontSize: 12, cursor: "pointer", transition: "all 0.15s" });
+    const moveLabel = (id) => CAMERA_GROUPS.flatMap(g => g.moves).find(m => m.id === id)?.label || id;
+    const selStyle = { width: "100%", boxSizing: "border-box", background: "#12121f", border: "1px solid #2e2e44", borderRadius: 8, padding: "9px 12px", color: "#e0e0f0", fontSize: 13, outline: "none", cursor: "pointer" };
 
-function recommendRes(nw, nh, presets) {
-  const r = nw / nh;
-  let best = null, bestScore = Infinity;
-  for (const p of presets) {
-    const aspectDiff = Math.abs(Math.log(r / p.ratio));
-    const cropW = r > p.ratio ? nh * p.ratio : nw;
-    const upscale = p.w > cropW + 1;
-    let score = aspectDiff * 100 + (upscale ? 10 : 0);
-    score += upscale ? p.w * 1e-5 : -p.w * 1e-5;
-    if (score < bestScore) { bestScore = score; best = p; }
-  }
-  return best.id;
-}
+    function recommendRes(nw, nh, presets) {
+      const r = nw / nh;
+      let best = null, bestScore = Infinity;
+      for (const p of presets) {
+        const aspectDiff = Math.abs(Math.log(r / p.ratio));
+        const cropW = r > p.ratio ? nh * p.ratio : nw;
+        const upscale = p.w > cropW + 1;
+        let score = aspectDiff * 100 + (upscale ? 10 : 0);
+        score += upscale ? p.w * 1e-5 : -p.w * 1e-5;
+        if (score < bestScore) { bestScore = score; best = p; }
+      }
+      return best.id;
+    }
 
-function ratioLabel(r) {
-  const known = [[16/9,"16:9"],[9/16,"9:16"],[3/2,"3:2"],[2/3,"2:3"],[4/3,"4:3"],[3/4,"3:4"],[1,"1:1"],[21/9,"21:9"],[5/4,"5:4"]];
-  let best = "", d = Infinity;
-  for (const [v, l] of known) { const diff = Math.abs(Math.log(r / v)); if (diff < d) { d = diff; best = l; } }
-  return best;
-}
+    function ratioLabel(r) {
+      const known = [[16 / 9, "16:9"], [9 / 16, "9:16"], [3 / 2, "3:2"], [2 / 3, "2:3"], [4 / 3, "4:3"], [3 / 4, "3:4"], [1, "1:1"], [21 / 9, "21:9"], [5 / 4, "5:4"]];
+      let best = "", d = Infinity;
+      for (const [v, l] of known) { const diff = Math.abs(Math.log(r / v)); if (diff < d) { d = diff; best = l; } }
+      return best;
+    }
 
-/* ---- Backend config (persisted) ---- */
-const CFG_KEY = "ollama-enhancer-config";
-const DEFAULT_CFG = { base: "http://localhost:11434/v1", apiKey: "", temperature: 0.7 };
-function loadCfg() {
-  try { const raw = localStorage.getItem(CFG_KEY); if (raw) return { ...DEFAULT_CFG, ...JSON.parse(raw) }; } catch {}
-  return { ...DEFAULT_CFG };
-}
-function saveCfg(cfg) { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch {} }
+    /* ---- Backend config (persisted) ---- */
+    const CFG_KEY = "ollama-enhancer-config";
+    const DEFAULT_CFG = { base: "http://localhost:11434/v1", apiKey: "", temperature: 0.7 };
+    function loadCfg() {
+      try { const raw = localStorage.getItem(CFG_KEY); if (raw) return { ...DEFAULT_CFG, ...JSON.parse(raw) }; } catch { }
+      return { ...DEFAULT_CFG };
+    }
+    function saveCfg(cfg) { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch { } }
 
-function toOpenAIContent(userContent) {
-  if (typeof userContent === "string") return userContent;
-  return userContent.map(b => {
-    if (b.type === "text") return { type: "text", text: b.text };
-    if (b.type === "image") return { type: "image_url", image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } };
-    return null;
-  }).filter(Boolean);
-}
+    function toOpenAIContent(userContent) {
+      if (typeof userContent === "string") return userContent;
+      return userContent.map(b => {
+        if (b.type === "text") return { type: "text", text: b.text };
+        if (b.type === "image") return { type: "image_url", image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } };
+        return null;
+      }).filter(Boolean);
+    }
 
-async function callOllama(model, userContent, system, cfg, temperature) {
-  const base = (cfg.base || "").replace(/\/+$/, "");
-  const messages = [];
-  if (system) messages.push({ role: "system", content: system });
-  messages.push({ role: "user", content: toOpenAIContent(userContent) });
-  const headers = { "Content-Type": "application/json" };
-  if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-  let res;
-  try {
-    res = await fetch(`${base}/chat/completions`, {
-      method: "POST", headers,
-      body: JSON.stringify({ model, messages, max_tokens: 1000, temperature, stream: false }),
-    });
-  } catch (e) {
-    throw new Error(`Network/CORS error reaching ${base}. Is Ollama running and is OLLAMA_ORIGINS set to allow this page? (${e.message})`);
-  }
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || msg; } catch {}
-    throw new Error(msg);
-  }
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || "";
-  if (!text) throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`);
-  const usage = data.usage
-    ? { input_tokens: data.usage.prompt_tokens ?? "?", output_tokens: data.usage.completion_tokens ?? "?" }
-    : null;
-  return { text: text.trim(), usage };
-}
+    async function callOllama(model, userContent, system, cfg, temperature) {
+      const base = (cfg.base || "").replace(/\/+$/, "");
+      const messages = [];
+      if (system) messages.push({ role: "system", content: system });
+      messages.push({ role: "user", content: toOpenAIContent(userContent) });
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+      let res;
+      try {
+        res = await fetch(`${base}/chat/completions`, {
+          method: "POST", headers,
+          body: JSON.stringify({ model, messages, max_tokens: 1000, temperature, stream: false }),
+        });
+      } catch (e) {
+        throw new Error(`Network/CORS error reaching ${base}. Is Ollama running and is OLLAMA_ORIGINS set to allow this page? (${e.message})`);
+      }
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || msg; } catch { }
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      const text = data.choices?.[0]?.message?.content || "";
+      if (!text) throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`);
+      const usage = data.usage
+        ? { input_tokens: data.usage.prompt_tokens ?? "?", output_tokens: data.usage.completion_tokens ?? "?" }
+        : null;
+      return { text: text.trim(), usage };
+    }
 
-async function fetchModels(cfg) {
-  const base = (cfg.base || "").replace(/\/+$/, "");
-  const headers = {};
-  if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-  const res = await fetch(`${base}/models`, { headers });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return (data.data || []).map(m => m.id).filter(Boolean);
-}
+    async function fetchModels(cfg) {
+      const base = (cfg.base || "").replace(/\/+$/, "");
+      const headers = {};
+      if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+      const res = await fetch(`${base}/models`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return (data.data || []).map(m => m.id).filter(Boolean);
+    }
 
-const pickWriter = (ids) =>
-  ["mistral-nemo:latest", "mistral-nemo"].find(p => ids.includes(p))
-  || ids.find(id => !/embed|bge-m3|:vl|qwen.*vl|vision|llava|minicpm/i.test(id))
-  || ids[0] || "";
-const pickVision = (ids) =>
-  ["qwen2.5vl:7b", "qwen2.5vl"].find(p => ids.includes(p))
-  || ids.find(id => /vl|vision|llava|minicpm|gemma3/i.test(id))
-  || ids[0] || "";
+    const pickWriter = (ids) =>
+      ["mistral-nemo:latest", "mistral-nemo"].find(p => ids.includes(p))
+      || ids.find(id => !/embed|bge-m3|:vl|qwen.*vl|vision|llava|minicpm/i.test(id))
+      || ids[0] || "";
+    const pickVision = (ids) =>
+      ["qwen2.5vl:7b", "qwen2.5vl"].find(p => ids.includes(p))
+      || ids.find(id => /vl|vision|llava|minicpm|gemma3/i.test(id))
+      || ids[0] || "";
 
-function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels }) {
-  const [open, setOpen] = useState(false);
-  const input = { width: "100%", boxSizing: "border-box", background: "#12121f", border: "1px solid #2e2e44", borderRadius: 7, padding: "8px 11px", color: "#e0e0f0", fontSize: 13, outline: "none" };
-  const lbl = { fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: 4 };
-  const statusColor = modelStatus.ok ? "#4ade80" : modelStatus.loading ? "#9a8fd8" : "#f87171";
-  return html`
+    function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels }) {
+      const [open, setOpen] = useState(false);
+      const input = { width: "100%", boxSizing: "border-box", background: "#12121f", border: "1px solid #2e2e44", borderRadius: 7, padding: "8px 11px", color: "#e0e0f0", fontSize: 13, outline: "none" };
+      const lbl = { fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: 4 };
+      const statusColor = modelStatus.ok ? "#4ade80" : modelStatus.loading ? "#9a8fd8" : "#f87171";
+      return html`
     <div style=${{ marginBottom: 20, background: "#0e0e1c", border: "1px solid #2a2a3f", borderRadius: 10, padding: "10px 14px" }}>
       <div style=${{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <button onClick=${() => setOpen(v => !v)} style=${{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", color: "#888", fontSize: 12 }}>
@@ -404,79 +435,79 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels }) {
       `}
     </div>
   `;
-}
+    }
 
-function ImagePanel({ label, hint, onChange, presets, showTwoStage }) {
-  const [image, setImage]         = useState(null);
-  const [targetRes, setTargetRes] = useState(presets[1] ? presets[1].id : presets[0].id);
-  const [cropOpen, setCropOpen]   = useState(false);
-  const [cropPos, setCropPos]     = useState(0.5);
-  const [croppedUrl, setCroppedUrl] = useState(null);
-  const [croppedDims, setCroppedDims] = useState(null);
-  const fileInputRef = useRef(null);
+    function ImagePanel({ label, hint, onChange, presets, showTwoStage }) {
+      const [image, setImage] = useState(null);
+      const [targetRes, setTargetRes] = useState(presets[1] ? presets[1].id : presets[0].id);
+      const [cropOpen, setCropOpen] = useState(false);
+      const [cropPos, setCropPos] = useState(0.5);
+      const [croppedUrl, setCroppedUrl] = useState(null);
+      const [croppedDims, setCroppedDims] = useState(null);
+      const fileInputRef = useRef(null);
 
-  const loadFile = (file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const nativeW = img.naturalWidth, nativeH = img.naturalHeight;
-        const MAX = 1536;
-        let w = img.width, h = img.height;
-        if (w > MAX || h > MAX) { if (w >= h) { h = Math.round(h * MAX / w); w = MAX; } else { w = Math.round(w * MAX / h); h = MAX; } }
-        const canvas = document.createElement("canvas");
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        let dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-        if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-        const obj = { base64: dataUrl.split(",")[1], mediaType: "image/jpeg", previewUrl: dataUrl, originalUrl: e.target.result, nativeW, nativeH, fileName: file.name };
-        setImage(obj); setTargetRes(recommendRes(nativeW, nativeH, presets)); setCropPos(0.5);
-        onChange && onChange(obj);
+      const loadFile = (file) => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const nativeW = img.naturalWidth, nativeH = img.naturalHeight;
+            const MAX = 1536;
+            let w = img.width, h = img.height;
+            if (w > MAX || h > MAX) { if (w >= h) { h = Math.round(h * MAX / w); w = MAX; } else { w = Math.round(w * MAX / h); h = MAX; } }
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            let dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+            if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+            const obj = { base64: dataUrl.split(",")[1], mediaType: "image/jpeg", previewUrl: dataUrl, originalUrl: e.target.result, nativeW, nativeH, fileName: file.name };
+            setImage(obj); setTargetRes(recommendRes(nativeW, nativeH, presets)); setCropPos(0.5);
+            onChange && onChange(obj);
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
       };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  };
 
-  const onFileChange = (e) => loadFile(e.target.files[0]);
-  const onDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) loadFile(f); };
-  const removeImage = () => { setImage(null); setCroppedUrl(null); if (fileInputRef.current) fileInputRef.current.value = ""; onChange && onChange(null); };
+      const onFileChange = (e) => loadFile(e.target.files[0]);
+      const onDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) loadFile(f); };
+      const removeImage = () => { setImage(null); setCroppedUrl(null); if (fileInputRef.current) fileInputRef.current.value = ""; onChange && onChange(null); };
 
-  const selPreset = presetById(targetRes, presets) || presets[0];
-  const imgRatio = image ? image.nativeW / image.nativeH : null;
-  const resMismatch = image && Math.abs(Math.log(imgRatio / selPreset.ratio)) > 0.08;
-  const halfW = snap32(selPreset.w / 2), halfH = snap32(selPreset.h / 2);
-  const cropAxis = !image ? "none" : (Math.abs(imgRatio - selPreset.ratio) < 1e-3 ? "none" : (imgRatio > selPreset.ratio ? "x" : "y"));
-  const keepWPct = image && cropAxis === "x" ? (selPreset.ratio / imgRatio) * 100 : 100;
-  const keepHPct = image && cropAxis === "y" ? (imgRatio / selPreset.ratio) * 100 : 100;
-  const offXPct = cropPos * (100 - keepWPct);
-  const offYPct = cropPos * (100 - keepHPct);
-  const cropAvailW = image ? (imgRatio > selPreset.ratio ? image.nativeH * selPreset.ratio : image.nativeW) : 0;
-  const wouldUpscale = image && selPreset.w > cropAvailW + 1;
-  const outW = wouldUpscale ? snap32(cropAvailW) : selPreset.w;
-  const outH = wouldUpscale ? snap32(cropAvailW / selPreset.ratio) : selPreset.h;
+      const selPreset = presetById(targetRes, presets) || presets[0];
+      const imgRatio = image ? image.nativeW / image.nativeH : null;
+      const resMismatch = image && Math.abs(Math.log(imgRatio / selPreset.ratio)) > 0.08;
+      const halfW = snap32(selPreset.w / 2), halfH = snap32(selPreset.h / 2);
+      const cropAxis = !image ? "none" : (Math.abs(imgRatio - selPreset.ratio) < 1e-3 ? "none" : (imgRatio > selPreset.ratio ? "x" : "y"));
+      const keepWPct = image && cropAxis === "x" ? (selPreset.ratio / imgRatio) * 100 : 100;
+      const keepHPct = image && cropAxis === "y" ? (imgRatio / selPreset.ratio) * 100 : 100;
+      const offXPct = cropPos * (100 - keepWPct);
+      const offYPct = cropPos * (100 - keepHPct);
+      const cropAvailW = image ? (imgRatio > selPreset.ratio ? image.nativeH * selPreset.ratio : image.nativeW) : 0;
+      const wouldUpscale = image && selPreset.w > cropAvailW + 1;
+      const outW = wouldUpscale ? snap32(cropAvailW) : selPreset.w;
+      const outH = wouldUpscale ? snap32(cropAvailW / selPreset.ratio) : selPreset.h;
 
-  const exportCrop = () => {
-    if (!image) return;
-    const im = new Image();
-    im.onload = () => {
-      const tR = selPreset.ratio;
-      const NW = image.nativeW, NH = image.nativeH, nR = NW / NH;
-      let sx = 0, sy = 0, sw = NW, sh = NH;
-      if (nR > tR) { sw = Math.round(NH * tR); sx = Math.round((NW - sw) * cropPos); }
-      else if (nR < tR) { sh = Math.round(NW / tR); sy = Math.round((NH - sh) * cropPos); }
-      const c = document.createElement("canvas");
-      c.width = outW; c.height = outH;
-      c.getContext("2d").drawImage(im, sx, sy, sw, sh, 0, 0, outW, outH);
-      c.toBlob(b => { if (b) { setCroppedDims({ w: outW, h: outH }); setCroppedUrl(URL.createObjectURL(b)); } }, "image/png");
-    };
-    im.src = image.originalUrl;
-  };
+      const exportCrop = () => {
+        if (!image) return;
+        const im = new Image();
+        im.onload = () => {
+          const tR = selPreset.ratio;
+          const NW = image.nativeW, NH = image.nativeH, nR = NW / NH;
+          let sx = 0, sy = 0, sw = NW, sh = NH;
+          if (nR > tR) { sw = Math.round(NH * tR); sx = Math.round((NW - sw) * cropPos); }
+          else if (nR < tR) { sh = Math.round(NW / tR); sy = Math.round((NH - sh) * cropPos); }
+          const c = document.createElement("canvas");
+          c.width = outW; c.height = outH;
+          c.getContext("2d").drawImage(im, sx, sy, sw, sh, 0, 0, outW, outH);
+          c.toBlob(b => { if (b) { setCroppedDims({ w: outW, h: outH }); setCroppedUrl(URL.createObjectURL(b)); } }, "image/png");
+        };
+        im.src = image.originalUrl;
+      };
 
-  useEffect(() => { setCroppedUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); setCroppedDims(null); }, [cropPos, targetRes, image]);
+      useEffect(() => { setCroppedUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); setCroppedDims(null); }, [cropPos, targetRes, image]);
 
-  return html`
+      return html`
     <div style=${{ marginBottom: 16 }}>
       <label style=${{ fontSize: 11, color: "#777", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
         ${label} ${hint && html`<span style=${{ color: "#555", textTransform: "none", letterSpacing: 0 }}>${hint}</span>`}
@@ -497,18 +528,18 @@ function ImagePanel({ label, hint, onChange, presets, showTwoStage }) {
             <div style=${{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>Target resolution</div>
             <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               ${presets.map(p => {
-                const active = targetRes === p.id;
-                const rec = recommendRes(image.nativeW, image.nativeH, presets) === p.id;
-                const pCropW = imgRatio > p.ratio ? image.nativeH * p.ratio : image.nativeW;
-                const pUp = p.w > pCropW + 1;
-                return html`
+        const active = targetRes === p.id;
+        const rec = recommendRes(image.nativeW, image.nativeH, presets) === p.id;
+        const pCropW = imgRatio > p.ratio ? image.nativeH * p.ratio : image.nativeW;
+        const pUp = p.w > pCropW + 1;
+        return html`
                   <button key=${p.id} onClick=${() => setTargetRes(p.id)} title=${pUp ? `${p.note} — larger than your source, would upscale` : p.note} style=${{ ...btn(active), display: "flex", alignItems: "center", gap: 6 }}>
                     ${p.label}
                     ${rec && html`<span style=${{ fontSize: 9, color: active ? "#c4b8ff" : "#6a5acf", border: "1px solid", borderColor: active ? "#7c6af7" : "#3a3060", borderRadius: 8, padding: "0 5px" }}>best fit</span>`}
                     ${pUp && html`<span title="would upscale your source" style=${{ fontSize: 11, color: active ? "#e0a0a0" : "#9a6a6a" }}>↑</span>`}
                   </button>
                 `;
-              })}
+      })}
             </div>
             ${resMismatch && html`
               <div style=${{ marginTop: 12, fontSize: 11.5, color: "#f0b070", background: "#241a0e", border: "1px solid #4a3520", borderRadius: 6, padding: "8px 11px", lineHeight: 1.5 }}>
@@ -593,270 +624,270 @@ function ImagePanel({ label, hint, onChange, presets, showTwoStage }) {
       <input ref=${fileInputRef} type="file" accept="image/*" onChange=${onFileChange} style=${{ display: "none" }} />
     </div>
   `;
-}
-
-function App() {
-  const [cfg, setCfg]                 = useState(loadCfg);
-  const [models, setModels]           = useState([]);
-  const [modelStatus, setModelStatus] = useState({ loading: true, ok: false, error: "" });
-
-  const [target, setTarget]           = useState("ltx");
-  const [scene, setScene]             = useState("");
-  const [duration, setDuration]       = useState("97 frames (~4 seconds)");
-  const [writerModel, setWriterModel] = useState("");
-  const [visionModel, setVisionModel] = useState("");
-  const [writerManual, setWriterManual] = useState("mistral-nemo");
-  const [visionManual, setVisionManual] = useState("qwen2.5vl:7b");
-  const [outputCount, setOutputCount] = useState(1);
-  const [style, setStyle]             = useState("auto");
-  const [creativity, setCreativity]   = useState("balanced");
-  const [dialogue, setDialogue]       = useState("");
-  const [delivery, setDelivery]       = useState("");
-  const [frameMode, setFrameMode]     = useState("single");
-  const [firstImg, setFirstImg]       = useState(null);
-  const [lastImg, setLastImg]         = useState(null);
-  const [selectedMoves, setSelectedMoves] = useState(new Set());
-  const [cameraOpen, setCameraOpen]   = useState(false);
-  const [results, setResults]         = useState([]);
-  const [caption, setCaption]         = useState("");
-  const [visionBusy, setVisionBusy]   = useState(false);
-  const [globalError, setGlobalError] = useState("");
-  const [copied, setCopied]           = useState(null);
-  const [history, setHistory]         = useState([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [adminMode, setAdminMode]     = useState(false);
-  const [adminSystem, setAdminSystem] = useState(() => TARGETS["ltx"].system);
-  const [adminSystemOpen, setAdminSystemOpen] = useState(false);
-  const [adminUserMsg, setAdminUserMsg] = useState("");
-  const [pendingSend, setPendingSend] = useState(false);
-  const pendingSnapshotRef = useRef(null);
-
-  const t = TARGETS[target];
-  const show = t.show;
-
-  const effectiveWriter = models.length ? writerModel : writerManual.trim();
-  const effectiveVision = models.length ? visionModel : visionManual.trim();
-
-  useEffect(() => { saveCfg(cfg); }, [cfg]);
-  useEffect(() => {
-    try { const raw = localStorage.getItem("gen-history"); if (raw) setHistory(JSON.parse(raw)); } catch {}
-  }, []);
-
-  const reloadModels = async () => {
-    setModelStatus({ loading: true, ok: false, error: "" });
-    try {
-      const ids = await fetchModels(cfg);
-      setModels(ids);
-      setModelStatus({ loading: false, ok: true, error: "" });
-      setWriterModel(prev => (prev && ids.includes(prev)) ? prev : pickWriter(ids));
-      setVisionModel(prev => (prev && ids.includes(prev)) ? prev : pickVision(ids));
-    } catch (e) {
-      setModels([]);
-      setModelStatus({ loading: false, ok: false, error: e.message });
-    }
-  };
-  useEffect(() => { reloadModels(); /* eslint-disable-next-line */ }, [cfg.base, cfg.apiKey]);
-  useEffect(() => { setAdminSystem(TARGETS[target].system); setPendingSend(false); setAdminUserMsg(""); }, [target]);
-
-  const saveHistory = (snap, outputs) => {
-    setHistory(prev => {
-      const list = [{ ...snap, outputs }, ...prev].slice(0, 10);
-      try { localStorage.setItem("gen-history", JSON.stringify(list)); } catch {}
-      return list;
-    });
-  };
-  const clearHistory = () => { try { localStorage.removeItem("gen-history"); } catch {} setHistory([]); };
-  const restore = (h) => {
-    setTarget(h.target); setOutputCount(h.outputCount);
-    if (h.model) { setWriterModel(h.model); setWriterManual(h.model); }
-    if (h.vision) { setVisionModel(h.vision); setVisionManual(h.vision); }
-    setDuration(h.duration); setStyle(h.style); setCreativity(h.creativity); setFrameMode(h.frameMode);
-    setSelectedMoves(new Set(h.moves || []));
-    setScene(h.scene || ""); setDialogue(h.dialogue || ""); setDelivery(h.delivery || "");
-    setFirstImg(null); setLastImg(null); setResults([]); setCaption("");
-  };
-
-  const sendToWriter = async () => {
-    setPendingSend(false);
-    const snapshot = pendingSnapshotRef.current;
-    const systemToUse = adminSystem;
-    const userToUse = adminUserMsg;
-    if (outputCount === 1) {
-      const lbl = effectiveWriter;
-      setResults([{ label: lbl, text: "", usage: null, loading: true, error: "" }]);
-      try {
-        const { text, usage } = await callOllama(effectiveWriter, userToUse, systemToUse, cfg, cfg.temperature);
-        setResults([{ label: lbl, text, usage, loading: false, error: "" }]);
-        if (snapshot) saveHistory(snapshot, [{ label: lbl, text }]);
-      } catch (e) { setResults([{ label: lbl, text: "", usage: null, loading: false, error: e.message }]); }
-    } else {
-      const variants = VARIANT_TEMPS.map(temp => ({ label: `${effectiveWriter} · T${temp}`, temp }));
-      setResults(variants.map(v => ({ label: v.label, text: "", usage: null, loading: true, error: "" })));
-      const proms = variants.map((v, i) =>
-        callOllama(effectiveWriter, userToUse, systemToUse, cfg, v.temp)
-          .then(({ text, usage }) => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r)); return { label: v.label, text }; })
-          .catch(e => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r)); return { label: v.label, text: `(error: ${e.message})` }; })
-      );
-      const outs = await Promise.all(proms);
-      if (snapshot) saveHistory(snapshot, outs);
-    }
-  };
-
-  const toggleMove = (id) => setSelectedMoves(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const switchMode = (m) => { setFrameMode(m); setFirstImg(null); setLastImg(null); };
-  const switchTarget = (id) => { setTarget(id); setFirstImg(null); setLastImg(null); setFrameMode("single"); setResults([]); setCaption(""); };
-
-  // STAGE 1: describe image frame(s) with the vision model.
-  const captionImages = async () => {
-    let system, content;
-    if (t.type === "image") {
-      system = VISION_PROMPT_FLUX;
-      content = [
-        { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
-        { type: "text", text: scene.trim() ? `The user's intended subject/scene: ${scene.trim()}\nDescribe the reference image in precise, prompt-ready language.` : `Describe this reference image in precise, prompt-ready language.` },
-      ];
-    } else if (frameMode === "firstlast") {
-      system = VISION_PROMPT_LTX_FIRSTLAST;
-      content = [
-        { type: "text", text: "FIRST FRAME (clip starts here):" },
-        { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
-        { type: "text", text: "LAST FRAME (clip ends here):" },
-        { type: "image", source: { type: "base64", media_type: lastImg.mediaType, data: lastImg.base64 } },
-        { type: "text", text: "Describe both frames and the change, as instructed." },
-      ];
-    } else {
-      system = VISION_PROMPT_LTX_SINGLE;
-      content = [
-        { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
-        { type: "text", text: "Describe this first frame as instructed." },
-      ];
-    }
-    const { text } = await callOllama(effectiveVision, content, system, cfg, 0.3);
-    return text;
-  };
-
-  const enhance = async () => {
-    const hasImg = t.type === "image" ? !!firstImg : (frameMode === "firstlast" ? (firstImg && lastImg) : !!firstImg);
-    const canGen = t.type === "image" ? (scene.trim() || firstImg)
-      : (frameMode === "firstlast" ? (firstImg && lastImg) : (scene.trim() || firstImg));
-    if (!canGen) return;
-    if (!effectiveWriter) { setGlobalError("Pick a Writer model (open ⚙ Local backend → Reload models, or type one)."); return; }
-    if (hasImg && !effectiveVision) { setGlobalError("Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b)."); return; }
-    setGlobalError(""); setCopied(null); setCaption(""); setPendingSend(false);
-
-    const styleObj = STYLE_OPTIONS.find(s => s.id === style);
-    const creativityText = creativity === "balanced" ? ""
-      : t.type === "image"
-        ? (creativity === "faithful"
-            ? `\n\nImage fidelity: FAITHFUL — recreate the reference closely; keep its subject, composition and palette, deviating only slightly.`
-            : `\n\nImage fidelity: LOOSE — treat the reference as rough inspiration only. Invent freely, take creative risks, and prioritize the chosen style over literal resemblance.`)
-        : (creativity === "faithful"
-            ? `\n\nCreative latitude: FAITHFUL — keep the proposed motion minimal and literal to the scene.`
-            : `\n\nCreative latitude: LOOSE — be genuinely inventive and surprising with the action, framing and atmosphere (within LTX motion limits); don't settle for the obvious motion.`);
-    const stylePart = (styleObj && styleObj.id !== "auto" ? `\n\nStyle / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: ${styleObj.label} — ${styleObj.hint}` : "")
-      + creativityText
-      + (show.dialogue && dialogue.trim() ? `\n\nSpoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them${delivery.trim() ? `; delivery/voice: ${delivery.trim()}` : ""}:\n"${dialogue.trim()}"` : "");
-    const cameraPart = (t.type !== "image" && selectedMoves.size > 0)
-      ? `\n\nRequested camera moves (incorporate these):\n${CAMERA_GROUPS.flatMap(g => g.moves).filter(m => selectedMoves.has(m.id)).map(m => `- ${m.prompt}`).join("\n")}`
-      : "";
-
-    // STAGE 1 — vision caption (only when an image is present)
-    let frameDescription = null;
-    if (hasImg) {
-      setVisionBusy(true);
-      setResults([]);
-      try {
-        frameDescription = await captionImages();
-        setCaption(frameDescription);
-      } catch (e) {
-        setVisionBusy(false);
-        setGlobalError(`Vision step failed (${effectiveVision}): ${e.message}`);
-        return;
-      }
-      setVisionBusy(false);
     }
 
-    // STAGE 2 — build the writer's text prompt
-    let userText;
-    if (t.type === "image") {
-      const ref = frameDescription ? `Reference image description:\n${frameDescription}\n\n` : "";
-      const scenePart = scene.trim()
-        ? `Image description / subject:\n${scene}`
-        : (frameDescription ? `No extra description — base the FLUX prompt on the reference description above.` : `No description provided.`);
-      userText = `${ref}${scenePart}${stylePart}`;
-    } else if (frameMode === "firstlast") {
-      const frames = frameDescription ? `Frames (already established — do not restate their static contents):\n${frameDescription}\n\n` : "";
-      const scenePart = scene.trim()
-        ? `Transition description:\n${scene}`
-        : `No description provided — infer the natural motion that carries the scene from the first frame to the last.`;
-      userText = `MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}`;
-    } else {
-      const frame = frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : "";
-      const scenePart = scene.trim()
-        ? `Basic scene description:\n${scene}`
-        : (frameDescription ? `No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.` : `No scene description provided.`);
-      userText = `${frame}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}`;
-    }
+    function App() {
+      const [cfg, setCfg] = useState(loadCfg);
+      const [models, setModels] = useState([]);
+      const [modelStatus, setModelStatus] = useState({ loading: true, ok: false, error: "" });
 
-    const snapshot = {
-      ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null, duration,
-      style, creativity, frameMode, moves: [...selectedMoves],
-      scene, dialogue: show.dialogue ? dialogue : "", delivery: show.dialogue ? delivery : "",
-      firstImg: firstImg?.fileName || null, lastImg: lastImg?.fileName || null,
-    };
+      const [target, setTarget] = useState("ltx");
+      const [scene, setScene] = useState("");
+      const [duration, setDuration] = useState("97 frames (~4 seconds)");
+      const [writerModel, setWriterModel] = useState("");
+      const [visionModel, setVisionModel] = useState("");
+      const [writerManual, setWriterManual] = useState("mistral-nemo");
+      const [visionManual, setVisionManual] = useState("qwen2.5vl:7b");
+      const [outputCount, setOutputCount] = useState(1);
+      const [style, setStyle] = useState("auto");
+      const [creativity, setCreativity] = useState("balanced");
+      const [dialogue, setDialogue] = useState("");
+      const [delivery, setDelivery] = useState("");
+      const [frameMode, setFrameMode] = useState("single");
+      const [firstImg, setFirstImg] = useState(null);
+      const [lastImg, setLastImg] = useState(null);
+      const [selectedMoves, setSelectedMoves] = useState(new Set());
+      const [cameraOpen, setCameraOpen] = useState(false);
+      const [results, setResults] = useState([]);
+      const [caption, setCaption] = useState("");
+      const [visionBusy, setVisionBusy] = useState(false);
+      const [globalError, setGlobalError] = useState("");
+      const [copied, setCopied] = useState(null);
+      const [history, setHistory] = useState([]);
+      const [historyOpen, setHistoryOpen] = useState(false);
+      const [adminMode, setAdminMode] = useState(false);
+      const [adminSystem, setAdminSystem] = useState(() => TARGETS["ltx"].system);
+      const [adminSystemOpen, setAdminSystemOpen] = useState(false);
+      const [adminUserMsg, setAdminUserMsg] = useState("");
+      const [pendingSend, setPendingSend] = useState(false);
+      const pendingSnapshotRef = useRef(null);
 
-    // STAGE 2 — run the writer
-    if (adminMode) {
-      setAdminUserMsg(userText);
-      pendingSnapshotRef.current = snapshot;
-      setPendingSend(true);
-      return;
-    }
-    if (outputCount === 1) {
-      const lbl = effectiveWriter;
-      setResults([{ label: lbl, text: "", usage: null, loading: true, error: "" }]);
-      try {
-        const { text, usage } = await callOllama(effectiveWriter, userText, t.system, cfg, cfg.temperature);
-        setResults([{ label: lbl, text, usage, loading: false, error: "" }]);
-        saveHistory(snapshot, [{ label: lbl, text }]);
-      } catch (e) { setResults([{ label: lbl, text: "", usage: null, loading: false, error: e.message }]); }
-    } else {
-      const variants = VARIANT_TEMPS.map(temp => ({ label: `${effectiveWriter} · T${temp}`, temp }));
-      setResults(variants.map(v => ({ label: v.label, text: "", usage: null, loading: true, error: "" })));
-      const proms = variants.map((v, i) =>
-        callOllama(effectiveWriter, userText, t.system, cfg, v.temp)
-          .then(({ text, usage }) => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r)); return { label: v.label, text }; })
-          .catch(e => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r)); return { label: v.label, text: `(error: ${e.message})` }; })
-      );
-      const outs = await Promise.all(proms);
-      saveHistory(snapshot, outs);
-    }
-  };
+      const t = TARGETS[target];
+      const show = t.show;
 
-  const copy = (idx) => { navigator.clipboard.writeText(results[idx].text); setCopied(idx); setTimeout(() => setCopied(null), 2000); };
-  const editResult = (idx, value) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, text: value } : r));
+      const effectiveWriter = models.length ? writerModel : writerManual.trim();
+      const effectiveVision = models.length ? visionModel : visionManual.trim();
 
-  const writing = results.some(r => r.loading);
-  const isLoading = visionBusy || writing;
-  const canGenerate = t.type === "image" ? (!!scene.trim() || !!firstImg)
-    : (frameMode === "firstlast" ? (!!firstImg && !!lastImg) : (!!scene.trim() || !!firstImg));
-  const proposeMode = !scene.trim() && (t.type === "image" ? !!firstImg : (frameMode === "firstlast" ? (firstImg && lastImg) : !!firstImg));
-  const buttonLabel = visionBusy ? "👁 Reading image…"
-    : writing ? "✦ Writing prompt…"
-    : t.type === "image" ? (proposeMode ? "✦ Describe image as prompt" : "✦ Enhance prompt")
-    : (proposeMode ? (frameMode === "firstlast" ? "✦ Propose motion between frames" : "✦ Propose scene from image") : "✦ Enhance Prompt");
+      useEffect(() => { saveCfg(cfg); }, [cfg]);
+      useEffect(() => {
+        try { const raw = localStorage.getItem("gen-history"); if (raw) setHistory(JSON.parse(raw)); } catch { }
+      }, []);
 
-  let sceneHint = "";
-  if (t.type === "image") sceneHint = firstImg ? "(optional — leave blank to describe the reference image)" : "";
-  else if (frameMode === "firstlast") sceneHint = "(optional — leave blank to let the writer propose the motion between your frames)";
-  else if (firstImg) sceneHint = "(optional — leave blank to let the writer propose one from the frame)";
+      const reloadModels = async () => {
+        setModelStatus({ loading: true, ok: false, error: "" });
+        try {
+          const ids = await fetchModels(cfg);
+          setModels(ids);
+          setModelStatus({ loading: false, ok: true, error: "" });
+          setWriterModel(prev => (prev && ids.includes(prev)) ? prev : pickWriter(ids));
+          setVisionModel(prev => (prev && ids.includes(prev)) ? prev : pickVision(ids));
+        } catch (e) {
+          setModels([]);
+          setModelStatus({ loading: false, ok: false, error: e.message });
+        }
+      };
+      useEffect(() => { reloadModels(); /* eslint-disable-next-line */ }, [cfg.base, cfg.apiKey]);
+      useEffect(() => { setAdminSystem(TARGETS[target].system); setPendingSend(false); setAdminUserMsg(""); }, [target]);
 
-  const sceneLabel = t.type === "image" ? "Image Description" : "Your Scene";
-  const scenePlaceholder = t.type === "image"
-    ? "e.g. A weathered fisherman mending nets at dawn, harbor and boats behind him"
-    : (firstImg ? "Leave blank to auto-propose, or describe what should happen…" : "e.g. A woman walks through a rainy night market in Tokyo, stops at a noodle stall");
+      const saveHistory = (snap, outputs) => {
+        setHistory(prev => {
+          const list = [{ ...snap, outputs }, ...prev].slice(0, 10);
+          try { localStorage.setItem("gen-history", JSON.stringify(list)); } catch { }
+          return list;
+        });
+      };
+      const clearHistory = () => { try { localStorage.removeItem("gen-history"); } catch { } setHistory([]); };
+      const restore = (h) => {
+        setTarget(h.target); setOutputCount(h.outputCount);
+        if (h.model) { setWriterModel(h.model); setWriterManual(h.model); }
+        if (h.vision) { setVisionModel(h.vision); setVisionManual(h.vision); }
+        setDuration(h.duration); setStyle(h.style); setCreativity(h.creativity); setFrameMode(h.frameMode);
+        setSelectedMoves(new Set(h.moves || []));
+        setScene(h.scene || ""); setDialogue(h.dialogue || ""); setDelivery(h.delivery || "");
+        setFirstImg(null); setLastImg(null); setResults([]); setCaption("");
+      };
 
-  return html`
+      const sendToWriter = async () => {
+        setPendingSend(false);
+        const snapshot = pendingSnapshotRef.current;
+        const systemToUse = adminSystem;
+        const userToUse = adminUserMsg;
+        if (outputCount === 1) {
+          const lbl = effectiveWriter;
+          setResults([{ label: lbl, text: "", usage: null, loading: true, error: "" }]);
+          try {
+            const { text, usage } = await callOllama(effectiveWriter, userToUse, systemToUse, cfg, cfg.temperature);
+            setResults([{ label: lbl, text, usage, loading: false, error: "" }]);
+            if (snapshot) saveHistory(snapshot, [{ label: lbl, text }]);
+          } catch (e) { setResults([{ label: lbl, text: "", usage: null, loading: false, error: e.message }]); }
+        } else {
+          const variants = VARIANT_TEMPS.map(temp => ({ label: `${effectiveWriter} · T${temp}`, temp }));
+          setResults(variants.map(v => ({ label: v.label, text: "", usage: null, loading: true, error: "" })));
+          const proms = variants.map((v, i) =>
+            callOllama(effectiveWriter, userToUse, systemToUse, cfg, v.temp)
+              .then(({ text, usage }) => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r)); return { label: v.label, text }; })
+              .catch(e => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r)); return { label: v.label, text: `(error: ${e.message})` }; })
+          );
+          const outs = await Promise.all(proms);
+          if (snapshot) saveHistory(snapshot, outs);
+        }
+      };
+
+      const toggleMove = (id) => setSelectedMoves(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      const switchMode = (m) => { setFrameMode(m); setFirstImg(null); setLastImg(null); };
+      const switchTarget = (id) => { setTarget(id); setFirstImg(null); setLastImg(null); setFrameMode("single"); setResults([]); setCaption(""); };
+
+      // STAGE 1: describe image frame(s) with the vision model.
+      const captionImages = async () => {
+        let system, content;
+        if (t.type === "image") {
+          system = VISION_PROMPT_FLUX;
+          content = [
+            { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
+            { type: "text", text: scene.trim() ? `The user's intended subject/scene: ${scene.trim()}\nDescribe the reference image in precise, prompt-ready language.` : `Describe this reference image in precise, prompt-ready language.` },
+          ];
+        } else if (frameMode === "firstlast") {
+          system = VISION_PROMPT_LTX_FIRSTLAST;
+          content = [
+            { type: "text", text: "FIRST FRAME (clip starts here):" },
+            { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
+            { type: "text", text: "LAST FRAME (clip ends here):" },
+            { type: "image", source: { type: "base64", media_type: lastImg.mediaType, data: lastImg.base64 } },
+            { type: "text", text: "Describe both frames and the change, as instructed." },
+          ];
+        } else {
+          system = VISION_PROMPT_LTX_SINGLE;
+          content = [
+            { type: "image", source: { type: "base64", media_type: firstImg.mediaType, data: firstImg.base64 } },
+            { type: "text", text: "Describe this first frame as instructed." },
+          ];
+        }
+        const { text } = await callOllama(effectiveVision, content, system, cfg, 0.3);
+        return text;
+      };
+
+      const enhance = async () => {
+        const hasImg = t.type === "image" ? !!firstImg : (frameMode === "firstlast" ? (firstImg && lastImg) : !!firstImg);
+        const canGen = t.type === "image" ? (scene.trim() || firstImg)
+          : (frameMode === "firstlast" ? (firstImg && lastImg) : (scene.trim() || firstImg));
+        if (!canGen) return;
+        if (!effectiveWriter) { setGlobalError("Pick a Writer model (open ⚙ Local backend → Reload models, or type one)."); return; }
+        if (hasImg && !effectiveVision) { setGlobalError("Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b)."); return; }
+        setGlobalError(""); setCopied(null); setCaption(""); setPendingSend(false);
+
+        const styleObj = STYLE_OPTIONS.find(s => s.id === style);
+        const creativityText = creativity === "balanced" ? ""
+          : t.type === "image"
+            ? (creativity === "faithful"
+              ? `\n\nImage fidelity: FAITHFUL — recreate the reference closely; keep its subject, composition and palette, deviating only slightly.`
+              : `\n\nImage fidelity: LOOSE — treat the reference as rough inspiration only. Invent freely, take creative risks, and prioritize the chosen style over literal resemblance.`)
+            : (creativity === "faithful"
+              ? `\n\nCreative latitude: FAITHFUL — keep the proposed motion minimal and literal to the scene.`
+              : `\n\nCreative latitude: LOOSE — be genuinely inventive and surprising with the action, framing and atmosphere (within LTX motion limits); don't settle for the obvious motion.`);
+        const stylePart = (styleObj && styleObj.id !== "auto" ? `\n\nStyle / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: ${styleObj.label} — ${styleObj.hint}` : "")
+          + creativityText
+          + (show.dialogue && dialogue.trim() ? `\n\nSpoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them${delivery.trim() ? `; delivery/voice: ${delivery.trim()}` : ""}:\n"${dialogue.trim()}"` : "");
+        const cameraPart = (t.type !== "image" && selectedMoves.size > 0)
+          ? `\n\nRequested camera moves (incorporate these):\n${CAMERA_GROUPS.flatMap(g => g.moves).filter(m => selectedMoves.has(m.id)).map(m => `- ${m.prompt}`).join("\n")}`
+          : "";
+
+        // STAGE 1 — vision caption (only when an image is present)
+        let frameDescription = null;
+        if (hasImg) {
+          setVisionBusy(true);
+          setResults([]);
+          try {
+            frameDescription = await captionImages();
+            setCaption(frameDescription);
+          } catch (e) {
+            setVisionBusy(false);
+            setGlobalError(`Vision step failed (${effectiveVision}): ${e.message}`);
+            return;
+          }
+          setVisionBusy(false);
+        }
+
+        // STAGE 2 — build the writer's text prompt
+        let userText;
+        if (t.type === "image") {
+          const ref = frameDescription ? `Reference image description:\n${frameDescription}\n\n` : "";
+          const scenePart = scene.trim()
+            ? `Image description / subject:\n${scene}`
+            : (frameDescription ? `No extra description — base the FLUX prompt on the reference description above.` : `No description provided.`);
+          userText = `${ref}${scenePart}${stylePart}`;
+        } else if (frameMode === "firstlast") {
+          const frames = frameDescription ? `Frames (already established — do not restate their static contents):\n${frameDescription}\n\n` : "";
+          const scenePart = scene.trim()
+            ? `Transition description:\n${scene}`
+            : `No description provided — infer the natural motion that carries the scene from the first frame to the last.`;
+          userText = `MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}`;
+        } else {
+          const frame = frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : "";
+          const scenePart = scene.trim()
+            ? `Basic scene description:\n${scene}`
+            : (frameDescription ? `No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.` : `No scene description provided.`);
+          userText = `${frame}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}`;
+        }
+
+        const snapshot = {
+          ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null, duration,
+          style, creativity, frameMode, moves: [...selectedMoves],
+          scene, dialogue: show.dialogue ? dialogue : "", delivery: show.dialogue ? delivery : "",
+          firstImg: firstImg?.fileName || null, lastImg: lastImg?.fileName || null,
+        };
+
+        // STAGE 2 — run the writer
+        if (adminMode) {
+          setAdminUserMsg(userText);
+          pendingSnapshotRef.current = snapshot;
+          setPendingSend(true);
+          return;
+        }
+        if (outputCount === 1) {
+          const lbl = effectiveWriter;
+          setResults([{ label: lbl, text: "", usage: null, loading: true, error: "" }]);
+          try {
+            const { text, usage } = await callOllama(effectiveWriter, userText, t.system, cfg, cfg.temperature);
+            setResults([{ label: lbl, text, usage, loading: false, error: "" }]);
+            saveHistory(snapshot, [{ label: lbl, text }]);
+          } catch (e) { setResults([{ label: lbl, text: "", usage: null, loading: false, error: e.message }]); }
+        } else {
+          const variants = VARIANT_TEMPS.map(temp => ({ label: `${effectiveWriter} · T${temp}`, temp }));
+          setResults(variants.map(v => ({ label: v.label, text: "", usage: null, loading: true, error: "" })));
+          const proms = variants.map((v, i) =>
+            callOllama(effectiveWriter, userText, t.system, cfg, v.temp)
+              .then(({ text, usage }) => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r)); return { label: v.label, text }; })
+              .catch(e => { setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r)); return { label: v.label, text: `(error: ${e.message})` }; })
+          );
+          const outs = await Promise.all(proms);
+          saveHistory(snapshot, outs);
+        }
+      };
+
+      const copy = (idx) => { navigator.clipboard.writeText(results[idx].text); setCopied(idx); setTimeout(() => setCopied(null), 2000); };
+      const editResult = (idx, value) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, text: value } : r));
+
+      const writing = results.some(r => r.loading);
+      const isLoading = visionBusy || writing;
+      const canGenerate = t.type === "image" ? (!!scene.trim() || !!firstImg)
+        : (frameMode === "firstlast" ? (!!firstImg && !!lastImg) : (!!scene.trim() || !!firstImg));
+      const proposeMode = !scene.trim() && (t.type === "image" ? !!firstImg : (frameMode === "firstlast" ? (firstImg && lastImg) : !!firstImg));
+      const buttonLabel = visionBusy ? "👁 Reading image…"
+        : writing ? "✦ Writing prompt…"
+          : t.type === "image" ? (proposeMode ? "✦ Describe image as prompt" : "✦ Enhance prompt")
+            : (proposeMode ? (frameMode === "firstlast" ? "✦ Propose motion between frames" : "✦ Propose scene from image") : "✦ Enhance Prompt");
+
+      let sceneHint = "";
+      if (t.type === "image") sceneHint = firstImg ? "(optional — leave blank to describe the reference image)" : "";
+      else if (frameMode === "firstlast") sceneHint = "(optional — leave blank to let the writer propose the motion between your frames)";
+      else if (firstImg) sceneHint = "(optional — leave blank to let the writer propose one from the frame)";
+
+      const sceneLabel = t.type === "image" ? "Image Description" : "Your Scene";
+      const scenePlaceholder = t.type === "image"
+        ? "e.g. A weathered fisherman mending nets at dawn, harbor and boats behind him"
+        : (firstImg ? "Leave blank to auto-propose, or describe what should happen…" : "e.g. A woman walks through a rainy night market in Tokyo, stops at a noodle stall");
+
+      return html`
     <div style=${{ fontFamily: "'Inter', sans-serif", maxWidth: 720, margin: "0 auto", padding: "28px 20px", color: "#e8e8f0" }}>
       <div style=${{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
@@ -881,14 +912,14 @@ function App() {
         <div style=${{ flex: "1 1 240px" }}>
           <label style=${{ fontSize: 11, color: "#777", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>Writer model <span style=${{ color: "#555", textTransform: "none", letterSpacing: 0 }}>· builds the prompt</span></label>
           ${models.length > 0
-            ? html`<select style=${selStyle} value=${writerModel} onChange=${e => setWriterModel(e.target.value)}>${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}</select>`
-            : html`<input style=${selStyle} value=${writerManual} onChange=${e => setWriterManual(e.target.value)} placeholder="mistral-nemo" spellCheck=${false} />`}
+          ? html`<select style=${selStyle} value=${writerModel} onChange=${e => setWriterModel(e.target.value)}>${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}</select>`
+          : html`<input style=${selStyle} value=${writerManual} onChange=${e => setWriterManual(e.target.value)} placeholder="mistral-nemo" spellCheck=${false} />`}
         </div>
         <div style=${{ flex: "1 1 240px" }}>
           <label style=${{ fontSize: 11, color: "#777", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>Vision model <span style=${{ color: "#555", textTransform: "none", letterSpacing: 0 }}>· reads image inputs</span></label>
           ${models.length > 0
-            ? html`<select style=${selStyle} value=${visionModel} onChange=${e => setVisionModel(e.target.value)}>${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}</select>`
-            : html`<input style=${selStyle} value=${visionManual} onChange=${e => setVisionManual(e.target.value)} placeholder="qwen2.5vl:7b" spellCheck=${false} />`}
+          ? html`<select style=${selStyle} value=${visionModel} onChange=${e => setVisionModel(e.target.value)}>${models.map(m => html`<option key=${m} value=${m}>${m}</option>`)}</select>`
+          : html`<input style=${selStyle} value=${visionManual} onChange=${e => setVisionManual(e.target.value)} placeholder="qwen2.5vl:7b" spellCheck=${false} />`}
         </div>
       </div>
 
@@ -939,8 +970,8 @@ function App() {
                   <div style=${{ fontSize: 10, color: "#555", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>${g.group}</div>
                   <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     ${g.moves.map(m => {
-                      const active = selectedMoves.has(m.id);
-                      return html`
+            const active = selectedMoves.has(m.id);
+            return html`
                         <label key=${m.id} title=${m.desc} style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "5px 10px", borderRadius: 6, border: "1px solid", borderColor: active ? "#7c6af7" : "#2a2a3f", background: active ? "#1e1850" : "#13131f", userSelect: "none" }}>
                           <input type="checkbox" checked=${active} onChange=${() => toggleMove(m.id)} style=${{ display: "none" }} />
                           <span style=${{ width: 12, height: 12, borderRadius: 3, border: `1.5px solid ${active ? "#7c6af7" : "#444"}`, background: active ? "#7c6af7" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -949,7 +980,7 @@ function App() {
                           <span style=${{ fontSize: 12, color: active ? "#c4b8ff" : "#777" }}>${m.label}</span>
                         </label>
                       `;
-                    })}
+          })}
                   </div>
                 </div>
               `)}
@@ -997,14 +1028,14 @@ function App() {
       `}
 
       ${frameMode === "single" || t.type === "image"
-        ? html`<${ImagePanel} key=${`${target}-single`} label="Reference Image" hint="(optional)" onChange=${setFirstImg} presets=${t.resolutions} showTwoStage=${show.twoStage} />`
-        : html`
+          ? html`<${ImagePanel} key=${`${target}-single`} label="Reference Image" hint="(optional)" onChange=${setFirstImg} presets=${t.resolutions} showTwoStage=${show.twoStage} />`
+          : html`
           <>
             <${ImagePanel} key=${`${target}-first`} label="First Frame" hint="(clip starts here)" onChange=${setFirstImg} presets=${t.resolutions} showTwoStage=${show.twoStage} />
             <${ImagePanel} key=${`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange=${setLastImg} presets=${t.resolutions} showTwoStage=${show.twoStage} />
           </>
         `
-      }
+        }
 
       ${adminMode && html`
         <div style=${{ marginBottom: 18, background: "#0e0e1c", border: "1px solid #3a2f6e", borderRadius: 10, padding: "12px 16px" }}>
@@ -1089,12 +1120,12 @@ function App() {
           ${historyOpen && html`
             <div style=${{ display: "flex", flexDirection: "column", gap: 12 }}>
               ${history.map((h, i) => {
-                const tg = TARGETS[h.target];
-                const ml = h.outputCount === 1 ? h.model : "3 variants";
-                const sl = STYLE_OPTIONS.find(s => s.id === h.style)?.label;
-                const cl = CREATIVITY_OPTIONS.find(c => c.id === h.creativity)?.label;
-                const moves = (h.moves || []).map(moveLabel);
-                return html`
+          const tg = TARGETS[h.target];
+          const ml = h.outputCount === 1 ? h.model : "3 variants";
+          const sl = STYLE_OPTIONS.find(s => s.id === h.style)?.label;
+          const cl = CREATIVITY_OPTIONS.find(c => c.id === h.creativity)?.label;
+          const moves = (h.moves || []).map(moveLabel);
+          return html`
                   <div key=${i} style=${{ background: "#0e0e1c", border: "1px solid #2e2e44", borderRadius: 10, padding: "12px 14px" }}>
                     <div style=${{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
                       <span style=${{ fontSize: 11, color: "#888" }}>${new Date(h.ts).toLocaleString()}</span>
@@ -1120,17 +1151,18 @@ function App() {
                     </div>
                   </div>
                 `;
-              })}
+        })}
             </div>
           `}
         </div>
       `}
     </div>
   `;
-}
+    }
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(html`<${App} />`);
-</script>
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(html`<${App} />`);
+  </script>
 </body>
+
 </html>

@@ -4,6 +4,8 @@ import {
   STYLE_OPTIONS, CREATIVITY_OPTIONS, CAMERA_GROUPS,
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
+  DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
+  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   systemPromptFor,
 } from './constants'
 import { loadCfg, saveCfg, callOllama, fetchModels, pickWriter, pickVision, isAnthropic } from './api'
@@ -11,10 +13,11 @@ import {
   getAllHistory, addHistoryEntry, deleteHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
 } from './db'
-import { btn, selStyle, moveLabel } from './utils'
+import { btn, selStyle, moveLabel, presetById, syllableBudget } from './utils'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
+import MinimaxRefPanel from './components/MinimaxRefPanel'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   label: `${writer} · T${temp}`,
@@ -38,14 +41,19 @@ export default function App() {
   const [style, setStyle]             = useState('auto')
   const [creativity, setCreativity]   = useState('balanced')
   const [promptLength, setPromptLength] = useState('standard')
+  const [negative, setNegative]       = useState('')
   const [dialogue, setDialogue]       = useState('')
   const [delivery, setDelivery]       = useState('')
   const [frameMode, setFrameMode]     = useState('single')
   const [firstImg, setFirstImg]       = useState(null)
   const [midImg, setMidImg]           = useState(null)
   const [lastImg, setLastImg]         = useState(null)
-  const [selectedMoves, setSelectedMoves] = useState(new Set())
+  const [refImages, setRefImages]     = useState([])
+  const [soundscape, setSoundscape]   = useState('')
+  const [music, setMusic]             = useState('')
+  const [h3RatioId, setH3RatioId]     = useState('')
   const [cameraOpen, setCameraOpen]   = useState(false)
+  const [flashId, setFlashId]         = useState(null)
   const [results, setResults]         = useState([])
   const [caption, setCaption]         = useState('')
   const [visionBusy, setVisionBusy]   = useState(false)
@@ -63,6 +71,7 @@ export default function App() {
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
   const importInputRef = useRef(null)
   const visionCacheRef = useRef(null)
+  const sceneTextareaRef = useRef(null)
 
   const t = TARGETS[target]
   const show = t.show
@@ -140,9 +149,12 @@ export default function App() {
     if (h.model) { setWriterModel(h.model); setWriterManual(h.model) }
     if (h.vision) { setVisionModel(h.vision); setVisionManual(h.vision) }
     setDuration(h.duration); setStyle(h.style); setCreativity(h.creativity); setFrameMode(h.frameMode)
-    setSelectedMoves(new Set(h.moves || []))
     setScene(h.scene || ''); setDialogue(h.dialogue || ''); setDelivery(h.delivery || '')
-    setFirstImg(null); setMidImg(null); setLastImg(null); setResults([]); setCaption('')
+    setNegative(h.negative || '')
+    setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setResults([]); setCaption('')
+    setSoundscape(h.soundscape || ''); setMusic(h.music || '')
+    const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
+    setH3RatioId(ratioPreset?.id || '')
   }
 
   const sendToWriter = async () => {
@@ -179,15 +191,54 @@ export default function App() {
     }
   }
 
-  const toggleMove = (id) => setSelectedMoves(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const switchMode = (m) => { setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null) }
+  const insertCameraMarker = (move) => {
+    const marker = `[camera: ${move.prompt}]`
+    const ta = sceneTextareaRef.current
+    setFlashId(move.id)
+    setTimeout(() => setFlashId(id => id === move.id ? null : id), 600)
+    if (!ta) {
+      setScene(s => s + (s && !/\s$/.test(s) ? ' ' : '') + marker + ' ')
+      return
+    }
+    const start = ta.selectionStart ?? scene.length
+    const end = ta.selectionEnd ?? scene.length
+    const before = scene.slice(0, start)
+    const after = scene.slice(end)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after)
+    const insertText = (needsLeadingSpace ? ' ' : '') + marker + (needsTrailingSpace ? ' ' : '')
+    const newValue = before + insertText + after
+    const newCursor = before.length + insertText.length
+    setScene(newValue)
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(newCursor, newCursor)
+    })
+  }
+  const switchMode = (m) => { setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]) }
   const switchTarget = (id) => {
     const opts = TARGETS[id].durations || DURATION_OPTIONS
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
-    setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setFrameMode('single'); setResults([]); setCaption('')
+    setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([])
+    setSoundscape(''); setMusic(''); setH3RatioId('')
+    setFrameMode('single'); setResults([]); setCaption('')
   }
 
   const captionImages = async () => {
+    if (frameMode === 'ref') {
+      const roleLabel = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id
+      const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
+      const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
+      const captions = await Promise.all(refImages.map(im =>
+        callOllama(effectiveVision, [
+          { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+          { type: 'text', text: 'Describe this reference image as instructed.' },
+        ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3).then(({ text }) => text)
+      ))
+      return refImages.map((im, i) =>
+        `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
+      ).join('\n\n')
+    }
     let system, content
     if (t.type === 'image') {
       system = t.visionPrompt
@@ -230,22 +281,26 @@ export default function App() {
     const c = visionCacheRef.current
     if (!c) return null
     if (c.target !== target || c.frameMode !== frameMode) return null
-    if (c.firstImg !== firstImg || c.midImg !== midImg || c.lastImg !== lastImg) return null
+    if (c.firstImg !== firstImg || c.midImg !== midImg || c.lastImg !== lastImg || c.refImages !== refImages) return null
     if (t.type === 'image' && c.scene !== scene) return null
     return c.description
   }
   const setCachedCaption = (description) => {
-    visionCacheRef.current = { target, frameMode, scene, firstImg, midImg, lastImg, description }
+    visionCacheRef.current = { target, frameMode, scene, firstImg, midImg, lastImg, refImages, description }
   }
 
   const enhance = async () => {
     const hasImg = t.type === 'image' ? !!firstImg
       : frameMode === 'firstlast' ? (firstImg && lastImg)
       : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
+      : frameMode === 'last' ? !!firstImg
+      : frameMode === 'ref' ? refImages.length > 0
       : !!firstImg
     const canGen = t.type === 'image' ? (scene.trim() || firstImg)
       : frameMode === 'firstlast' ? (firstImg && lastImg)
       : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
+      : frameMode === 'last' ? !!firstImg
+      : frameMode === 'ref' ? refImages.length > 0
       : (scene.trim() || firstImg)
     if (!canGen) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
@@ -272,9 +327,9 @@ export default function App() {
       + (show.dialogue && dialogue.trim()
         ? `\n\nSpoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them${delivery.trim() ? `; delivery/voice: ${delivery.trim()}` : ''}:\n"${dialogue.trim()}"`
         : '')
-    const cameraPart = (t.type !== 'image' && selectedMoves.size > 0)
-      ? `\n\nRequested camera moves (incorporate these):\n${CAMERA_GROUPS.flatMap(g => g.moves).filter(m => selectedMoves.has(m.id)).map(m => `- ${m.prompt}`).join('\n')}`
-      : ''
+      + (negative.trim()
+        ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. If the output format includes a real negative-prompt field, also add these terms there.`
+        : '')
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
     if (hasImg) {
@@ -297,15 +352,41 @@ export default function App() {
         }
         setVisionBusy(false)
       }
-      await runWriter(frameDescription, stylePart, cameraPart, lengthPart, hasImg)
+      await runWriter(frameDescription, stylePart, lengthPart, hasImg)
     } else {
-      await runWriter(null, stylePart, cameraPart, lengthPart, hasImg)
+      await runWriter(null, stylePart, lengthPart, hasImg)
     }
   }
 
-  const runWriter = async (frameDescription, stylePart, cameraPart, lengthPart, hasImg) => {
+  const runWriter = async (frameDescription, stylePart, lengthPart, hasImg) => {
     let userText
-    if (t.type === 'image') {
+    if (target === 'minimax_h3') {
+      const mode = frameMode === 'last' ? 'L2VA'
+        : frameMode === 'firstlast' ? 'FL2VA'
+        : frameMode === 'ref' ? 'Ref2VA'
+        : hasImg ? 'I2VA' : 'T2VA'
+      const selectedRatio = presetById(h3RatioId, t.resolutions) || t.resolutions[0]
+      const ratioLine = (frameMode === 'single' && !hasImg) || frameMode === 'ref'
+        ? `Aspect ratio: ${selectedRatio.label} (${selectedRatio.note})\n`
+        : 'Aspect ratio: derived from the input image(s) — do not override it.\n'
+      const frameBlock = frameMode === 'last'
+        ? (frameDescription ? `LAST FRAME (already established — the clip must end here; do not restate it, only describe the plausible path that leads to it):\n${frameDescription}\n\n` : '')
+        : frameMode === 'firstlast'
+        ? (frameDescription ? `FIRST FRAME and LAST FRAME (already established — do not restate their static contents, only describe the transition):\n${frameDescription}\n\n` : '')
+        : frameMode === 'ref'
+        ? `Reference images:\n${frameDescription}\n\n`
+        : frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : ''
+      const scenePart = scene.trim()
+        ? `Scene / action:\n${scene}`
+        : frameMode === 'last' ? 'No description provided — propose a plausible action path that leads naturally to the last frame.'
+        : frameMode === 'firstlast' ? 'No description provided — infer the natural motion that carries the scene from the first frame to the last.'
+        : frameMode === 'ref' ? 'No description provided — propose a fitting scene using the reference images above.'
+        : hasImg ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.'
+        : 'No scene description provided.'
+      const audioPart = `\n\nAmbient / diegetic sound (overall_soundscape): ${soundscape.trim() || 'not specified — invent restrained ambience that fits the scene.'}`
+        + `\n\nAudience-only music (non_diegetic_music): ${music.trim() || 'not specified — decide whether music serves this scene; if not, use N/A.'}`
+      userText = `MODE: ${mode}\n\n${frameBlock}${ratioLine}Target duration: ${duration}\n\n${scenePart}${stylePart}${audioPart}${lengthPart}`
+    } else if (t.type === 'image') {
       const ref = frameDescription ? `Reference image description:\n${frameDescription}\n\n` : ''
       const scenePart = scene.trim()
         ? `Image description / subject:\n${scene}`
@@ -318,26 +399,30 @@ export default function App() {
       const scenePart = scene.trim()
         ? `Transition description:\n${scene}`
         : 'No description provided — infer the natural motion that carries the scene through both transitions.'
-      userText = `MODE: First-mid-last-frame interpolation. The clip begins on the FIRST frame, passes through the MID frame at approximately the halfway point, and ends on the LAST frame; describe the two-phase motion and camera as one continuous arc with a clear beat at the mid frame.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}${lengthPart}`
+      userText = `MODE: First-mid-last-frame interpolation. The clip begins on the FIRST frame, passes through the MID frame at approximately the halfway point, and ends on the LAST frame; describe the two-phase motion and camera as one continuous arc with a clear beat at the mid frame.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
     } else if (frameMode === 'firstlast') {
       const frames = frameDescription ? `Frames (already established — do not restate their static contents):\n${frameDescription}\n\n` : ''
       const scenePart = scene.trim()
         ? `Transition description:\n${scene}`
         : 'No description provided — infer the natural motion that carries the scene from the first frame to the last.'
-      userText = `MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}${lengthPart}`
+      userText = `MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
     } else {
       const frame = frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : ''
       const scenePart = scene.trim()
         ? `Basic scene description:\n${scene}`
         : (frameDescription ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.' : 'No scene description provided.')
-      userText = `${frame}Target duration: ${duration}\n\n${scenePart}${cameraPart}${stylePart}${lengthPart}`
+      userText = `${frame}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
     }
 
+    const isH3 = target === 'minimax_h3'
     const snapshot = {
       ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
-      duration, style, creativity, frameMode, moves: [...selectedMoves],
+      duration, style, creativity, frameMode, negative,
       scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
       firstImg: firstImg?.fileName || null, midImg: midImg?.fileName || null, lastImg: lastImg?.fileName || null,
+      ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
+      soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
+      refImages: isH3 && frameMode === 'ref' ? refImages.map(im => im.fileName) : null,
     }
 
     if (adminMode) {
@@ -387,11 +472,15 @@ export default function App() {
     ? (!!scene.trim() || !!firstImg)
     : frameMode === 'firstlast' ? (!!firstImg && !!lastImg)
     : frameMode === 'firstmidlast' ? (!!firstImg && !!midImg && !!lastImg)
+    : frameMode === 'last' ? !!firstImg
+    : frameMode === 'ref' ? refImages.length > 0
     : (!!scene.trim() || !!firstImg)
   const proposeMode = !scene.trim() && (
     t.type === 'image' ? !!firstImg
     : frameMode === 'firstlast' ? (firstImg && lastImg)
     : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
+    : frameMode === 'last' ? !!firstImg
+    : frameMode === 'ref' ? refImages.length > 0
     : !!firstImg
   )
   const buttonLabel = visionBusy ? '👁 Reading images…'
@@ -401,6 +490,8 @@ export default function App() {
       : (proposeMode
           ? (frameMode === 'firstlast' ? '✦ Propose motion between frames'
             : frameMode === 'firstmidlast' ? '✦ Propose motion through frames'
+            : frameMode === 'last' ? '✦ Propose path to ending frame'
+            : frameMode === 'ref' ? '✦ Propose reference-guided scene'
             : '✦ Propose scene from image')
           : '✦ Enhance Prompt')
 
@@ -412,7 +503,11 @@ export default function App() {
         ? '(optional — leave blank to let the writer propose the motion between your frames)'
         : frameMode === 'firstmidlast'
           ? '(optional — leave blank to let the writer propose the motion through all three frames)'
-          : firstImg ? '(optional — leave blank to let the writer propose one from the frame)' : ''
+          : frameMode === 'last'
+            ? '(optional — leave blank to let the writer propose the path to your ending frame)'
+            : frameMode === 'ref'
+              ? '(optional — leave blank to let the writer propose a scene from your reference images)'
+              : firstImg ? '(optional — leave blank to let the writer propose one from the frame)' : ''
 
   const sceneLabel = t.type === 'image' ? 'Image Description' : t.type === 'text' ? 'Scene / Story Idea' : 'Your Scene'
   const scenePlaceholder = t.type === 'image'
@@ -422,6 +517,20 @@ export default function App() {
       : firstImg
         ? 'Leave blank to auto-propose, or describe what should happen…'
         : 'e.g. A woman walks through a rainy night market in Tokyo, stops at a noodle stall'
+
+  const selectedRatio = target === 'minimax_h3' ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]) : null
+  const ratioPicker = target === 'minimax_h3' ? (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        Aspect Ratio <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(no exact frame to derive it from — pick one explicitly)</span>
+      </label>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {t.resolutions.map(p => (
+          <button key={p.id} onClick={() => setH3RatioId(p.id)} title={p.note} style={btn(selectedRatio.id === p.id)}>{p.label}</button>
+        ))}
+      </div>
+    </div>
+  ) : null
 
   const genBtnDisabled = isLoading || !canGenerate || pendingSend
   const genBtnStyle = {
@@ -555,6 +664,27 @@ export default function App() {
         </div>
       </div>
 
+      {/* Scene */}
+      <div style={{ marginBottom: 18 }}>
+        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {sceneLabel}{' '}
+          {sceneHint && <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>{sceneHint}</span>}
+        </label>
+        <textarea ref={sceneTextareaRef} value={scene} onChange={e => setScene(e.target.value)} placeholder={scenePlaceholder} rows={4}
+          style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '12px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+      </div>
+
+      {/* Avoid */}
+      <div style={{ marginBottom: 18 }}>
+        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Avoid <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — things to keep out of the result, e.g. "text, watermark", or a likely mistake to correct, e.g. "blue car", "horse in background")</span>
+        </label>
+        <textarea value={negative} onChange={e => setNegative(e.target.value)} placeholder="e.g. text, watermark, blue car, horse in background" rows={2}
+          style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+      </div>
+
       {/* Camera */}
       {show.camera && (
         <div style={{ marginBottom: 18 }}>
@@ -564,32 +694,29 @@ export default function App() {
           >
             <span style={{ fontSize: 13, transition: 'transform 0.2s', display: 'inline-block', transform: cameraOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
             Camera
-            {selectedMoves.size > 0 && <span style={{ background: '#2d2060', color: '#c4b8ff', borderRadius: 10, padding: '1px 8px', fontSize: 10 }}>{selectedMoves.size} selected</span>}
           </button>
           {cameraOpen && (
             <div style={{ marginTop: 12, background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '16px 18px' }}>
+              <p style={{ fontSize: 11, color: '#666', margin: '0 0 14px', lineHeight: 1.5 }}>
+                Click a move to insert it into your scene at the cursor, e.g. <code style={{ color: '#9a8fd8' }}>[camera: a slow dolly-in toward the subject]</code>.
+                You can also type <code style={{ color: '#9a8fd8' }}>[camera: ...]</code> markers by hand, anywhere in the text, in your own words.
+              </p>
               {CAMERA_GROUPS.map(g => (
                 <div key={g.group} style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 10, color: '#555', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>{g.group}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {g.moves.map(m => {
-                      const active = selectedMoves.has(m.id)
+                      const flashed = flashId === m.id
                       return (
-                        <label key={m.id} title={m.desc} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 6, border: '1px solid', borderColor: active ? '#7c6af7' : '#2a2a3f', background: active ? '#1e1850' : '#13131f', userSelect: 'none' }}>
-                          <input type="checkbox" checked={active} onChange={() => toggleMove(m.id)} style={{ display: 'none' }} />
-                          <span style={{ width: 12, height: 12, borderRadius: 3, border: `1.5px solid ${active ? '#7c6af7' : '#444'}`, background: active ? '#7c6af7' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            {active && <span style={{ color: '#fff', fontSize: 9, lineHeight: 1 }}>✓</span>}
-                          </span>
-                          <span style={{ fontSize: 12, color: active ? '#c4b8ff' : '#777' }}>{m.label}</span>
-                        </label>
+                        <button key={m.id} title={m.desc} onClick={() => insertCameraMarker(m)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 6, border: '1px solid', borderColor: flashed ? '#7c6af7' : '#2a2a3f', background: flashed ? '#1e1850' : '#13131f', color: flashed ? '#c4b8ff' : '#888', fontSize: 12, transition: 'all 0.15s' }}>
+                          {flashed ? '✓ Inserted' : m.label}
+                        </button>
                       )
                     })}
                   </div>
                 </div>
               ))}
-              {selectedMoves.size > 0 && (
-                <button onClick={() => setSelectedMoves(new Set())} style={{ marginTop: 4, fontSize: 11, color: '#555', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Clear all</button>
-              )}
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1e1e30' }}>
                 <a href="https://camerapromptsgenerator.vercel.app/" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: '#5a4fcf', textDecoration: 'none' }}>
                   camerapromptsgenerator.vercel.app ↗
@@ -601,17 +728,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Scene */}
-      <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          {sceneLabel}{' '}
-          {sceneHint && <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>{sceneHint}</span>}
-        </label>
-        <textarea value={scene} onChange={e => setScene(e.target.value)} placeholder={scenePlaceholder} rows={4}
-          style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '12px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s' }}
-          onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
-      </div>
-
       {/* Dialogue */}
       {show.dialogue && (
         <div style={{ marginBottom: 18 }}>
@@ -621,14 +737,40 @@ export default function App() {
           <textarea value={dialogue} onChange={e => setDialogue(e.target.value)} placeholder="Exact words to be spoken, e.g.  We need to leave. Now." rows={2}
             style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
             onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
-          {dialogue.trim() && duration === '97 frames (~4 seconds)' && dialogue.trim().split(/\s+/).length > 6 && (
-            <div style={{ fontSize: 11, color: '#f0b070', marginTop: 6, lineHeight: 1.5 }}>
-              That's a lot of words for a ~4s clip — speech may rush or get cut. Consider 8s+ for a full line.
-            </div>
-          )}
+          {dialogue.trim() && (() => {
+            const b = syllableBudget(duration, dialogue)
+            const over = b.max != null && b.count > b.max
+            return (
+              <div style={{ fontSize: 11, color: over ? '#f0b070' : '#555', marginTop: 6, lineHeight: 1.5 }}>
+                {b.count} syllable{b.count === 1 ? '' : 's'}
+                {b.max != null && (
+                  <> · budget ≈{b.min}–{b.max} for a {b.seconds}s clip ({b.german ? 'German' : 'English'} pacing, ~{b.spsLo}–{b.spsHi} syll/s)</>
+                )}
+                {over && ' — too many syllables for this duration; speech may rush or get cut. Trim the line or pick a longer duration.'}
+              </div>
+            )
+          })()}
           <input value={delivery} onChange={e => setDelivery(e.target.value)}
             placeholder="Delivery / voice / accent (optional) — e.g. calm and slow, urgent whisper, British accent"
             style={{ width: '100%', boxSizing: 'border-box', marginTop: 8, background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '9px 14px', color: '#e0e0f0', fontSize: 13, outline: 'none', transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+        </div>
+      )}
+
+      {/* Soundscape / music (MiniMax H3 only) */}
+      {target === 'minimax_h3' && (
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Ambient Sound <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)</span>
+          </label>
+          <textarea value={soundscape} onChange={e => setSoundscape(e.target.value)} placeholder="e.g. steady ventilation hum, quiet servo motors, a soft mechanical click" rows={2}
+            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+          <label style={{ fontSize: 11, color: '#777', display: 'block', margin: '12px 0 6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Music <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — non_diegetic_music, audience-only; leave blank to let the writer decide, or type "none" for silence)</span>
+          </label>
+          <textarea value={music} onChange={e => setMusic(e.target.value)} placeholder='e.g. sparse electronic pulse, moderate tempo, restrained low synth bass — or "none"' rows={2}
+            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
             onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
         </div>
       )}
@@ -638,22 +780,30 @@ export default function App() {
         <div style={{ marginBottom: 14 }}>
           <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Image Input</label>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button onClick={() => switchMode('single')} style={btn(frameMode === 'single')}>Single image</button>
-            <button onClick={() => switchMode('firstlast')} style={btn(frameMode === 'firstlast')}>First → Last frame</button>
-            <button onClick={() => switchMode('firstmidlast')} style={btn(frameMode === 'firstmidlast')}>First → Mid → Last frame</button>
+            {(t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).map(o => (
+              <button key={o.id} onClick={() => switchMode(o.id)} style={btn(frameMode === o.id)}>{o.label}</button>
+            ))}
           </div>
-          {frameMode === 'firstlast' && (
-            <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>End-frame interpolation: the clip starts on the first frame and ends on the last. Both frames required.</p>
-          )}
-          {frameMode === 'firstmidlast' && (
-            <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>Three-frame interpolation: the clip starts on the first frame, passes through the mid frame, and ends on the last. All three frames required.</p>
-          )}
+          {(() => {
+            const hint = (t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).find(o => o.id === frameMode)?.hint
+            return hint ? <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>{hint}</p> : null
+          })()}
         </div>
       )}
 
       {/* Image panels */}
       {showImage && (t.type === 'image' || frameMode === 'single' ? (
-        <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} />
+        <>
+          {!firstImg && ratioPicker}
+          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} />
+        </>
+      ) : frameMode === 'last' ? (
+        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} />
+      ) : frameMode === 'ref' ? (
+        <>
+          {ratioPicker}
+          <MinimaxRefPanel images={refImages} onChange={setRefImages} />
+        </>
       ) : frameMode === 'firstmidlast' ? (
         <>
           <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} />
@@ -829,12 +979,16 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ fontSize: 11.5, color: '#9a8fd8', marginBottom: 6 }}>
-                    {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : ''}
+                    {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : h.frameMode === 'last' ? ' · last frame' : h.frameMode === 'ref' ? ' · reference' : ''}{h.ratio ? ` · ${h.ratio}` : ''}
                   </div>
                   {moves.length > 0 && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>Camera: {moves.join(', ')}</div>}
                   <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>{h.scene ? h.scene : <span style={{ color: '#666' }}>(proposed from image)</span>}</div>
                   {h.dialogue && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Dialogue: "{h.dialogue}"{h.delivery ? ` (${h.delivery})` : ''}</div>}
+                  {h.soundscape && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Soundscape: {h.soundscape}</div>}
+                  {h.music && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Music: {h.music}</div>}
+                  {h.negative && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Avoid: {h.negative}</div>}
                   {(h.firstImg || h.midImg || h.lastImg) && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>{h.firstImg ? `Image: ${h.firstImg}` : ''}{h.midImg ? ` · Mid: ${h.midImg}` : ''}{h.lastImg ? ` · Last: ${h.lastImg}` : ''}</div>}
+                  {h.refImages && h.refImages.length > 0 && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>References: {h.refImages.join(', ')}</div>}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                     {(h.outputs || []).map((o, oi) => (
                       <div key={oi} style={{ background: '#12121f', border: '1px solid #2a2a3f', borderRadius: 8, padding: '8px 10px' }}>
