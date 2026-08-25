@@ -1,5 +1,5 @@
 export const CFG_KEY = 'ollama-enhancer-config'
-export const DEFAULT_CFG = { base: 'http://localhost:11434/v1', apiKey: '', temperature: 0.7 }
+export const DEFAULT_CFG = { base: 'http://localhost:11434/v1', apiKey: '', temperature: 0.7, maxTokens: 4096 }
 
 export function loadCfg() {
   const envKey  = import.meta.env.VITE_API_KEY  || ''
@@ -59,17 +59,18 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   messages.push({ role: 'user', content: toOpenAIContent(userContent) })
   const headers = { 'Content-Type': 'application/json', ...authHeaders(cfg) }
   const formatParam = opts.format && !isAnthropic(cfg.base) ? { format: opts.format } : {}
-  const doFetch = (includeTemperature) => fetch(`${base}/chat/completions`, {
+  const doFetch = (includeTemperature, maxTokens) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
-      model, messages, max_tokens: 4096, stream: false,
+      model, messages, max_tokens: maxTokens, stream: false,
       ...(includeTemperature ? { temperature } : {}),
       ...formatParam,
     }),
   })
+  const baseMaxTokens = cfg.maxTokens || DEFAULT_CFG.maxTokens
   let res
   try {
-    res = await doFetch(true)
+    res = await doFetch(true, baseMaxTokens)
   } catch (e) {
     const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : base
     throw new Error(`Network error reaching ${label}. ${isAnthropic(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
@@ -79,7 +80,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     let msg = ''
     try { const j = await res.clone().json(); msg = (j.error && (j.error.message || j.error)) || '' } catch {}
     if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
-      try { res = await doFetch(false) } catch {}
+      try { res = await doFetch(false, baseMaxTokens) } catch {}
     }
   }
   if (!res.ok) {
@@ -87,12 +88,28 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || msg } catch {}
     throw new Error(msg)
   }
-  const data = await res.json()
-  const msg = data.choices?.[0]?.message || {}
-  const rawText = msg.content || ''
+  let data = await res.json()
+  let msg = data.choices?.[0]?.message || {}
+  let rawText = msg.content || ''
+  let retried = false
+  // Reasoning models put their chain-of-thought in `reasoning`, separate from `content`,
+  // and both draw from the same token budget — a heavy thinker can exhaust max_tokens before
+  // ever writing a final answer. Retry once with a much larger budget before giving up.
+  if (!rawText && msg.reasoning) {
+    retried = true
+    const escalatedMaxTokens = Math.max(baseMaxTokens * 4, 16000)
+    try {
+      const retryRes = await doFetch(true, escalatedMaxTokens)
+      if (retryRes.ok) {
+        data = await retryRes.json()
+        msg = data.choices?.[0]?.message || {}
+        rawText = msg.content || ''
+      }
+    } catch {}
+  }
   if (!rawText) {
     if (msg.reasoning) {
-      throw new Error(`${model} ran out of output length while "thinking" and never produced a final answer (its reasoning got cut off mid-thought). Try a less reasoning-heavy model, or a build/config with a larger context/output limit.`)
+      throw new Error(`${model} ran out of output length while "thinking"${retried ? ' even after retrying with a much larger token budget' : ''} and never produced a final answer. Raise "Max output tokens" in ⚙ Backend, try a less reasoning-heavy model, or — if that doesn't help — its Ollama context window (num_ctx) itself is likely the real ceiling; increase that server-side (e.g. OLLAMA_CONTEXT_LENGTH or a Modelfile PARAMETER num_ctx).`)
     }
     throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
   }

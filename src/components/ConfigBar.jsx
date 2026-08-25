@@ -105,7 +105,22 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
                 onChange={e => setCfg({ ...cfg, temperature: parseFloat(e.target.value) || 0 })}
               />
             </div>
+            <div style={{ width: 150 }}>
+              <label style={lbl}>Max output tokens</label>
+              <input
+                style={inputStyle} type="number" min={256} step={256} value={cfg.maxTokens}
+                onChange={e => setCfg({ ...cfg, maxTokens: parseInt(e.target.value, 10) || 4096 })}
+              />
+            </div>
           </div>
+          {!anthropic && (
+            <div style={{ fontSize: 11, color: '#555', lineHeight: 1.5, marginTop: -4 }}>
+              Reasoning models (Qwen3, DeepSeek-R1, etc.) spend part of this budget on hidden "thinking" before
+              writing the answer — raise this if you see a "ran out of output length while thinking" error.
+              If raising it doesn't help, the model's own Ollama context window (num_ctx) is likely the real
+              ceiling — that's set server-side, not here.
+            </div>
+          )}
 
           <button
             onClick={reloadModels}
