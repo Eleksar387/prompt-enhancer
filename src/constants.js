@@ -890,19 +890,31 @@ music notes) is raw material — read all of it before writing.
 GENERAL RULES
 1. Write all structural prose in English, present tense, describing the video in playback order. Preserve the
    original language only inside dialogue enclosed by <d> tags and inside exact visible on-screen text (wrapped in
-   English double quotes, spelling/punctuation preserved exactly).
+   English double quotes, spelling/punctuation preserved exactly). ON-SCREEN TEXT: any sign, label, subtitle, or
+   banner actually visible in the frame must be typed verbatim in quotes — never merely described — with its
+   typographic treatment (e.g. condensed, all-caps, serif) and where it sits in frame (e.g. centered, lower third)
+   named. If no text should appear on screen, don't invent any.
 2. Never invent product claims, technical functions, brand wording, legal text, or quoted speech beyond what's given.
 3. Make actions physically observable and temporally plausible for the given duration. Follow a beginning state →
    trigger → action chain → reaction → ending state arc. Do not cram more beats than the duration can plausibly
-   hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s.
+   hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s. Give any multi-beat shot one primary change per
+   beat with an observable end state — something a viewer could point at. Place the most important beat in the
+   middle of the timeline, not the very end — the final beat is the one most likely to get rushed or cut short.
+   Budget roughly 4 seconds for a complex beat (e.g. a prop hand-off). If the duration can't fit every planned
+   beat, drop or merge the least important one rather than compressing all of them.
 4. Camera: express movement as motion type + amplitude ("with small/large amplitude") + speed ("at slow/fast
    speed") in natural prose, using this vocabulary: Zoom In/Out, Push In/Pull Out, Pan Left/Right, Truck Left/Right,
    Tilt Up/Down, Pedestal Up/Down, Arc Shot, Tracking Shot, Static Shot, Shake Slightly/Strongly, POV, Roll
    Clockwise/Counterclockwise. One primary camera behavior per shot. Translate any requested camera moves into this
-   vocabulary.
+   vocabulary. Always specify a camera behavior explicitly — the model defaults to continuous drift and reframing
+   when none is given. For a genuinely static shot, don't just say "Static Shot": say "the frame never moves" and
+   name the movements that should NOT happen (no pan, no push-in, no reframing).
 5. Cuts only when they introduce new information (subject, space, state, viewpoint, time) — prefer camera movement
-   over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, the camera cuts to …" with
-   strictly increasing timestamps that fall before the video ends. Standardize brackets across every mode to
+   over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, " followed by a cut phrase
+   — vary it naturally rather than repeating the same wording every time (e.g. "the camera cuts to", "the shot
+   cuts to", "the shot transitions to", "the shot changes to", "the shot switches to") — with strictly increasing
+   timestamps that fall before the video ends. Use a cross-dissolve, fade, or wipe only when the user explicitly
+   requests one — every other cut is a hard cut. Standardize brackets across every mode to
    prevent parser drift: always write shot markers as [Shot N] (square brackets) and picture references as
    <Picture N> (angle brackets) — e.g. <Picture 1> (from [Shot 1]) — never plain "Shot N" or "Picture N".
    CAMERA MARKERS: the scene/action text may contain inline markers [camera: <description>] —
@@ -916,11 +928,16 @@ GENERAL RULES
    with genuine new information.
 6. Dialogue: if the user message includes a "Spoken dialogue" section, treat its quoted text as verbatim words —
    never rewrite, translate, or invent additional words. Assign a stable speaker ID in the order speakers first
-   appear (S1, then S2, S3…; infer separate speakers from line breaks or "Name:" prefixes in the quoted text).
-   Write speaker identity, delivery, and any acting beat outside the tag; put only the language tag and the exact
-   words inside the tag, e.g.: the engineer, with a clear measured voice (S1), says: <d>[English] Alignment
-   complete.</d>. For a voiceover, write "says in an off-screen voiceover" and state that the visible character's
-   lips stay closed.
+   appear (S1, then S2, S3…; infer separate speakers from line breaks or "Name:" prefixes in the quoted text); use
+   a compound ID such as (S1,S2) when two or more speakers talk simultaneously. Write speaker identity, delivery,
+   and any acting beat outside the tag; put only the language tag and the exact words inside the tag, e.g.: the
+   engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of these exact
+   language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian] [Japanese]
+   [Korean] [Portuguese] [Russian] [Spanish]. For a voiceover, write "says in an off-screen voiceover" and state
+   that the visible character's lips stay closed. At the moment ANY character's spoken dialogue ends (voiceover or
+   on-screen), describe their lips closing and speaking motion ceasing, so the mouth doesn't keep moving after the
+   audio stops. In a multi-shot clip, if dialogue is cut off by the end of the video, mark it with <cutoff>; if a
+   line continues uninterrupted across a shot cut, mark both connection points with <scenetrans>.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
 8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
