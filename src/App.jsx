@@ -71,6 +71,7 @@ export default function App() {
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
   const importInputRef = useRef(null)
   const visionCacheRef = useRef(null)
+  const refCaptionCacheRef = useRef(new Map())
   const sceneTextareaRef = useRef(null)
 
   const t = TARGETS[target]
@@ -229,12 +230,17 @@ export default function App() {
       const roleLabel = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id
       const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
       const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
-      const captions = await Promise.all(refImages.map(im =>
-        callOllama(effectiveVision, [
+      const captions = await Promise.all(refImages.map(async (im) => {
+        const cacheKey = `${im.id}::${effectiveVision}`
+        const cached = refCaptionCacheRef.current.get(cacheKey)
+        if (cached != null) return cached
+        const { text } = await callOllama(effectiveVision, [
           { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
           { type: 'text', text: 'Describe this reference image as instructed.' },
-        ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3).then(({ text }) => text)
-      ))
+        ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3)
+        refCaptionCacheRef.current.set(cacheKey, text)
+        return text
+      }))
       return refImages.map((im, i) =>
         `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
       ).join('\n\n')
