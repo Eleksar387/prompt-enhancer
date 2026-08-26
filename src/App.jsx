@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import JSZip from 'jszip'
 import {
   TARGETS, DURATION_OPTIONS, OUTPUT_COUNT_OPTIONS, VARIANT_TEMPS, VARIANT_NUDGES,
   STYLE_OPTIONS, CREATIVITY_OPTIONS, CAMERA_GROUPS,
@@ -136,6 +137,44 @@ export default function App() {
       for (const entry of entries) { await addHistoryEntry(entry) }
       refreshHistory()
     } catch {}
+  }
+
+  const currentImages = () => {
+    if (frameMode === 'ref') {
+      return refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64 }))
+    }
+    if (frameMode === 'firstlast') {
+      return [
+        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64 },
+        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64 },
+      ].filter(Boolean)
+    }
+    if (frameMode === 'firstmidlast') {
+      return [
+        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64 },
+        midImg && { name: 'mid-frame.jpg', base64: midImg.base64 },
+        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64 },
+      ].filter(Boolean)
+    }
+    if (frameMode === 'last') {
+      return firstImg ? [{ name: 'last-frame.jpg', base64: firstImg.base64 }] : []
+    }
+    return firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: firstImg.base64 }] : []
+  }
+
+  const exportBundle = async () => {
+    const zip = new JSZip()
+    for (const img of currentImages()) zip.file(img.name, img.base64, { base64: true })
+    results.forEach((r, i) => {
+      if (r.text) zip.file(results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`, r.text)
+    })
+    const blob = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `prompt-enhancer-${target}-${new Date().toISOString().slice(0, 10)}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const restore = (h) => {
@@ -886,6 +925,13 @@ export default function App() {
       {/* Results */}
       {results.length > 0 && (
         <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {results.some(r => r.text) && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={exportBundle} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>
+                Export ZIP (images + prompt{results.filter(r => r.text).length > 1 ? 's' : ''}) ↓
+              </button>
+            </div>
+          )}
           {results.map((r, i) => (
             <div key={i}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
