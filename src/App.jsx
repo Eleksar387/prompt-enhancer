@@ -45,7 +45,7 @@ export default function App() {
   const [negative, setNegative]       = useState('')
   const [dialogue, setDialogue]       = useState('')
   const [delivery, setDelivery]       = useState('')
-  const [frameMode, setFrameMode]     = useState('single')
+  const [frameMode, setFrameMode]     = useState(() => TARGETS['minimax_h3'].defaultFrameMode || 'single')
   const [firstImg, setFirstImg]       = useState(null)
   const [midImg, setMidImg]           = useState(null)
   const [lastImg, setLastImg]         = useState(null)
@@ -270,7 +270,7 @@ export default function App() {
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
     setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([])
     setSoundscape(''); setMusic(''); setH3RatioId('')
-    setFrameMode('single'); setResults([]); setCaption('')
+    setFrameMode(TARGETS[id].defaultFrameMode || 'single'); setResults([]); setCaption('')
   }
 
   const captionImages = async () => {

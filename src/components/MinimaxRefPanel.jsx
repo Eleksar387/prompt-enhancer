@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
 
-const MAX_IMAGES = 3
+const MAX_IMAGES = 6
 const MAX_DIM = 1536
 
 const lbl = { fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }

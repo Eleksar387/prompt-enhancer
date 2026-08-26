@@ -832,7 +832,7 @@ export const MINIMAX_H3_FRAME_MODE_OPTIONS = [
   { id: 'single', label: 'Text or First Frame', hint: 'No image = text-to-video (T2VA). Upload one image to animate forward from it as the exact opening frame (I2VA).' },
   { id: 'last', label: 'Last Frame', hint: 'Upload one image as the exact ending frame (L2VA) — the writer infers a plausible path that lands on it.' },
   { id: 'firstlast', label: 'First + Last', hint: 'Upload two images as the exact opening and ending frames (FL2VA) — the writer describes the transition between them.' },
-  { id: 'ref', label: 'Reference (≤3 images)', hint: 'Upload up to 3 images, each with an explicit role and preservation strength (Ref2VA) — for identity, product, environment, style, or pose reference rather than an exact frame.' },
+  { id: 'ref', label: 'Reference (≤6 images)', hint: 'Upload up to 6 images, each with an explicit role and preservation strength (Ref2VA) — for identity, product, environment, style, or pose reference rather than an exact frame.' },
 ]
 
 export const MINIMAX_H3_RESOLUTIONS = [
@@ -1081,11 +1081,12 @@ export const TARGETS = {
   },
   minimax_h3: {
     id: 'minimax_h3', label: 'MiniMax H3 · Video', type: 'video', system: SYSTEM_PROMPT_MINIMAX_H3,
-    subtitle: 'Text, first/last frame, or up to 3 role-tagged references → MiniMax H3 audio-video prompt',
+    subtitle: 'Text, first/last frame, or up to 6 role-tagged references → MiniMax H3 audio-video prompt',
     resolutions: MINIMAX_H3_RESOLUTIONS,
     durations: MINIMAX_H3_DURATIONS,
     durationHint: 'MiniMax H3 requires an integer duration from 4–15s. 4–6s: one shot. 7–10s: one developed shot or 2–3 shots. 11–15s: 2–4 shots.',
     frameModeOptions: MINIMAX_H3_FRAME_MODE_OPTIONS,
+    defaultFrameMode: 'ref',
     show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false },
   },
 }
