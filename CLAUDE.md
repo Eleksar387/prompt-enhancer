@@ -48,6 +48,7 @@ React 18 + Vite. Source is split across `src/`:
 |---|---|
 | `src/constants.js` | All system prompts, option arrays, and the `TARGETS` object |
 | `src/api.js` | `callOllama`, `fetchModels`, config persistence, model auto-pickers |
+| `src/comfy.js` | `uploadImage` — copies loaded input image(s) into a local ComfyUI instance's `input/` folder via its `/upload/image` API |
 | `src/utils.js` | Pure helpers: `recommendRes`, `ratioLabel`, `snap32`, shared style objects |
 | `src/components/ConfigBar.jsx` | Collapsible backend settings panel with Ollama / Claude API presets |
 | `src/components/ImagePanel.jsx` | Image drop zone, resolution picker, crop tool with canvas export |
@@ -93,11 +94,16 @@ A toggle in the header. When on: after stage 1 completes, `enhance()` pauses and
 
 ### State and persistence
 
-All UI state lives in `useState` hooks inside `App`. Two things persist to `localStorage`:
+All UI state lives in `useState` hooks inside `App`. Three things persist to `localStorage`:
 - **Backend config** (`ollama-enhancer-config`): base URL, API key, temperature.
+- **ComfyUI copy config** (`prompt-enhancer-comfy-config`): just the ComfyUI server URL (default `http://127.0.0.1:8188`) used by the "⇪ Copy to ComfyUI input" button — see below.
 - **Generation history** (`gen-history`): last 10 runs, each with a settings snapshot and output texts.
 
 `VITE_API_KEY` / `VITE_API_BASE` from `.env` override localStorage values on every page load.
+
+### Copying input images to ComfyUI
+
+Whenever an input image is loaded (any `frameMode`, any image-capable target), a "⇪ Copy to ComfyUI input" button appears next to the image panel(s), alongside a small ComfyUI server URL field. Clicking it calls `uploadImage()` in `src/comfy.js` for each currently-loaded image (reusing the same `currentImages()` helper the ZIP export uses for naming/ordering), which `POST`s each one to ComfyUI's own `/upload/image` endpoint — landing them in ComfyUI's `input/` folder, ready to pick from a `LoadImage` node's dropdown. Like Ollama's `OLLAMA_ORIGINS=*`, this needs ComfyUI started with `--enable-cors-header` for the browser to reach it. This is intentionally minimal — no workflow JSON, no prompt injection, no queueing; it only moves image bytes into ComfyUI's input folder.
 
 ### Prompt length control
 

@@ -10,6 +10,7 @@ import {
   systemPromptFor,
 } from './constants'
 import { loadCfg, saveCfg, callOllama, fetchModels, pickWriter, pickVision, isAnthropic, isGrok } from './api'
+import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage } from './comfy'
 import {
   getAllHistory, addHistoryEntry, deleteHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
@@ -30,6 +31,8 @@ export default function App() {
   const [cfg, setCfg]                 = useState(loadCfg)
   const [models, setModels]           = useState([])
   const [modelStatus, setModelStatus] = useState({ loading: true, ok: false, error: '' })
+  const [comfyCfg, setComfyCfg]       = useState(loadComfyCfg)
+  const [comfyCopyStatus, setComfyCopyStatus] = useState({ state: 'idle' })
 
   const [target, setTarget]           = useState('minimax_h3')
   const [scene, setScene]             = useState('')
@@ -92,6 +95,7 @@ export default function App() {
     if (!cfgMountedRef.current) { cfgMountedRef.current = true; return }
     saveCfg(cfg)
   }, [cfg])
+  useEffect(() => { saveComfyCfg(comfyCfg) }, [comfyCfg])
   useEffect(() => {
     migrateFromLocalStorage()
       .then(() => getAllHistory())
@@ -184,6 +188,23 @@ export default function App() {
     a.download = `prompt-enhancer-${target}-${new Date().toISOString().slice(0, 10)}.zip`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // A previous copy's status shouldn't linger against a different set of loaded images.
+  useEffect(() => { setComfyCopyStatus({ state: 'idle' }) }, [firstImg, midImg, lastImg, refImages])
+
+  const copyImagesToComfy = async () => {
+    const imgs = currentImages()
+    if (!imgs.length) return
+    setComfyCopyStatus({ state: 'sending' })
+    try {
+      for (const img of imgs) {
+        await uploadComfyImage(img.base64, img.name, 'image/jpeg', comfyCfg.url)
+      }
+      setComfyCopyStatus({ state: 'done' })
+    } catch (e) {
+      setComfyCopyStatus({ state: 'error', error: e.message })
+    }
   }
 
   const restore = (h) => {
@@ -870,6 +891,32 @@ export default function App() {
           <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} />
         </>
       ))}
+
+      {/* Copy loaded image(s) into ComfyUI's input folder */}
+      {showImage && currentImages().length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+          <input
+            value={comfyCfg.url} onChange={e => setComfyCfg({ ...comfyCfg, url: e.target.value })}
+            placeholder="http://127.0.0.1:8188" spellCheck={false}
+            style={{ flex: '0 1 220px', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 7, padding: '6px 10px', color: '#e0e0f0', fontSize: 12, outline: 'none' }}
+          />
+          <button
+            onClick={copyImagesToComfy} disabled={comfyCopyStatus.state === 'sending'}
+            title={comfyCopyStatus.state === 'error' ? comfyCopyStatus.error : "Uploads the loaded image(s) into ComfyUI's input/ folder via its own /upload/image API — needs ComfyUI running and started with --enable-cors-header."}
+            style={{
+              padding: '6px 12px', borderRadius: 6, border: '1px solid #333',
+              background: comfyCopyStatus.state === 'done' ? '#1a3a2a' : comfyCopyStatus.state === 'error' ? '#2a1020' : '#1a1a2e',
+              color: comfyCopyStatus.state === 'done' ? '#4ade80' : comfyCopyStatus.state === 'error' ? '#f87171' : '#9a8fd8',
+              fontSize: 11.5, cursor: comfyCopyStatus.state === 'sending' ? 'wait' : 'pointer',
+            }}
+          >
+            {comfyCopyStatus.state === 'sending' ? 'Copying…'
+              : comfyCopyStatus.state === 'done' ? '✓ Copied to ComfyUI'
+              : comfyCopyStatus.state === 'error' ? '✕ Failed — hover for details'
+              : '⇪ Copy to ComfyUI input'}
+          </button>
+        </div>
+      )}
 
       {/* Admin system prompt */}
       {adminMode && (
