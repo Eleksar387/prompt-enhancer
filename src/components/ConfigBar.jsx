@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { isAnthropic } from '../api'
+import { isAnthropic, isGrok } from '../api'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
+const GROK_BASE = 'https://api.x.ai/v1'
 
 export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels }) {
   const [open, setOpen] = useState(false)
@@ -26,11 +27,14 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
 
   const statusColor = modelStatus.ok ? '#4ade80' : modelStatus.loading ? '#9a8fd8' : '#f87171'
   const anthropic = isAnthropic(cfg.base)
+  const grok = isGrok(cfg.base)
+  const cloud = anthropic || grok
+  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : cfg.base
 
   const statusText = modelStatus.loading
     ? 'connecting…'
     : modelStatus.ok
-      ? `${models.length} model${models.length === 1 ? '' : 's'} · ${anthropic ? 'Anthropic API' : cfg.base}`
+      ? `${models.length} model${models.length === 1 ? '' : 's'} · ${providerLabel}`
       : `not connected · ${modelStatus.error || ''}`
 
   return (
@@ -53,11 +57,14 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
           <div>
             <label style={lbl}>Provider</label>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button style={presetBtn(!anthropic)} onClick={() => setCfg({ ...cfg, base: OLLAMA_BASE })}>
+              <button style={presetBtn(!cloud)} onClick={() => setCfg({ ...cfg, base: OLLAMA_BASE })}>
                 Ollama (local)
               </button>
               <button style={presetBtn(anthropic)} onClick={() => setCfg({ ...cfg, base: ANTHROPIC_BASE })}>
                 Claude API
+              </button>
+              <button style={presetBtn(grok)} onClick={() => setCfg({ ...cfg, base: GROK_BASE })}>
+                Grok API
               </button>
             </div>
           </div>
@@ -78,6 +85,13 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
                   Works with <span style={{ color: '#9a8fd8' }}>claude-sonnet-4-6</span>,{' '}
                   <span style={{ color: '#9a8fd8' }}>claude-haiku-4-5-20251001</span>, etc.
                 </>
+              ) : grok ? (
+                <>
+                  xAI's OpenAI-compatible endpoint — use your{' '}
+                  <span style={{ color: '#9a8fd8' }}>xAI API key</span> below.
+                  Works with <span style={{ color: '#9a8fd8' }}>grok-4</span>,{' '}
+                  <span style={{ color: '#9a8fd8' }}>grok-3</span>, etc.
+                </>
               ) : (
                 <>
                   Ollama direct: <span style={{ color: '#9a8fd8' }}>{OLLAMA_BASE}</span> (needs{' '}
@@ -90,11 +104,11 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 220px' }}>
-              <label style={lbl}>{anthropic ? 'Anthropic API key' : 'API key (Open WebUI / remote only)'}</label>
+              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : 'API key (Open WebUI / remote only)'}</label>
               <input
                 style={inputStyle} value={cfg.apiKey}
                 onChange={e => setCfg({ ...cfg, apiKey: e.target.value })}
-                placeholder={anthropic ? 'sk-ant-…' : 'leave blank for local Ollama'}
+                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : 'leave blank for local Ollama'}
                 type="password" spellCheck={false}
               />
             </div>
@@ -113,7 +127,7 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
               />
             </div>
           </div>
-          {!anthropic && (
+          {!cloud && (
             <div style={{ fontSize: 11, color: '#555', lineHeight: 1.5, marginTop: -4 }}>
               Reasoning models (Qwen3, DeepSeek-R1, etc.) spend part of this budget on hidden "thinking" before
               writing the answer — raise this if you see a "ran out of output length while thinking" error.
@@ -131,7 +145,7 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
 
           {!modelStatus.ok && !modelStatus.loading && (
             <div style={{ fontSize: 11.5, color: '#f0b070', background: '#241a0e', border: '1px solid #4a3520', borderRadius: 6, padding: '8px 11px', lineHeight: 1.5 }}>
-              {anthropic
+              {cloud
                 ? 'Could not connect. Check your API key and that the base URL is correct.'
                 : 'Couldn\'t list models. Most common cause: CORS. Set OLLAMA_ORIGINS=* and restart Ollama. You can still type model names manually below.'}
             </div>

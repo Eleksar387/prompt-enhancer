@@ -9,7 +9,7 @@ import {
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   systemPromptFor,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, fetchModels, pickWriter, pickVision, isAnthropic } from './api'
+import { loadCfg, saveCfg, callOllama, fetchModels, pickWriter, pickVision, isAnthropic, isGrok } from './api'
 import {
   getAllHistory, addHistoryEntry, deleteHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
@@ -31,15 +31,15 @@ export default function App() {
   const [models, setModels]           = useState([])
   const [modelStatus, setModelStatus] = useState({ loading: true, ok: false, error: '' })
 
-  const [target, setTarget]           = useState('ltx')
+  const [target, setTarget]           = useState('minimax_h3')
   const [scene, setScene]             = useState('')
-  const [duration, setDuration]       = useState('97 frames (~4 seconds)')
+  const [duration, setDuration]       = useState('8 seconds')
   const [writerModel, setWriterModel] = useState('')
-  const [visionModel, setVisionModel] = useState('')
+  const [visionModel, setVisionModel] = useState('grok-4.6')
   const [writerManual, setWriterManual] = useState('mistral-nemo')
-  const [visionManual, setVisionManual] = useState('qwen2.5vl:7b')
+  const [visionManual, setVisionManual] = useState('grok-4.6')
   const [outputCount, setOutputCount] = useState(1)
-  const [style, setStyle]             = useState('auto')
+  const [style, setStyle]             = useState('nsfw')
   const [creativity, setCreativity]   = useState('balanced')
   const [promptLength, setPromptLength] = useState('standard')
   const [negative, setNegative]       = useState('')
@@ -63,7 +63,7 @@ export default function App() {
   const [history, setHistory]         = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [adminMode, setAdminMode]     = useState(false)
-  const [adminSystem, setAdminSystem] = useState(() => systemPromptFor(TARGETS['ltx'], 'single'))
+  const [adminSystem, setAdminSystem] = useState(() => systemPromptFor(TARGETS['minimax_h3'], 'single'))
   const [adminSystemOpen, setAdminSystemOpen] = useState(false)
   const [adminUserMsg, setAdminUserMsg] = useState('')
   const [pendingSend, setPendingSend] = useState(false)
@@ -82,7 +82,16 @@ export default function App() {
   const effectiveWriter = models.length ? writerModel : writerManual.trim()
   const effectiveVision = models.length ? visionModel : visionManual.trim()
 
-  useEffect(() => { saveCfg(cfg) }, [cfg])
+  // Skip the very first run: `cfg`'s initial value already includes any .env-derived
+  // override (VITE_API_KEY/VITE_API_BASE) baked in by loadCfg(). Persisting that on
+  // mount would silently clobber a saved provider choice every time .env forces one —
+  // which is exactly what happened when a stray VITE_API_KEY kept resetting the saved
+  // backend back to Anthropic. Only persist changes the user actually makes afterward.
+  const cfgMountedRef = useRef(false)
+  useEffect(() => {
+    if (!cfgMountedRef.current) { cfgMountedRef.current = true; return }
+    saveCfg(cfg)
+  }, [cfg])
   useEffect(() => {
     migrateFromLocalStorage()
       .then(() => getAllHistory())
@@ -622,7 +631,7 @@ export default function App() {
           </label>
           {models.length > 0
             ? <select style={selStyle} value={writerModel} onChange={e => setWriterModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
-            : <input style={selStyle} value={writerManual} onChange={e => setWriterManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
+            : <input style={selStyle} value={writerManual} onChange={e => setWriterManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : 'mistral-nemo'} spellCheck={false} />}
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
@@ -631,7 +640,7 @@ export default function App() {
             </label>
             {models.length > 0
               ? <select style={selStyle} value={visionModel} onChange={e => setVisionModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
-              : <input style={selStyle} value={visionManual} onChange={e => setVisionManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
+              : <input style={selStyle} value={visionManual} onChange={e => setVisionManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : 'qwen2.5vl:7b'} spellCheck={false} />}
           </div>
         )}
       </div>

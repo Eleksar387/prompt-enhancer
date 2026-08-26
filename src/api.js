@@ -1,10 +1,12 @@
 export const CFG_KEY = 'ollama-enhancer-config'
-export const DEFAULT_CFG = { base: 'http://localhost:11434/v1', apiKey: '', temperature: 0.7, maxTokens: 4096 }
+export const DEFAULT_CFG = { base: 'https://api.x.ai/v1', apiKey: '', temperature: 0.7, maxTokens: 4096 }
 
 export function loadCfg() {
   const envKey  = import.meta.env.VITE_API_KEY  || ''
   const envBase = import.meta.env.VITE_API_BASE || ''
-  const derivedBase = envBase || (envKey.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : '')
+  const derivedBase = envBase
+    || (envKey.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : '')
+    || (envKey.startsWith('xai-')    ? 'https://api.x.ai/v1'          : '')
   let saved = {}
   try {
     const raw = localStorage.getItem(CFG_KEY)
@@ -32,6 +34,9 @@ function toOpenAIContent(userContent) {
 }
 
 export const isAnthropic = (base) => (base || '').includes('anthropic.com')
+export const isGrok = (base) => (base || '').includes('api.x.ai')
+// Any hosted provider — as opposed to a local/self-hosted Ollama-compatible server.
+const isCloud = (base) => isAnthropic(base) || isGrok(base)
 
 function authHeaders(cfg) {
   if (!cfg.apiKey) return {}
@@ -42,6 +47,7 @@ function authHeaders(cfg) {
       'anthropic-dangerous-direct-browser-access': 'true',
     }
   }
+  // Grok (xAI) and Ollama both speak plain OpenAI-style bearer auth.
   return { 'Authorization': `Bearer ${cfg.apiKey}` }
 }
 
@@ -58,7 +64,9 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   if (system) messages.push({ role: 'system', content: system })
   messages.push({ role: 'user', content: toOpenAIContent(userContent) })
   const headers = { 'Content-Type': 'application/json', ...authHeaders(cfg) }
-  const formatParam = opts.format && !isAnthropic(cfg.base) ? { format: opts.format } : {}
+  // `format` is an Ollama-specific field name, not part of the OpenAI-compatible
+  // surface — only send it to an actual Ollama-family server.
+  const formatParam = opts.format && !isCloud(cfg.base) ? { format: opts.format } : {}
   const doFetch = (includeTemperature, maxTokens) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
@@ -72,8 +80,8 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   try {
     res = await doFetch(true, baseMaxTokens)
   } catch (e) {
-    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : base
-    throw new Error(`Network error reaching ${label}. ${isAnthropic(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
+    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : base
+    throw new Error(`Network error reaching ${label}. ${isCloud(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
   }
   // Some newer Claude models reject a custom temperature outright; retry once without it.
   if (!res.ok) {
@@ -132,6 +140,9 @@ export const pickWriter = (ids) =>
   ids.find(id => /claude-sonnet/i.test(id))
   || ids.find(id => /claude-opus/i.test(id))
   || ids.find(id => /claude-haiku/i.test(id))
+  || ids.find(id => /^grok-4/i.test(id))
+  || ids.find(id => /^grok-3/i.test(id))
+  || ids.find(id => /^grok/i.test(id))
   || ['mistral-nemo:latest', 'mistral-nemo'].find(p => ids.includes(p))
   || ids.find(id => !/embed|bge-m3|:vl|qwen.*vl|vision|llava|minicpm/i.test(id))
   || ids[0] || ''
@@ -139,6 +150,8 @@ export const pickWriter = (ids) =>
 export const pickVision = (ids) =>
   ids.find(id => /claude-sonnet/i.test(id))
   || ids.find(id => /claude-haiku/i.test(id))
+  || ids.find(id => /^grok-4/i.test(id))
+  || ids.find(id => /grok.*vision/i.test(id))
   || ['qwen2.5vl:7b', 'qwen2.5vl'].find(p => ids.includes(p))
   || ids.find(id => /vl|vision|llava|minicpm|gemma3/i.test(id))
   || ids[0] || ''

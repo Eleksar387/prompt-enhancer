@@ -13,13 +13,19 @@ npm run preview  # serve the production build locally
 
 ## Backend configuration
 
-The app supports two backends, configured via `.env` or the ⚙ Backend panel in the UI:
+The app supports three backends, configured via `.env` or the ⚙ Backend panel in the UI:
 
 **Anthropic Claude API** (recommended — set in `.env`):
 ```
 VITE_API_KEY=sk-ant-…
 ```
 An `sk-ant-` key automatically sets the base URL to `https://api.anthropic.com/v1`. No other config needed.
+
+**Grok API (xAI)**:
+```
+VITE_API_KEY=xai-…
+```
+An `xai-` key automatically sets the base URL to `https://api.x.ai/v1`. xAI's endpoint is OpenAI-compatible, so it needs no special browser headers — same `Authorization: Bearer <key>` path as Ollama.
 
 **Ollama (local)**: `OLLAMA_ORIGINS=*` must be set before starting Ollama. Default base URL is `http://localhost:11434/v1`.
 
@@ -32,7 +38,7 @@ Anthropic's API requires three headers for browser (CORS) access, sent automatic
 - `anthropic-version: 2023-06-01`
 - `anthropic-dangerous-direct-browser-access: true`
 
-Ollama uses `Authorization: Bearer <key>`. The `authHeaders(cfg)` function in `api.js` selects the right set. Do **not** add `format: 'json'` to requests when using Anthropic — it is Ollama-specific and is already gated in `callOllama`.
+Grok (xAI) and Ollama both use `Authorization: Bearer <key>`. The `authHeaders(cfg)` function in `api.js` selects the right set based on `isAnthropic(cfg.base)`. `isGrok(cfg.base)` (base contains `api.x.ai`) is used for UI labeling/placeholders and to gate provider-specific request quirks. Do **not** add `format: 'json'` to requests when using Anthropic or Grok — it is Ollama-specific and is already gated in `callOllama` (both cloud providers are excluded via the internal `isCloud` check).
 
 ## Architecture
 
