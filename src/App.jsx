@@ -221,7 +221,22 @@ export default function App() {
     setDuration(h.duration); setStyle(h.style); setCreativity(h.creativity); setFrameMode(h.frameMode)
     setScene(h.scene || ''); setDialogue(h.dialogue || ''); setDelivery(h.delivery || '')
     setNegative(h.negative || '')
-    setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setResults([]); setCaption('')
+    // Older entries only ever stored a filename string (no image bytes) — those
+    // fall through to null/[] here, exactly like the pre-restore-support behavior.
+    const imgFromHistory = (v) => (v && typeof v === 'object' && v.base64)
+      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName }
+      : null
+    setFirstImg(imgFromHistory(h.firstImg))
+    setMidImg(imgFromHistory(h.midImg))
+    setLastImg(imgFromHistory(h.lastImg))
+    setRefImages(Array.isArray(h.refImages)
+      ? h.refImages.filter(im => im && typeof im === 'object' && im.base64).map(im => ({
+          id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
+          previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
+          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong',
+        }))
+      : [])
+    setResults([]); setCaption('')
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
     setH3RatioId(ratioPreset?.id || '')
@@ -494,10 +509,14 @@ export default function App() {
       ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
       duration, style, creativity, frameMode, negative,
       scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
-      firstImg: firstImg?.fileName || null, midImg: midImg?.fileName || null, lastImg: lastImg?.fileName || null,
+      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName } : null,
+      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName } : null,
+      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName } : null,
       ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
       soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
-      refImages: isH3 && frameMode === 'ref' ? refImages.map(im => im.fileName) : null,
+      refImages: isH3 && frameMode === 'ref'
+        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve }))
+        : null,
     }
 
     if (adminMode) {
@@ -1095,8 +1114,26 @@ export default function App() {
                   {h.soundscape && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Soundscape: {h.soundscape}</div>}
                   {h.music && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Music: {h.music}</div>}
                   {h.negative && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Avoid: {h.negative}</div>}
-                  {(h.firstImg || h.midImg || h.lastImg) && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>{h.firstImg ? `Image: ${h.firstImg}` : ''}{h.midImg ? ` · Mid: ${h.midImg}` : ''}{h.lastImg ? ` · Last: ${h.lastImg}` : ''}</div>}
-                  {h.refImages && h.refImages.length > 0 && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>References: {h.refImages.join(', ')}</div>}
+                  {(h.firstImg || h.midImg || h.lastImg) && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                      {[h.firstImg, h.midImg, h.lastImg].filter(Boolean).map((im, ii) =>
+                        typeof im === 'object' && im.base64
+                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={im.fileName}
+                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid #333' }} />
+                          : <span key={ii} style={{ fontSize: 11, color: '#777' }}>{im}</span>
+                      )}
+                    </div>
+                  )}
+                  {h.refImages && h.refImages.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                      {h.refImages.map((im, ii) =>
+                        typeof im === 'object' && im.base64
+                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={`${im.fileName} (${im.role})`}
+                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid #333' }} />
+                          : <span key={ii} style={{ fontSize: 11, color: '#777' }}>{im}</span>
+                      )}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                     {(h.outputs || []).map((o, oi) => (
                       <div key={oi} style={{ background: '#12121f', border: '1px solid #2a2a3f', borderRadius: 8, padding: '8px 10px' }}>

@@ -94,12 +94,13 @@ A toggle in the header. When on: after stage 1 completes, `enhance()` pauses and
 
 ### State and persistence
 
-All UI state lives in `useState` hooks inside `App`. Three things persist to `localStorage`:
+All UI state lives in `useState` hooks inside `App`. Two things persist to `localStorage`:
 - **Backend config** (`ollama-enhancer-config`): base URL, API key, temperature.
 - **ComfyUI copy config** (`prompt-enhancer-comfy-config`): just the ComfyUI server URL (default `http://127.0.0.1:8188`) used by the "⇪ Copy to ComfyUI input" button — see below.
-- **Generation history** (`gen-history`): last 10 runs, each with a settings snapshot and output texts.
 
 `VITE_API_KEY` / `VITE_API_BASE` from `.env` override localStorage values on every page load.
+
+**Generation history** persists to IndexedDB instead (`src/db.js` — DB `prompt-enhancer`, object store `history`, schema-less `put`/`getAll`/`delete`/`clear`), with no entry-count cap. `migrateFromLocalStorage()` one-time-migrates any pre-existing `localStorage` `gen-history` data (an older, capped-at-10-runs format) into IndexedDB on first load. Each entry's snapshot includes any input image(s) used — full `{ base64, mediaType, fileName }` data (plus `role`/`preserve` for MiniMax H3 reference images), not just a filename — so `restore()` repopulates the live image panels (`firstImg`/`midImg`/`lastImg`/`refImages`) directly from history, making a restored entry immediately usable again (regenerate, ZIP export, "Copy to ComfyUI input"). Entries saved before this existed only have a filename string; `restore()` and the history-list thumbnail rendering both check for object-shaped image data and fall back to the old label-only behavior for those, so no migration was needed.
 
 ### Copying input images to ComfyUI
 
