@@ -228,7 +228,10 @@ export default function App() {
     addHistoryEntry({ ...entry, project }).then(refreshHistory).catch(() => {})
   }, [refreshHistory])
 
-  const clearHistory = () => { dbClearHistory().then(() => setHistory([])).catch(() => setHistory([])) }
+  const clearHistory = () => {
+    if (!window.confirm(`Delete all ${history.length} generation${history.length === 1 ? '' : 's'} from history? This cannot be undone — use "Export ↓" first if you want a backup.`)) return
+    dbClearHistory().then(() => setHistory([])).catch(() => setHistory([]))
+  }
   const removeHistoryEntry = (id) => {
     deleteHistoryEntry(id).then(() => setHistory(prev => prev.filter(h => h.id !== id))).catch(() => {})
   }
