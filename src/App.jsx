@@ -586,8 +586,10 @@ export default function App() {
     return { text, stats }
   }
 
-  // Re-run the vision step for a stored history entry (uses the caption cache;
-  // for entries generated since the cache landed this is usually a free hit).
+  // Re-run the vision step for a stored history entry. Prefer the entry's
+  // original vision model only when it's still available (keeps caption-cache
+  // hits); otherwise use the currently-selected one — the old model id is often
+  // gone (unpulled, or a different backend now).
   const captionForEntry = (h) => captionImages({
     frameMode: h.frameMode,
     refImages: Array.isArray(h.refImages) ? h.refImages : null,
@@ -595,7 +597,7 @@ export default function App() {
     scene: h.scene || '',
     targetType: TARGETS[h.target]?.type,
     visionPromptSingle: TARGETS[h.target]?.visionPrompt,
-    visionModel: h.vision || effectiveVision,
+    visionModel: (h.vision && models.length && models.includes(h.vision)) ? h.vision : effectiveVision,
   })
 
   const entryHasStoredImages = (h) =>
@@ -609,12 +611,16 @@ export default function App() {
       originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
     }
     if (h.caption) { setAdaptSourceOverride({ ...base, caption: h.caption }); return }
+    if (!effectiveVision) {
+      setGlobalError('Adapting an older generation needs a Vision model to re-read its images — pick one in the Vision model dropdown.')
+      return
+    }
     setAdaptSourceOverride({ ...base, caption: '', captioning: true })
     try {
       const { text } = await captionForEntry(h)
       setAdaptSourceOverride(prev => (prev && prev.ts === h.ts ? { ...base, caption: text } : prev))
     } catch (e) {
-      setGlobalError(`Couldn't read the images from that generation (${h.vision || effectiveVision}): ${e.message}`)
+      setGlobalError(`Couldn't re-read the images with the Vision model "${effectiveVision}": ${e.message}`)
       setAdaptSourceOverride(prev => (prev && prev.ts === h.ts ? null : prev))
     }
   }
