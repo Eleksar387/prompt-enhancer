@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
+import { imageHash } from '../utils'
 import { hasDragImage, takeDragImage } from '../imageDrag'
 
 const MAX_IMAGES = 6
@@ -27,11 +28,13 @@ const loadFile = (file, onLoaded) => {
       canvas.getContext('2d').drawImage(img, 0, 0, w, h)
       let dataUrl = canvas.toDataURL('image/jpeg', 0.85)
       if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+      const base64 = dataUrl.split(',')[1]
       onLoaded({
         id: generateId(),
-        base64: dataUrl.split(',')[1], mediaType: 'image/jpeg',
+        base64, mediaType: 'image/jpeg',
         previewUrl: dataUrl, fileName: file.name,
         role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+        hash: imageHash(base64),
       })
     }
     img.src = e.target.result
@@ -71,6 +74,7 @@ const refFromData = (d) => ({
   previewUrl: `data:${d.mediaType || 'image/jpeg'};base64,${d.base64}`,
   fileName: d.fileName || 'from-history.jpg',
   role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+  hash: d.hash || imageHash(d.base64),
 })
 
 export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange }) {

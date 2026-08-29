@@ -15,8 +15,9 @@ import {
   getAllHistory, addHistoryEntry, deleteHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
   setHistoryEntryProject, loadProjects, saveProjects,
+  getCaption, putCaption, clearCaptions,
 } from './db'
-import { btn, selStyle, moveLabel, presetById, syllableBudget } from './utils'
+import { btn, selStyle, moveLabel, presetById, syllableBudget, imageHash, visionCacheKey } from './utils'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
@@ -84,6 +85,7 @@ export default function App() {
   const [flashId, setFlashId]         = useState(null)
   const [results, setResults]         = useState([])
   const [caption, setCaption]         = useState('')
+  const [visionStats, setVisionStats] = useState(null)  // { fromCache, fresh } for the last vision run
   const [visionBusy, setVisionBusy]   = useState(false)
   const [globalError, setGlobalError] = useState('')
   const [copied, setCopied]           = useState(null)
@@ -104,8 +106,7 @@ export default function App() {
   const [scriptwriterKey, setScriptwriterKey] = useState(0)
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
   const importInputRef = useRef(null)
-  const visionCacheRef = useRef(null)
-  const refCaptionCacheRef = useRef(new Map())
+  const captionMemRef = useRef(new Map())  // L1 for the persistent caption cache; key = visionCacheKey(...)
   const sceneTextareaRef = useRef(null)
 
   const t = TARGETS[target]
@@ -306,6 +307,7 @@ export default function App() {
         previewUrl: `data:${data.mediaType || 'image/jpeg'};base64,${data.base64}`,
         fileName: data.fileName || 'from-history.jpg',
         role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+        hash: data.hash || imageHash(data.base64),
       }])
       return
     }
@@ -392,7 +394,7 @@ export default function App() {
     // Older entries only ever stored a filename string (no image bytes) — those
     // fall through to null/[] here, exactly like the pre-restore-support behavior.
     const imgFromHistory = (v) => (v && typeof v === 'object' && v.base64)
-      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName }
+      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName, hash: v.hash || imageHash(v.base64) }
       : null
     setFirstImg(imgFromHistory(h.firstImg))
     setMidImg(imgFromHistory(h.midImg))
@@ -402,12 +404,13 @@ export default function App() {
           id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
           previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
           role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong', note: im.note || '',
+          hash: im.hash || imageHash(im.base64),
         }))
       : [])
     setRefAudio(h.refAudio && typeof h.refAudio === 'object' && h.refAudio.base64
       ? { base64: h.refAudio.base64, mediaType: h.refAudio.mediaType || 'audio/mpeg', fileName: h.refAudio.fileName }
       : null)
-    setResults([]); setCaption('')
+    setResults([]); setCaption(''); setVisionStats(null)
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
     setH3RatioId(ratioPreset?.id || '')
@@ -484,35 +487,52 @@ export default function App() {
     setSoundscape(''); setMusic('')
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
     setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
-    setFrameMode(nextMode); setResults([]); setCaption('')
+    setFrameMode(nextMode); setResults([]); setCaption(''); setVisionStats(null)
+  }
+
+  // Every vision-model call funnels through here: content-addressed cache
+  // (L1 in-memory Map -> L2 IndexedDB), so an image whose bytes + model +
+  // prompt are all unchanged is never re-described, even across reloads.
+  const cachedVision = async (content, system, stats) => {
+    const key = visionCacheKey(effectiveVision, system, content)
+    const mem = captionMemRef.current.get(key)
+    if (mem != null) { stats.fromCache++; console.debug('[vision-cache] hit (mem)'); return mem }
+    let persisted = null
+    try { persisted = await getCaption(key) } catch { /* cache read is best-effort */ }
+    if (persisted != null) {
+      captionMemRef.current.set(key, persisted)
+      stats.fromCache++
+      console.debug('[vision-cache] hit (idb)')
+      return persisted
+    }
+    const { text } = await callOllama(effectiveVision, content, system, cfg, 0.3)
+    captionMemRef.current.set(key, text)
+    putCaption(key, text).catch(() => {})
+    stats.fresh++
+    console.debug('[vision-cache] miss -> fresh')
+    return text
   }
 
   const captionImages = async () => {
+    const stats = { fromCache: 0, fresh: 0 }
     if (frameMode === 'ref') {
       const role = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id) || MINIMAX_H3_REF_ROLES[0]
       const roleLabel = (id) => role(id).label
       const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
       const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
-      const captions = await Promise.all(refImages.map(async (im) => {
-        const cacheKey = `${im.id}::${im.role}::${effectiveVision}`
-        const cached = refCaptionCacheRef.current.get(cacheKey)
-        if (cached != null) return cached
-        const { text } = await callOllama(effectiveVision, [
-          { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-          { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
-        ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3)
-        refCaptionCacheRef.current.set(cacheKey, text)
-        return text
-      }))
+      const captions = await Promise.all(refImages.map((im) => cachedVision([
+        { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+        { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
+      ], VISION_PROMPT_MINIMAX_H3_REF, stats)))
       const imageBlock = refImages.map((im, i) => {
         let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
         return line
       }).join('\n\n')
-      if (refAudio) {
-        return `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
-      }
-      return imageBlock
+      const text = refAudio
+        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
+        : imageBlock
+      return { text, stats }
     }
     let system, content
     if (t.type === 'image') {
@@ -548,21 +568,8 @@ export default function App() {
         { type: 'text', text: 'Describe this first frame as instructed.' },
       ]
     }
-    const { text } = await callOllama(effectiveVision, content, system, cfg, 0.3)
-    return text
-  }
-
-  const getCachedCaption = () => {
-    const c = visionCacheRef.current
-    if (!c) return null
-    if (c.target !== target || c.frameMode !== frameMode) return null
-    if (c.firstImg !== firstImg || c.midImg !== midImg || c.lastImg !== lastImg || c.refImages !== refImages) return null
-    if (c.refAudio !== refAudio) return null
-    if (t.type === 'image' && c.scene !== scene) return null
-    return c.description
-  }
-  const setCachedCaption = (description) => {
-    visionCacheRef.current = { target, frameMode, scene, firstImg, midImg, lastImg, refImages, refAudio, description }
+    const text = await cachedVision(content, system, stats)
+    return { text, stats }
   }
 
   const enhance = async () => {
@@ -581,7 +588,7 @@ export default function App() {
     if (!canGen) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
-    setGlobalError(''); setCopied(null); setCaption(''); setPendingSend(false)
+    setGlobalError(''); setCopied(null); setCaption(''); setVisionStats(null); setPendingSend(false)
 
     const styleObj = STYLE_OPTIONS.find(s => s.id === style)
     const creativityText = creativity === 'balanced' ? ''
@@ -611,23 +618,18 @@ export default function App() {
     if (hasImg) {
       setResults([])
       let frameDescription
-      const cached = getCachedCaption()
-      if (cached != null) {
-        frameDescription = cached
-        setCaption(frameDescription)
-      } else {
-        setVisionBusy(true)
-        try {
-          frameDescription = await captionImages()
-          setCaption(frameDescription)
-          setCachedCaption(frameDescription)
-        } catch (e) {
-          setVisionBusy(false)
-          setGlobalError(`Vision step failed (${effectiveVision}): ${e.message}`)
-          return
-        }
+      setVisionBusy(true)
+      try {
+        const { text, stats } = await captionImages()
+        frameDescription = text
+        setCaption(text)
+        setVisionStats(stats)
+      } catch (e) {
         setVisionBusy(false)
+        setGlobalError(`Vision step failed (${effectiveVision}): ${e.message}`)
+        return
       }
+      setVisionBusy(false)
       await runWriter(frameDescription, stylePart, lengthPart, hasImg)
     } else {
       await runWriter(null, stylePart, lengthPart, hasImg)
@@ -695,13 +697,13 @@ export default function App() {
       ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
       duration, style, creativity, frameMode, negative,
       scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
-      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName } : null,
-      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName } : null,
-      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName } : null,
+      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName, hash: firstImg.hash || imageHash(firstImg.base64) } : null,
+      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName, hash: midImg.hash || imageHash(midImg.base64) } : null,
+      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName, hash: lastImg.hash || imageHash(lastImg.base64) } : null,
       ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
       soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
       refImages: isH3 && frameMode === 'ref'
-        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '' }))
+        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '', hash: im.hash || imageHash(im.base64) }))
         : null,
       refAudio: isH3 && frameMode === 'ref' && refAudio
         ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
@@ -850,7 +852,8 @@ export default function App() {
         </button>
       </div>
 
-      <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus} reloadModels={reloadModels} />
+      <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus} reloadModels={reloadModels}
+        onClearCaptionCache={() => { clearCaptions().catch(() => {}); captionMemRef.current.clear(); setVisionStats(null) }} />
 
       {/* Target */}
       <div style={{ marginBottom: 18 }}>
@@ -1217,7 +1220,12 @@ export default function App() {
       {/* Vision caption */}
       {caption && (
         <details style={{ marginTop: 16, background: '#0e0e1c', border: '1px solid #2a2a3f', borderRadius: 8, padding: '10px 14px' }}>
-          <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6f7a92', textTransform: 'uppercase', letterSpacing: '0.5px' }}>👁 vision description (read-only) · {effectiveVision}</summary>
+          <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6f7a92', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            👁 vision description (read-only) · {effectiveVision}
+            {visionStats && (visionStats.fromCache + visionStats.fresh > 0) && (
+              <span style={{ color: '#556', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.fromCache} cached, {visionStats.fresh} described</span>
+            )}
+          </summary>
           <div style={{ marginTop: 8, fontSize: 12.5, color: '#9aa6c0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{caption}</div>
         </details>
       )}

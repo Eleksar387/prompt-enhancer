@@ -5,8 +5,9 @@ const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 const GROK_BASE = 'https://api.x.ai/v1'
 
-export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels }) {
+export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
   const [open, setOpen] = useState(false)
+  const [cacheCleared, setCacheCleared] = useState(false)
 
   const inputStyle = {
     width: '100%', boxSizing: 'border-box', background: '#12121f',
@@ -136,12 +137,23 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
             </div>
           )}
 
-          <button
-            onClick={reloadModels}
-            style={{ alignSelf: 'flex-start', padding: '7px 16px', borderRadius: 7, border: '1px solid #3a2f6e', background: '#1e1850', color: '#c4b8ff', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
-          >
-            ↻ Reload models
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={reloadModels}
+              style={{ padding: '7px 16px', borderRadius: 7, border: '1px solid #3a2f6e', background: '#1e1850', color: '#c4b8ff', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+            >
+              ↻ Reload models
+            </button>
+            {onClearCaptionCache && (
+              <button
+                onClick={() => { onClearCaptionCache(); setCacheCleared(true); setTimeout(() => setCacheCleared(false), 1800) }}
+                title="Forget every saved vision-model image description. They're re-fetched on the next generation."
+                style={{ fontSize: 11, color: cacheCleared ? '#4ade80' : '#888', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '6px 10px', cursor: 'pointer' }}
+              >
+                {cacheCleared ? '✓ Cleared' : 'Clear caption cache'}
+              </button>
+            )}
+          </div>
 
           {!modelStatus.ok && !modelStatus.loading && (
             <div style={{ fontSize: 11.5, color: '#f0b070', background: '#241a0e', border: '1px solid #4a3520', borderRadius: 6, padding: '8px 11px', lineHeight: 1.5 }}>

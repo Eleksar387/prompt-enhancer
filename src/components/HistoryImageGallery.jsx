@@ -31,6 +31,7 @@ function collectImages(history) {
       base64: im.base64,
       mediaType: im.mediaType || 'image/jpeg',
       fileName: im.fileName || 'image.jpg',
+      hash: im.hash || null,
       role: im.role || null,
       note: im.note || '',
       slot,
@@ -73,7 +74,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
   const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
 
   const onDragStart = (e, img) => {
-    setDragImage({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName })
+    setDragImage({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')
       e.dataTransfer.setData('text/plain', img.fileName || 'image')
@@ -112,7 +113,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
                 key={img.key}
                 draggable
                 onDragStart={(e) => onDragStart(e, img)}
-                onClick={onPick ? () => onPick({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName }) : undefined}
+                onClick={onPick ? () => onPick({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash }) : undefined}
                 title={`${img.fileName}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
                 style={{
                   position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',

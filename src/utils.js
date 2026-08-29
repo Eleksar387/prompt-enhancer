@@ -1,5 +1,34 @@
 import { CAMERA_GROUPS } from './constants'
 
+// public-domain cyrb53 (Bryc) — fast 53-bit non-crypto string hash, base-36 out.
+// Used only for cache keys, never security.
+export function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
+}
+
+// Content fingerprint of an image's base64 payload. Length-prefixed to cut
+// collisions further. Stable for byte-identical bytes across reload / restore /
+// re-upload of the same source file (same browser build).
+export const imageHash = (base64) => `${base64.length.toString(36)}-${cyrb53(base64)}`
+
+// Cache key for one vision call. Folds in the model, the system prompt, and each
+// content block positionally (text hashed, images content-hashed) so it
+// auto-invalidates on any model / prompt / scene / role / frame-order / bytes
+// change. Vision temperature is fixed at 0.3 everywhere, folded in as a literal.
+export function visionCacheKey(model, system, content) {
+  const parts = content.map(b =>
+    b.type === 'text' ? `t:${cyrb53(b.text || '')}` : `i:${imageHash(b.source.data)}`)
+  return `v2|t0.3|${model}|s:${cyrb53(system || '')}|${parts.join('|')}`
+}
+
 export const presetById = (id, presets) => presets.find(p => p.id === id)
 
 export const snap32 = (n) => Math.round(n / 32) * 32

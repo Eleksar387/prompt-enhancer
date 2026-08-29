@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { presetById, snap32, btn, recommendRes, ratioLabel } from '../utils'
+import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash } from '../utils'
 import { hasDragImage, takeDragImage } from '../imageDrag'
 
 export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
@@ -30,10 +30,11 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
         canvas.getContext('2d').drawImage(img, 0, 0, w, h)
         let dataUrl = canvas.toDataURL('image/jpeg', 0.85)
         if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+        const base64 = dataUrl.split(',')[1]
         const obj = {
-          base64: dataUrl.split(',')[1], mediaType: 'image/jpeg',
+          base64, mediaType: 'image/jpeg',
           previewUrl: dataUrl, originalUrl: e.target.result,
-          nativeW, nativeH, fileName: file.name,
+          nativeW, nativeH, fileName: file.name, hash: imageHash(base64),
         }
         setImage(obj)
         setTargetRes(recommendRes(nativeW, nativeH, presets))
@@ -56,7 +57,7 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
         base64: d.base64, mediaType: d.mediaType || 'image/jpeg',
         previewUrl: dataUrl, originalUrl: dataUrl,
         nativeW: img.naturalWidth, nativeH: img.naturalHeight,
-        fileName: d.fileName || 'from-history.jpg',
+        fileName: d.fileName || 'from-history.jpg', hash: d.hash || imageHash(d.base64),
       }
       setImage(obj)
       setTargetRes(recommendRes(img.naturalWidth, img.naturalHeight, presets))
