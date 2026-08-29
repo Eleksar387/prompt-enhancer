@@ -23,6 +23,8 @@ import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
 import MinimaxRefPanel from './components/MinimaxRefPanel'
+import AdaptPanel from './components/AdaptPanel'
+import { buildStylePart } from './adapt'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   label: `${writer} · T${temp}`,
@@ -86,6 +88,7 @@ export default function App() {
   const [results, setResults]         = useState([])
   const [caption, setCaption]         = useState('')
   const [visionStats, setVisionStats] = useState(null)  // { fromCache, fresh } for the last vision run
+  const [adaptSourceOverride, setAdaptSourceOverride] = useState(null)  // set by a history card's "⇄ Adapt"
   const [visionBusy, setVisionBusy]   = useState(false)
   const [globalError, setGlobalError] = useState('')
   const [copied, setCopied]           = useState(null)
@@ -201,6 +204,9 @@ export default function App() {
   }
   useEffect(() => { reloadModels() }, [cfg.base, cfg.apiKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setAdminSystem(systemPromptFor(TARGETS[target], frameMode)); setPendingSend(false); setAdminUserMsg('') }, [target, frameMode])
+  useEffect(() => {
+    if (adaptSourceOverride) document.getElementById('adapt-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [adaptSourceOverride])
 
   const refreshHistory = useCallback(() => getAllHistory().then(setHistory).catch(() => {}), [])
 
@@ -410,7 +416,7 @@ export default function App() {
     setRefAudio(h.refAudio && typeof h.refAudio === 'object' && h.refAudio.base64
       ? { base64: h.refAudio.base64, mediaType: h.refAudio.mediaType || 'audio/mpeg', fileName: h.refAudio.fileName }
       : null)
-    setResults([]); setCaption(''); setVisionStats(null)
+    setResults([]); setCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
     setH3RatioId(ratioPreset?.id || '')
@@ -487,7 +493,7 @@ export default function App() {
     setSoundscape(''); setMusic('')
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
     setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
-    setFrameMode(nextMode); setResults([]); setCaption(''); setVisionStats(null)
+    setFrameMode(nextMode); setResults([]); setCaption(''); setVisionStats(null); setAdaptSourceOverride(null)
   }
 
   // Every vision-model call funnels through here: content-addressed cache
@@ -588,31 +594,11 @@ export default function App() {
     if (!canGen) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
-    setGlobalError(''); setCopied(null); setCaption(''); setVisionStats(null); setPendingSend(false)
+    setGlobalError(''); setCopied(null); setCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
 
-    const styleObj = STYLE_OPTIONS.find(s => s.id === style)
-    const creativityText = creativity === 'balanced' ? ''
-      : t.type === 'image'
-        ? (creativity === 'faithful'
-            ? '\n\nImage fidelity: FAITHFUL — recreate the reference closely; keep its subject, composition and palette, deviating only slightly.'
-            : '\n\nImage fidelity: LOOSE — treat the reference as rough inspiration only. Invent freely, take creative risks, and prioritize the chosen style over literal resemblance.')
-        : t.type === 'text'
-        ? (creativity === 'faithful'
-            ? '\n\nEmotional latitude: FAITHFUL — keep the delivery grounded and true to a plain, literal reading of the idea; minimal embellishment.'
-            : '\n\nEmotional latitude: LOOSE — push the delivery further; take bigger risks with intensity, arc, and phrasing.')
-        : (creativity === 'faithful'
-            ? '\n\nCreative latitude: FAITHFUL — keep the proposed motion minimal and literal to the scene.'
-            : '\n\nCreative latitude: LOOSE — be genuinely inventive and surprising with the action, framing and atmosphere (within the model\'s motion limits); don\'t settle for the obvious motion.')
-    const stylePart = (styleObj && styleObj.id !== 'auto'
-      ? `\n\nStyle / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: ${styleObj.label} — ${styleObj.hint}`
-      : '')
-      + creativityText
-      + (show.dialogue && dialogue.trim()
-        ? `\n\nSpoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them${delivery.trim() ? `; delivery/voice: ${delivery.trim()}` : ''}:\n"${dialogue.trim()}"`
-        : '')
-      + (negative.trim()
-        ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format.`
-        : '')
+    const stylePart = buildStylePart({
+      style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
+    })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
     if (hasImg) {
@@ -708,6 +694,7 @@ export default function App() {
       refAudio: isH3 && frameMode === 'ref' && refAudio
         ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
         : null,
+      caption: frameDescription || null,
     }
 
     if (adminMode) {
@@ -1263,6 +1250,26 @@ export default function App() {
       )}
       </>)}
 
+      {(caption || adaptSourceOverride) && (
+        <AdaptPanel
+          key={adaptSourceOverride?.ts || 'live'}
+          caption={adaptSourceOverride?.caption ?? caption}
+          scene={adaptSourceOverride?.scene ?? scene}
+          sourceFrameMode={adaptSourceOverride?.frameMode ?? frameMode}
+          sourceTarget={adaptSourceOverride?.sourceTarget ?? target}
+          originalPrompt={adaptSourceOverride?.originalPrompt ?? (results.find(r => r.text)?.text ?? '')}
+          fromHistory={!!adaptSourceOverride}
+          sourceTs={adaptSourceOverride?.ts}
+          models={models} defaultModel={effectiveWriter} cfg={cfg}
+          style={style} creativity={creativity} negative={negative}
+          dialogue={dialogue} delivery={delivery} promptLength={promptLength}
+          soundscape={soundscape} music={music}
+          duration={duration} h3RatioId={h3RatioId}
+          onSaveAdapt={saveHistory}
+          onClose={() => setAdaptSourceOverride(null)}
+        />
+      )}
+
       {/* History */}
       <div style={{ marginTop: 28, borderTop: '1px solid #1e1e30', paddingTop: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -1379,12 +1386,24 @@ export default function App() {
                     <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {entryProjectSelect(h)}
+                      {h.caption && (
+                        <button
+                          onClick={() => {
+                            setAdaptSourceOverride({
+                              caption: h.caption, scene: h.scene || '', frameMode: h.frameMode,
+                              sourceTarget: h.target, originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
+                            })
+                            setHistoryOpen(false)
+                          }}
+                          style={{ fontSize: 11, color: '#c4b8ff', background: 'none', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
+                        >⇄ Adapt</button>
+                      )}
                       <button onClick={() => restore(h)} style={{ fontSize: 11, color: '#c4b8ff', background: '#1e1850', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore settings</button>
                       <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                     </div>
                   </div>
                   <div style={{ fontSize: 11.5, color: '#9a8fd8', marginBottom: 6 }}>
-                    {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : h.frameMode === 'last' ? ' · last frame' : h.frameMode === 'ref' ? ' · reference' : ''}{h.ratio ? ` · ${h.ratio}` : ''}
+                    {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : h.frameMode === 'last' ? ' · last frame' : h.frameMode === 'ref' ? ' · reference' : ''}{h.ratio ? ` · ${h.ratio}` : ''}{h.adaptedFrom ? ` · ⇄ from ${(TARGETS[h.adaptedFrom.target]?.label || h.adaptedFrom.target).split(' · ')[0]}` : ''}
                   </div>
                   {moves.length > 0 && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>Camera: {moves.join(', ')}</div>}
                   <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>{h.scene ? h.scene : <span style={{ color: '#666' }}>(proposed from image)</span>}</div>

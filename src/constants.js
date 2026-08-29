@@ -3,13 +3,16 @@ const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
 }
 
-const LTX_INTRO = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
+const LTX_INTRO = `You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.
 
 CONTEXT
 You are given a TEXT DESCRIPTION of the first frame (produced by a vision model). It already
 establishes subject, lighting, color, wardrobe, and setting. Do NOT re-describe what the
 description already covers — describe what HAPPENS over time. Clips are short by default
 (97 frames, ~4 seconds) unless a longer duration is specified, so keep the action budget tight.
+If NO frame description is given (a pure text request), treat the scene text and any "Visual
+details to incorporate" block as the full source — establish subject, setting, wardrobe, lighting
+and color from them in the opening phrase, then describe what happens over time.
 
 SCENE SOURCE
 If the user provides a scene description, base the prompt on it. If they provide NO
@@ -261,13 +264,16 @@ If a reference-image description is provided, use it so the result resembles tha
 OUTPUT: always English, even if the input is another language. Return exactly one prompt
 paragraph. No headers, bullets, JSON, negative prompts, or explanation.`;
 
-const LTX_GUIDE_INTRO = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
+const LTX_GUIDE_INTRO = `You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.
 
 CONTEXT
 You are given a TEXT DESCRIPTION of the first frame (produced by a vision model). It already
 establishes subject, lighting, color, wardrobe, and setting. Do NOT re-describe what the
 description already covers — describe what HAPPENS over time. Clips are short by default
 (97 frames, ~4 seconds) unless a longer duration is specified.
+If NO frame description is given (a pure text request), treat the scene text and any "Visual
+details to incorporate" block as the full source — establish subject, setting, wardrobe, lighting
+and color from them in the opening phrase, then describe what happens over time.
 
 SCENE SOURCE
 If the user provides a scene description, base the prompt on it. If they provide NO
