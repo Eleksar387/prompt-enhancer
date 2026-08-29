@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { presetById, snap32, btn, recommendRes, ratioLabel } from '../utils'
+import { hasDragImage, takeDragImage } from '../imageDrag'
 
-export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote }) {
+export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
   const [image, setImage]           = useState(null)
   const [targetRes, setTargetRes]   = useState(presets[1] ? presets[1].id : presets[0].id)
   const [cropOpen, setCropOpen]     = useState(false)
   const [cropPos, setCropPos]       = useState(0.5)
   const [croppedUrl, setCroppedUrl] = useState(null)
   const [croppedDims, setCroppedDims] = useState(null)
+  const [dragOver, setDragOver]     = useState(false)
   const fileInputRef = useRef(null)
 
   const loadFile = (file) => {
@@ -43,12 +45,45 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
     reader.readAsDataURL(file)
   }
 
+  // Load an image we already have as base64 (dragged/picked from history) — no
+  // resize/re-encode; it was already normalised when first loaded.
+  const loadFromData = (d) => {
+    if (!d?.base64) return
+    const dataUrl = `data:${d.mediaType || 'image/jpeg'};base64,${d.base64}`
+    const img = new Image()
+    img.onload = () => {
+      const obj = {
+        base64: d.base64, mediaType: d.mediaType || 'image/jpeg',
+        previewUrl: dataUrl, originalUrl: dataUrl,
+        nativeW: img.naturalWidth, nativeH: img.naturalHeight,
+        fileName: d.fileName || 'from-history.jpg',
+      }
+      setImage(obj)
+      setTargetRes(recommendRes(img.naturalWidth, img.naturalHeight, presets))
+      setCropPos(0.5)
+      onChange?.(obj)
+    }
+    img.src = dataUrl
+  }
+
+  useEffect(() => {
+    if (seed && seed.data) loadFromData(seed.data)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce])
+
   const onFileChange = (e) => loadFile(e.target.files[0])
   const onDrop = (e) => {
-    e.preventDefault()
+    e.preventDefault(); setDragOver(false)
+    if (hasDragImage(e.dataTransfer)) { const d = takeDragImage(); if (d) loadFromData(d); return }
     const f = e.dataTransfer.files[0]
     if (f?.type.startsWith('image/')) loadFile(f)
   }
+  const onDragOver = (e) => {
+    if (hasDragImage(e.dataTransfer) || (e.dataTransfer.types || []).includes('Files')) {
+      e.preventDefault(); setDragOver(true)
+    }
+  }
+  const onDragLeave = (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }
   const removeImage = () => {
     setImage(null); setCroppedUrl(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -106,9 +141,11 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
 
       {image ? (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', background: '#12121f', border: '1px solid #3a2f6e', borderRadius: 8 }}>
+          <div
+            onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}
+            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', background: '#12121f', border: `1px solid ${dragOver ? '#7c6af7' : '#3a2f6e'}`, borderRadius: 8, transition: 'border-color 0.15s' }}>
             <img src={image.previewUrl} alt="ref" style={{ width: 72, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid #2e2e44' }} />
-            <div style={{ flex: 1, fontSize: 12, color: '#888' }}>{label} loaded · <span style={{ color: '#666' }}>{image.fileName}</span></div>
+            <div style={{ flex: 1, fontSize: 12, color: '#888' }}>{label} loaded · <span style={{ color: '#666' }}>{image.fileName}</span>{dragOver ? ' · drop to replace' : ''}</div>
             <button onClick={removeImage} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #3a2040', background: '#1e1020', color: '#f87171', fontSize: 11, cursor: 'pointer' }}>Remove</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 11, color: '#6f7a92' }}>👁 Read by your Vision model at generate time, then handed to the Writer.</div>
@@ -229,13 +266,13 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
       ) : (
         <div
           onClick={() => fileInputRef.current?.click()}
-          onDrop={onDrop} onDragOver={e => e.preventDefault()}
-          style={{ padding: '20px', borderRadius: 8, border: '1px dashed #2e2e44', background: '#0e0e1c', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s' }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = '#5a4fcf'; e.currentTarget.style.background = '#12122a' }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = '#2e2e44'; e.currentTarget.style.background = '#0e0e1c' }}
+          onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}
+          style={{ padding: '20px', borderRadius: 8, border: `1px dashed ${dragOver ? '#7c6af7' : '#2e2e44'}`, background: dragOver ? '#141130' : '#0e0e1c', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s' }}
+          onMouseEnter={e => { if (!dragOver) { e.currentTarget.style.borderColor = '#5a4fcf'; e.currentTarget.style.background = '#12122a' } }}
+          onMouseLeave={e => { if (!dragOver) { e.currentTarget.style.borderColor = '#2e2e44'; e.currentTarget.style.background = '#0e0e1c' } }}
         >
           <div style={{ fontSize: 22, marginBottom: 6 }}>🖼️</div>
-          <div style={{ fontSize: 13, color: '#666' }}>Click or drag & drop an image</div>
+          <div style={{ fontSize: 13, color: '#666' }}>Click or drag &amp; drop an image{seed !== undefined ? ', or drag one from history' : ''}</div>
           <div style={{ fontSize: 11, color: '#444', marginTop: 3 }}>JPG, PNG, WebP</div>
         </div>
       )}

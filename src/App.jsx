@@ -19,6 +19,7 @@ import {
 import { btn, selStyle, moveLabel, presetById, syllableBudget } from './utils'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
+import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
 import MinimaxRefPanel from './components/MinimaxRefPanel'
 
@@ -72,6 +73,8 @@ export default function App() {
   const [lastImg, setLastImg]         = useState(null)
   const [refImages, setRefImages]     = useState([])
   const [refAudio, setRefAudio]       = useState(null)
+  // Bumped to push a history-gallery image into a first/mid/last ImagePanel.
+  const [seeds, setSeeds]             = useState({ first: null, mid: null, last: null })
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
@@ -291,6 +294,30 @@ export default function App() {
     } catch {}
   }
 
+  // Clicking a thumbnail in the history image gallery — route it to the right
+  // slot for the current frame mode. (Drag-and-drop is handled inside the panels.)
+  const bumpSeed = (slot, data) =>
+    setSeeds(s => ({ ...s, [slot]: { data, nonce: (s[slot]?.nonce || 0) + 1 } }))
+  const pickHistoryImage = (data) => {
+    if (target === 'minimax_h3' && frameMode === 'ref') {
+      if (refImages.length >= 6) return
+      setRefImages(prev => [...prev, {
+        id: generateId(), base64: data.base64, mediaType: data.mediaType || 'image/jpeg',
+        previewUrl: `data:${data.mediaType || 'image/jpeg'};base64,${data.base64}`,
+        fileName: data.fileName || 'from-history.jpg',
+        role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+      }])
+      return
+    }
+    if (t.type === 'image' || frameMode === 'single' || frameMode === 'last') { bumpSeed('first', data); return }
+    if (frameMode === 'firstlast') { bumpSeed(!firstImg ? 'first' : 'last', data); return }
+    if (frameMode === 'firstmidlast') { bumpSeed(!firstImg ? 'first' : !midImg ? 'mid' : 'last', data) }
+  }
+  const galleryPickHint =
+    target === 'minimax_h3' && frameMode === 'ref' ? 'to add it as a reference'
+    : frameMode === 'firstlast' || frameMode === 'firstmidlast' ? 'to fill the next empty frame'
+    : 'to load it as the reference image'
+
   const currentImages = () => {
     if (frameMode === 'ref') {
       return refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64 }))
@@ -446,12 +473,14 @@ export default function App() {
   }
   const switchMode = (m) => {
     setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
+    setSeeds({ first: null, mid: null, last: null })
     if (target === 'minimax_h3' && m === 'ref') setH3RatioId(prev => prev || 'port916')
   }
   const switchTarget = (id) => {
     const opts = TARGETS[id].durations || DURATION_OPTIONS
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
     setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
+    setSeeds({ first: null, mid: null, last: null })
     setSoundscape(''); setMusic('')
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
     setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
@@ -1079,13 +1108,16 @@ export default function App() {
       )}
 
       {/* Image panels */}
+      {showImage && (
+        <HistoryImageGallery history={history} onPick={pickHistoryImage} pickHint={galleryPickHint} />
+      )}
       {showImage && (t.type === 'image' || frameMode === 'single' ? (
         <>
           {!firstImg && ratioPicker}
-          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} />
+          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={seeds.first} />
         </>
       ) : frameMode === 'last' ? (
-        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} />
+        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
       ) : frameMode === 'ref' ? (
         <>
           {ratioPicker}
@@ -1093,14 +1125,14 @@ export default function App() {
         </>
       ) : frameMode === 'firstmidlast' ? (
         <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} />
-          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} />
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
+          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.mid} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.last} />
         </>
       ) : (
         <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} />
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.last} />
         </>
       ))}
 

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
+import { hasDragImage, takeDragImage } from '../imageDrag'
 
 const MAX_IMAGES = 6
 const MAX_DIM = 1536
@@ -64,30 +65,61 @@ function refWarnings(images) {
   return out
 }
 
+const refFromData = (d) => ({
+  id: generateId(),
+  base64: d.base64, mediaType: d.mediaType || 'image/jpeg',
+  previewUrl: `data:${d.mediaType || 'image/jpeg'};base64,${d.base64}`,
+  fileName: d.fileName || 'from-history.jpg',
+  role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+})
+
 export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange }) {
   const fileInputRef = useRef(null)
   const audioInputRef = useRef(null)
   const [audioError, setAudioError] = useState('')
+  const [dragOver, setDragOver] = useState(false)
 
   const addImage = (file) => {
     if (!file || images.length >= MAX_IMAGES) return
     loadFile(file, (obj) => onChange([...images, obj]))
   }
   const onFileChange = (e) => { addImage(e.target.files[0]); e.target.value = '' }
-  const onDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('image/')) addImage(f) }
+  // Accepts both an OS file drop and an in-app image dragged from the history gallery.
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false)
+    if (images.length >= MAX_IMAGES) return
+    if (hasDragImage(e.dataTransfer)) {
+      const d = takeDragImage()
+      if (d) onChange([...images, refFromData(d)])
+      return
+    }
+    const f = e.dataTransfer.files[0]
+    if (f?.type.startsWith('image/')) addImage(f)
+  }
+  const onDragOver = (e) => {
+    if (hasDragImage(e.dataTransfer) || e.dataTransfer.types.includes('Files')) {
+      e.preventDefault()
+      if (images.length < MAX_IMAGES) setDragOver(true)
+    }
+  }
   const removeImage = (id) => onChange(images.filter(im => im.id !== id))
   const updateImage = (id, patch) => onChange(images.map(im => im.id === id ? { ...im, ...patch } : im))
 
   const takeAudio = (file) => { setAudioError(''); loadAudio(file, (obj) => { onAudioChange(obj) }, setAudioError) }
   const onAudioFileChange = (e) => { takeAudio(e.target.files[0]); e.target.value = '' }
-  const onAudioDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('audio/')) takeAudio(f) }
+  const onAudioDrop = (e) => { e.preventDefault(); e.stopPropagation(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('audio/')) takeAudio(f) }
 
   const warnings = refWarnings(images)
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div
+      style={{ marginBottom: 16, borderRadius: 10, outline: dragOver ? '2px dashed #7c6af7' : '2px dashed transparent', outlineOffset: 4, transition: 'outline-color 0.15s' }}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+    >
       <label style={lbl}>
-        Reference Images <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(up to {MAX_IMAGES} — each with a role and preservation strength)</span>
+        Reference Images <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(up to {MAX_IMAGES} — each with a role and preservation strength{images.length < MAX_IMAGES ? '; drag from history to add' : ''})</span>
       </label>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -126,7 +158,6 @@ export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange
         {images.length < MAX_IMAGES && (
           <div
             onClick={() => fileInputRef.current?.click()}
-            onDrop={onDrop} onDragOver={e => e.preventDefault()}
             style={{ padding: '16px', borderRadius: 8, border: '1px dashed #2e2e44', background: '#0e0e1c', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = '#5a4fcf'; e.currentTarget.style.background = '#12122a' }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = '#2e2e44'; e.currentTarget.style.background = '#0e0e1c' }}
