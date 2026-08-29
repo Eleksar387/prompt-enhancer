@@ -43,16 +43,22 @@ export default function AdaptPanel({
 
   const effectiveAdaptModel = models.length ? adaptModel : adaptModelManual.trim()
   const hasOriginal = !!(originalPrompt && originalPrompt.trim())
+  const hasCaption = !!(caption && caption.trim())
 
-  const notReady = captioning || !caption
+  const notReady = captioning
+  // With no image description, the original prompt is the source and is always included.
+  const useOriginal = hasCaption ? includeOriginal : true
 
   const runAdapt = async () => {
     if (notReady) return
+    if (!hasCaption && !hasOriginal && !(scene && scene.trim())) {
+      setResult({ text: '', usage: null, loading: false, error: 'Nothing to adapt from — this entry has no prompt, scene, or image description.' }); return
+    }
     if (!effectiveAdaptModel) { setResult({ text: '', usage: null, loading: false, error: 'Pick a model.' }); return }
     setResult({ text: '', usage: null, loading: true, error: '' })
     setCopied(false)
     try {
-      const foldedCaption = foldCaption(caption, sourceFrameMode, { hasDialogue: !!(dialogue && dialogue.trim()) })
+      const foldedCaption = hasCaption ? foldCaption(caption, sourceFrameMode, { hasDialogue: !!(dialogue && dialogue.trim()) }) : ''
       const stylePart = buildStylePart({
         style, creativity, targetType: dest.type, showDialogue: dest.show.dialogue,
         dialogue, delivery, negative, forceNonImageWording: true,
@@ -63,9 +69,10 @@ export default function AdaptPanel({
         : null
       const userText = buildAdaptUserText({
         destTarget, scene, foldedCaption,
+        sourceLabel: TARGETS[sourceTarget]?.label || sourceTarget,
         duration: adaptDuration, aspectRatio, stylePart, lengthPart,
         audio: destTarget === 'minimax_h3' ? { soundscape, music } : null,
-        originalPrompt: includeOriginal ? originalPrompt : '',
+        originalPrompt: useOriginal ? originalPrompt : '',
       })
       const system = systemPromptFor(dest, 'single')
       const { text, usage } = await callOllama(effectiveAdaptModel, userText, system, cfg, cfg.temperature ?? 0.7)
@@ -98,7 +105,7 @@ export default function AdaptPanel({
           style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#777', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px' }}
         >
           <span style={{ fontSize: 13, transition: 'transform 0.2s', display: 'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
-          ⇄ Adapt to text-only prompt
+          ⇄ Adapt for another model
           {fromHistory && (
             <span style={sub}> · from {TARGETS[sourceTarget]?.label || sourceTarget}{sourceTs ? ` · ${new Date(sourceTs).toLocaleDateString()}` : ''}</span>
           )}
@@ -111,8 +118,9 @@ export default function AdaptPanel({
       {open && (
         <div style={{ marginTop: 12, background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '16px 18px' }}>
           <p style={{ fontSize: 11.5, color: '#666', margin: '0 0 14px', lineHeight: 1.5 }}>
-            Rewrites this generation as a self-contained text prompt for another model — the reference/frame
-            image descriptions get folded into the wording, so no image is needed.
+            {hasCaption
+              ? 'Rewrites this generation as a self-contained text prompt for another model — the reference/frame image descriptions get folded into the wording, so no image is needed.'
+              : 'Re-expresses this prompt in another model’s format and conventions (e.g. a text-to-video prompt → a text-to-image prompt), keeping its content and intent.'}
           </p>
 
           <label style={lbl}>Destination model / target</label>
@@ -154,7 +162,7 @@ export default function AdaptPanel({
             </>
           )}
 
-          {hasOriginal && (
+          {hasOriginal && hasCaption && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#9aa6c0', marginBottom: 14, cursor: 'pointer' }}>
               <input type="checkbox" checked={includeOriginal} onChange={e => setIncludeOriginal(e.target.checked)} />
               Give the AI the original prompt too, as a detail / intent reference

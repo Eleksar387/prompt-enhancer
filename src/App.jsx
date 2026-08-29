@@ -611,6 +611,7 @@ export default function App() {
       originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
     }
     if (h.caption) { setAdaptSourceOverride({ ...base, caption: h.caption }); return }
+    if (!entryHasStoredImages(h)) { setAdaptSourceOverride({ ...base, caption: '' }); return }
     if (!effectiveVision) {
       setGlobalError('Adapting an older generation needs a Vision model to re-read its images — pick one in the Vision model dropdown.')
       return
@@ -1297,7 +1298,7 @@ export default function App() {
       )}
       </>)}
 
-      {(caption || adaptSourceOverride) && (
+      {(caption || adaptSourceOverride || results.some(r => r.text)) && (
         <AdaptPanel
           key={adaptSourceOverride?.ts || 'live'}
           caption={adaptSourceOverride ? (adaptSourceOverride.caption || '') : caption}
@@ -1434,10 +1435,10 @@ export default function App() {
                     <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {entryProjectSelect(h)}
-                      {(h.caption || entryHasStoredImages(h)) && (
+                      {h.outputs?.length > 0 && (
                         <button
                           onClick={() => startAdapt(h)}
-                          title="Rewrite this generation as a text-only prompt for another model"
+                          title="Rewrite this generation's prompt for another model"
                           style={{ fontSize: 11, color: '#c4b8ff', background: 'none', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
                         >⇄ Adapt</button>
                       )}

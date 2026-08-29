@@ -94,36 +94,43 @@ const VISUAL_BLOCK_VIDEO = 'Visual details to incorporate (from a reference imag
 const VISUAL_BLOCK_H3 = 'Visual details to incorporate (these came from reference image(s) used in an earlier generation; there is NO reference image this time — describe them fresh as part of the prompt, never call them a "frame" or "reference"):'
 
 // The writer user message for an adapt run. Mirrors the matching text-only branch
-// of runWriter(), with the frame/ref block swapped for the folded-caption block.
+// of runWriter(). If a folded caption is given (image-based source) it goes in as
+// "visual details to incorporate"; if not (text-only source), the original prompt
+// itself becomes the source to re-express for the new target.
 export function buildAdaptUserText({
-  destTarget, scene = '', foldedCaption = '',
+  destTarget, scene = '', foldedCaption = '', sourceLabel = '',
   duration = '', aspectRatio = null, stylePart = '', lengthPart = '',
   audio = null, originalPrompt = '',
 }) {
   const dest = TARGETS[destTarget]
-  const originalBlock = originalPrompt && originalPrompt.trim()
-    ? `\n\nFor reference only — the prompt produced for the original image-based generation. Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:\n${originalPrompt.trim()}`
-    : ''
+  const hasCap = !!(foldedCaption && foldedCaption.trim())
+  const op = (originalPrompt || '').trim()
+  const from = sourceLabel || 'a different model'
+  const originalBlock = !op ? ''
+    : hasCap
+      ? `\n\nFor reference only — the prompt produced for the original generation (${from}). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:\n${op}`
+      : `\n\nSOURCE PROMPT — written for ${from}. Re-express its full content — subject, action, camera, mood, everything it establishes — as a prompt for THIS target, in THIS target's own format and conventions. Keep what it says; change only how it's said:\n${op}`
+  const material = hasCap ? 'the visual details below' : 'the source prompt below'
 
   if (destTarget === 'minimax_h3') {
     const ratioLine = aspectRatio
       ? `Aspect ratio: ${aspectRatio.label} (${aspectRatio.note})\n`
       : ''
-    const scenePart = `Scene / action:\n${sceneOr(scene, 'No scene description provided — propose ONE fitting cinematic moment that suits the visual details below.')}`
-    const visualPart = foldedCaption ? `\n\n${VISUAL_BLOCK_H3}\n${foldedCaption}` : ''
+    const scenePart = `Scene / action:\n${sceneOr(scene, `No separate scene note — draw the moment from ${material}.`)}`
+    const visualPart = hasCap ? `\n\n${VISUAL_BLOCK_H3}\n${foldedCaption}` : ''
     const audioPart = `\n\nAmbient / diegetic sound (overall_soundscape): ${(audio?.soundscape || '').trim() || 'not specified — invent restrained ambience that fits the scene.'}`
       + `\n\nAudience-only music (non_diegetic_music): ${(audio?.music || '').trim() || 'not specified — decide whether music serves this scene; if not, use N/A.'}`
     return `MODE: T2VA\n\n${ratioLine}Target duration: ${duration}\n\n${scenePart}${visualPart}${audioPart}${stylePart}${lengthPart}${originalBlock}`
   }
 
   if (dest.type === 'image') {
-    const scenePart = `Image description / subject:\n${sceneOr(scene, 'Base the image on the reference description below.')}`
-    const visualPart = foldedCaption ? `\n\nReference image description:\n${foldedCaption}` : ''
+    const scenePart = `Image description / subject:\n${sceneOr(scene, `Base the image on ${material}.`)}`
+    const visualPart = hasCap ? `\n\nReference image description:\n${foldedCaption}` : ''
     return `${scenePart}${visualPart}${stylePart}${lengthPart}${originalBlock}`
   }
 
   // ltx / ltx_guide / kling
-  const scenePart = `Basic scene description:\n${sceneOr(scene, 'No scene description provided — invent ONE fitting cinematic moment of motion that suits the visual details below.')}`
-  const visualPart = foldedCaption ? `\n\n${VISUAL_BLOCK_VIDEO}\n${foldedCaption}` : ''
+  const scenePart = `Basic scene description:\n${sceneOr(scene, `No separate scene note — draw the motion from ${material}.`)}`
+  const visualPart = hasCap ? `\n\n${VISUAL_BLOCK_VIDEO}\n${foldedCaption}` : ''
   return `Target duration: ${duration}\n\n${scenePart}${visualPart}${stylePart}${lengthPart}${originalBlock}`
 }
