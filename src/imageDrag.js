@@ -17,3 +17,9 @@ export const hasDragImage = (dt) => {
   if (!dt) return false
   try { return Array.from(dt.types || []).includes(DRAG_MIME) } catch { return false }
 }
+
+// DEV-only seam: the payload lives in module scope (base64 is too big for
+// dataTransfer), which a headless driver can't reach. Compiled out of prod.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.__peImageDrag = { setDragImage, peekDragImage, takeDragImage, hasDragImage, DRAG_MIME }
+}

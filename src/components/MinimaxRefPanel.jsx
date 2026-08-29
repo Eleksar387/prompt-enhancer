@@ -97,7 +97,7 @@ export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange
     if (f?.type.startsWith('image/')) addImage(f)
   }
   const onDragOver = (e) => {
-    if (hasDragImage(e.dataTransfer) || e.dataTransfer.types.includes('Files')) {
+    if (hasDragImage(e.dataTransfer) || Array.from(e.dataTransfer.types || []).includes('Files')) {
       e.preventDefault()
       if (images.length < MAX_IMAGES) setDragOver(true)
     }
