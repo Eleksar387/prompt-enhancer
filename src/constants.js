@@ -855,12 +855,18 @@ export const MINIMAX_H3_DURATIONS = [
 ]
 
 export const MINIMAX_H3_REF_ROLES = [
-  { id: 'subject_identity', label: 'Subject / Identity',   hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)' },
-  { id: 'wardrobe',         label: 'Wardrobe / Clothing',  hint: 'Outfit design, fabric, and color to apply to the subject — may be worn by a different person in this photo; that person\'s identity is not carried over' },
-  { id: 'product_object',   label: 'Product / Object',     hint: 'Geometry, material, labels, logo placement' },
-  { id: 'environment',      label: 'Environment',          hint: 'Location, set, background' },
-  { id: 'style',            label: 'Style',                 hint: 'Palette, lighting, medium/aesthetic' },
-  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Framing or storyboard reference' },
+  { id: 'subject_identity', label: 'Subject / Identity',   hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)',
+    visionFocus: 'This is a SUBJECT / IDENTITY reference — prioritise face, hair, age, build, skin tone, and any distinguishing marks. Mention wardrobe only in passing.' },
+  { id: 'wardrobe',         label: 'Wardrobe / Clothing',  hint: 'Outfit design, fabric, and color to apply to the subject — may be worn by a different person in this photo; that person\'s identity is not carried over',
+    visionFocus: 'This is a WARDROBE reference — describe ONLY the garments: cut, silhouette, fabric, colour, pattern, fastenings, and fit. Do not describe the wearer\'s face or body.' },
+  { id: 'product_object',   label: 'Product / Object',     hint: 'Geometry, material, labels, logo placement',
+    visionFocus: 'This is a PRODUCT / OBJECT reference — describe geometry, proportions, materials, finish, and every visible label or logo verbatim in quotation marks.' },
+  { id: 'environment',      label: 'Environment',          hint: 'Location, set, background',
+    visionFocus: 'This is an ENVIRONMENT reference — describe the location, layout, key surfaces and props, and the quality and direction of light in the space. Skip any people.' },
+  { id: 'style',            label: 'Style',                 hint: 'Palette, lighting, medium/aesthetic',
+    visionFocus: 'This is a STYLE reference — describe palette, contrast, light quality, medium/finish, grain, and overall aesthetic. Do not fixate on the literal subject.' },
+  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Framing or storyboard reference',
+    visionFocus: 'This is a POSE / COMPOSITION reference — describe framing, shot size, camera height/angle, subject placement in frame, and body pose. Not identity or colour.' },
 ]
 
 export const MINIMAX_H3_PRESERVE_OPTIONS = [
@@ -871,12 +877,10 @@ export const MINIMAX_H3_PRESERVE_OPTIONS = [
 ]
 
 export const VISION_PROMPT_MINIMAX_H3_REF = `You are a vision model describing a reference image for a downstream MiniMax H3 video-prompt writer.
-This image will be used to guide ONE aspect of a generated video (its exact role is decided separately) — describe it
-precisely and completely so any of these uses is possible: subject identity (face, hair, build, wardrobe details),
-product/object geometry, materials, and any visible labels or logos, environment/setting and its lighting, color
-palette and visual style/medium, pose and framing. Note exact visible on-image text in quotation marks. Be concrete
-and specific — 3 to 5 sentences. Do NOT speculate about motion, story, or what happens next.
-Output only the description, with no preamble or labels.`;
+This image guides ONE aspect of a generated video. Focus on the aspect named in the instruction that follows the
+image; describe it precisely and concretely. Still note any visible on-image text (verbatim, in quotation marks) and
+any obvious identity cues briefly, in case roles overlap. Be concrete and specific — 3 to 5 sentences. Do NOT
+speculate about motion, story, or what happens next. Output only the description, with no preamble or labels.`;
 
 export const SYSTEM_PROMPT_MINIMAX_H3 = `You are a specialist prompt compiler for MiniMax H3, a multimodal model that generates a short video with
 synchronized native stereo audio from text and, optionally, image references.
@@ -981,7 +985,8 @@ Replace N and S.SS as above. Then the same three fields. Prefer a single shot un
 explicitly calls for cuts. Describe a continuous physical path from the first frame to the last without
 contradicting either endpoint; do not restate their static contents.
 
-Ref2VA (one or more reference images given, each labeled "Image N — role: …, preservation marker: …: <caption>"):
+Ref2VA (one or more reference images given, each labeled "Image N — role: …, preservation marker: …: <caption>";
+optionally one "Audio 1 — voice-timbre reference (marker: reference): …" line):
 Output exactly these six sections, in order:
 subject_definitions:
 One line per reference image: <Subject N> is defined from its role and caption, e.g. "<Subject 1> is the [role]
@@ -990,6 +995,10 @@ wardrobe/clothing, scope <Subject N> to the garment(s) only — cut, fabric, col
 explicitly state that the face, body, and identity of whoever is wearing it in that reference photo are NOT
 carried over; only the clothing transfers onto the video's actual subject (defined by a separate subject-identity
 reference, or by the scene text if none is given).
+If an "Audio N" line is present, add one more line here: "<Audio 1> is the voice-timbre reference for <Subject k>"
+(pick the speaking subject k). State that only its timbre, pitch and delivery are referenced and none of its
+original wording is carried across. Do not otherwise describe the audio — the waveform bypasses the text encoder,
+so the label is only a pointer.
 
 summary:
 Begin with the task-type marker [reference generation]. One or two sentences describing what the target video
@@ -997,7 +1006,8 @@ shows, referencing the <Subject N> labels.
 
 retention_analysis:
 One line per <Subject N>, using EXACTLY the preservation marker given for that image (fully_preserved |
-partially_preserved | attribute_transfer | weak_reference) followed by a short reason.
+partially_preserved | attribute_transfer | weak_reference) followed by a short reason. If an <Audio N> label
+was defined, add one line for it using EXACTLY the marker "reference".
 
 detailed_description:
 Describe the target video in playback order (roughly 350–500 words unless a shorter prompt length was requested),

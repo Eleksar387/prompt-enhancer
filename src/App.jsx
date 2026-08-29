@@ -53,9 +53,12 @@ export default function App() {
   const [midImg, setMidImg]           = useState(null)
   const [lastImg, setLastImg]         = useState(null)
   const [refImages, setRefImages]     = useState([])
+  const [refAudio, setRefAudio]       = useState(null)
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
-  const [h3RatioId, setH3RatioId]     = useState('')
+  const [h3RatioId, setH3RatioId]     = useState(
+    TARGETS['minimax_h3'].defaultFrameMode === 'ref' ? 'port916' : ''
+  )
   const [cameraOpen, setCameraOpen]   = useState(false)
   const [flashId, setFlashId]         = useState(null)
   const [results, setResults]         = useState([])
@@ -233,9 +236,12 @@ export default function App() {
       ? h.refImages.filter(im => im && typeof im === 'object' && im.base64).map(im => ({
           id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
           previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
-          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong',
+          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong', note: im.note || '',
         }))
       : [])
+    setRefAudio(h.refAudio && typeof h.refAudio === 'object' && h.refAudio.base64
+      ? { base64: h.refAudio.base64, mediaType: h.refAudio.mediaType || 'audio/mpeg', fileName: h.refAudio.fileName }
+      : null)
     setResults([]); setCaption('')
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
@@ -300,34 +306,46 @@ export default function App() {
       ta.setSelectionRange(newCursor, newCursor)
     })
   }
-  const switchMode = (m) => { setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]) }
+  const switchMode = (m) => {
+    setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
+    if (target === 'minimax_h3' && m === 'ref') setH3RatioId(prev => prev || 'port916')
+  }
   const switchTarget = (id) => {
     const opts = TARGETS[id].durations || DURATION_OPTIONS
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
-    setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([])
-    setSoundscape(''); setMusic(''); setH3RatioId('')
-    setFrameMode(TARGETS[id].defaultFrameMode || 'single'); setResults([]); setCaption('')
+    setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
+    setSoundscape(''); setMusic('')
+    const nextMode = TARGETS[id].defaultFrameMode || 'single'
+    setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
+    setFrameMode(nextMode); setResults([]); setCaption('')
   }
 
   const captionImages = async () => {
     if (frameMode === 'ref') {
-      const roleLabel = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id
+      const role = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id) || MINIMAX_H3_REF_ROLES[0]
+      const roleLabel = (id) => role(id).label
       const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
       const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
       const captions = await Promise.all(refImages.map(async (im) => {
-        const cacheKey = `${im.id}::${effectiveVision}`
+        const cacheKey = `${im.id}::${im.role}::${effectiveVision}`
         const cached = refCaptionCacheRef.current.get(cacheKey)
         if (cached != null) return cached
         const { text } = await callOllama(effectiveVision, [
           { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-          { type: 'text', text: 'Describe this reference image as instructed.' },
+          { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
         ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3)
         refCaptionCacheRef.current.set(cacheKey, text)
         return text
       }))
-      return refImages.map((im, i) =>
-        `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
-      ).join('\n\n')
+      const imageBlock = refImages.map((im, i) => {
+        let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
+        if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
+        return line
+      }).join('\n\n')
+      if (refAudio) {
+        return `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
+      }
+      return imageBlock
     }
     let system, content
     if (t.type === 'image') {
@@ -372,11 +390,12 @@ export default function App() {
     if (!c) return null
     if (c.target !== target || c.frameMode !== frameMode) return null
     if (c.firstImg !== firstImg || c.midImg !== midImg || c.lastImg !== lastImg || c.refImages !== refImages) return null
+    if (c.refAudio !== refAudio) return null
     if (t.type === 'image' && c.scene !== scene) return null
     return c.description
   }
   const setCachedCaption = (description) => {
-    visionCacheRef.current = { target, frameMode, scene, firstImg, midImg, lastImg, refImages, description }
+    visionCacheRef.current = { target, frameMode, scene, firstImg, midImg, lastImg, refImages, refAudio, description }
   }
 
   const enhance = async () => {
@@ -515,7 +534,10 @@ export default function App() {
       ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
       soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
       refImages: isH3 && frameMode === 'ref'
-        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve }))
+        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '' }))
+        : null,
+      refAudio: isH3 && frameMode === 'ref' && refAudio
+        ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
         : null,
     }
 
@@ -620,9 +642,19 @@ export default function App() {
       </label>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {t.resolutions.map(p => (
-          <button key={p.id} onClick={() => setH3RatioId(p.id)} title={p.note} style={btn(selectedRatio.id === p.id)}>{p.label}</button>
+          <button key={p.id} onClick={() => setH3RatioId(p.id)} title={p.note} style={btn(h3RatioId === p.id)}>{p.label}</button>
         ))}
       </div>
+      {frameMode === 'ref' && (
+        <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>
+          Ref2VA renders best at 9:16 portrait (the validated short-drama format).
+        </p>
+      )}
+      {!h3RatioId && (
+        <p style={{ fontSize: 11, color: '#f0b070', margin: '4px 0 0', lineHeight: 1.5 }}>
+          No ratio picked — defaulting to {selectedRatio.label}.
+        </p>
+      )}
     </div>
   ) : null
 
@@ -896,7 +928,7 @@ export default function App() {
       ) : frameMode === 'ref' ? (
         <>
           {ratioPicker}
-          <MinimaxRefPanel images={refImages} onChange={setRefImages} />
+          <MinimaxRefPanel images={refImages} onChange={setRefImages} audio={refAudio} onAudioChange={setRefAudio} />
         </>
       ) : frameMode === 'firstmidlast' ? (
         <>

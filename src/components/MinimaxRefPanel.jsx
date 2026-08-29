@@ -1,12 +1,14 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
 
 const MAX_IMAGES = 6
 const MAX_DIM = 1536
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024
 
 const lbl = { fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }
 const miniSel = { background: '#12121f', border: '1px solid #2e2e44', borderRadius: 6, padding: '5px 8px', color: '#e0e0f0', fontSize: 12, outline: 'none', cursor: 'pointer' }
+const noteInput = { width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 6, padding: '6px 9px', color: '#e0e0f0', fontSize: 12, outline: 'none' }
 
 const loadFile = (file, onLoaded) => {
   if (!file) return
@@ -28,7 +30,7 @@ const loadFile = (file, onLoaded) => {
         id: generateId(),
         base64: dataUrl.split(',')[1], mediaType: 'image/jpeg',
         previewUrl: dataUrl, fileName: file.name,
-        role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong',
+        role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
       })
     }
     img.src = e.target.result
@@ -36,8 +38,36 @@ const loadFile = (file, onLoaded) => {
   reader.readAsDataURL(file)
 }
 
-export default function MinimaxRefPanel({ images, onChange }) {
+const loadAudio = (file, onLoaded, onError) => {
+  if (!file) return
+  if (file.size > MAX_AUDIO_BYTES) { onError?.('Audio file is over 10 MB — use a short (a few seconds) clip.'); return }
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const dataUrl = e.target.result
+    onLoaded({ base64: dataUrl.split(',')[1], mediaType: file.type || 'audio/mpeg', fileName: file.name })
+  }
+  reader.readAsDataURL(file)
+}
+
+function refWarnings(images) {
+  const out = []
+  const roles = images.map(im => im.role)
+  const hasWardrobe = roles.includes('wardrobe')
+  const identityCount = roles.filter(r => r === 'subject_identity').length
+  const exactCount = images.filter(im => im.preserve === 'exact').length
+  if (hasWardrobe && identityCount === 0)
+    out.push('No Subject / Identity reference — the person wearing this outfit will come from your scene text.')
+  if (identityCount >= 2)
+    out.push('Multiple identity references — H3 tends to blend faces. Use one per character and describe the others in the scene text.')
+  if (exactCount >= 2)
+    out.push("Several “Exact” locks — H3 satisfies them loosely when they compete. Reserve “Exact” for the one that matters most.")
+  return out
+}
+
+export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange }) {
   const fileInputRef = useRef(null)
+  const audioInputRef = useRef(null)
+  const [audioError, setAudioError] = useState('')
 
   const addImage = (file) => {
     if (!file || images.length >= MAX_IMAGES) return
@@ -47,6 +77,12 @@ export default function MinimaxRefPanel({ images, onChange }) {
   const onDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('image/')) addImage(f) }
   const removeImage = (id) => onChange(images.filter(im => im.id !== id))
   const updateImage = (id, patch) => onChange(images.map(im => im.id === id ? { ...im, ...patch } : im))
+
+  const takeAudio = (file) => { setAudioError(''); loadAudio(file, (obj) => { onAudioChange(obj) }, setAudioError) }
+  const onAudioFileChange = (e) => { takeAudio(e.target.files[0]); e.target.value = '' }
+  const onAudioDrop = (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('audio/')) takeAudio(f) }
+
+  const warnings = refWarnings(images)
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -76,6 +112,14 @@ export default function MinimaxRefPanel({ images, onChange }) {
                 </select>
               </div>
             </div>
+            <div style={{ marginTop: 10 }}>
+              <label style={{ fontSize: 10, color: '#666', display: 'block', marginBottom: 4 }}>Note <span style={{ color: '#555' }}>(optional)</span></label>
+              <input
+                style={noteInput} value={im.note || ''}
+                onChange={e => updateImage(im.id, { note: e.target.value })}
+                placeholder={'How to use this reference — e.g. "same coat, make it red" or "this is the antagonist"'}
+              />
+            </div>
           </div>
         ))}
 
@@ -93,7 +137,39 @@ export default function MinimaxRefPanel({ images, onChange }) {
         )}
       </div>
 
+      {warnings.length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {warnings.map((w, i) => (
+            <div key={i} style={{ fontSize: 11, color: '#f0b070', lineHeight: 1.5 }}>⚠ {w}</div>
+          ))}
+        </div>
+      )}
+
+      <label style={{ ...lbl, marginTop: 16 }}>
+        Voice-Timbre Reference <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — a few seconds of speech; guides mouth/breath rhythm, not the final audio)</span>
+      </label>
+      {audio ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: '#12121f', border: '1px solid #3a2f6e', borderRadius: 8 }}>
+          <span style={{ fontSize: 16 }}>🎙</span>
+          <div style={{ flex: 1, fontSize: 12, color: '#888' }}>Audio 1 · <span style={{ color: '#666' }}>{audio.fileName}</span></div>
+          <button onClick={() => { setAudioError(''); onAudioChange(null) }} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #3a2040', background: '#1e1020', color: '#f87171', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}>Remove</button>
+        </div>
+      ) : (
+        <div
+          onClick={() => audioInputRef.current?.click()}
+          onDrop={onAudioDrop} onDragOver={e => e.preventDefault()}
+          style={{ padding: '14px', borderRadius: 8, border: '1px dashed #2e2e44', background: '#0e0e1c', textAlign: 'center', cursor: 'pointer' }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = '#5a4fcf'; e.currentTarget.style.background = '#12122a' }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = '#2e2e44'; e.currentTarget.style.background = '#0e0e1c' }}
+        >
+          <div style={{ fontSize: 13, color: '#666' }}>+ Add voice reference</div>
+          <div style={{ fontSize: 11, color: '#444', marginTop: 3 }}>Click or drag & drop — MP3, WAV, M4A · ≤10 MB</div>
+        </div>
+      )}
+      {audioError && <div style={{ fontSize: 11, color: '#f87171', marginTop: 6, lineHeight: 1.5 }}>{audioError}</div>}
+
       <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileChange} style={{ display: 'none' }} />
+      <input ref={audioInputRef} type="file" accept="audio/*" onChange={onAudioFileChange} style={{ display: 'none' }} />
     </div>
   )
 }
