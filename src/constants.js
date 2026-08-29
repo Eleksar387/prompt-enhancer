@@ -903,16 +903,31 @@ GENERAL RULES
    trigger → action chain → reaction → ending state arc. Do not cram more beats than the duration can plausibly
    hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s. Give any multi-beat shot one primary change per
    beat with an observable end state — something a viewer could point at. Place the most important beat in the
-   middle of the timeline, not the very end — the final beat is the one most likely to get rushed or cut short.
-   Budget roughly 4 seconds for a complex beat (e.g. a prop hand-off). If the duration can't fit every planned
-   beat, drop or merge the least important one rather than compressing all of them.
+   middle of the timeline, not the very end. Leave the last ~1.5 seconds as a settle with no new beat and no
+   ending-state change — H3 commonly degrades into noise over the final 1.2–1.7s, so nothing that matters may land
+   there. Budget roughly 4 seconds for a complex beat (e.g. a prop hand-off). If the duration can't fit every
+   planned beat, drop or merge the least important one rather than compressing all of them.
+3a. EXPRESSION-BEAT DENSITY — the single highest-impact rule for performance. One shot holds at most TWO facial /
+   emotional beats before H3 collapses them toward an average and the face goes still, silently, with no error.
+   Before writing, count the expression beats in each shot: a brow move, an eye move, a lip move, a gaze shift, or
+   a held breath each count as one. If an emotional moment needs more than two, split it into separate
+   2–3-second shots, each carrying ONE primary expression change, and cut between them — the cut is itself
+   performance, because the viewer re-reads the character's state at every cut. Action beats (reaching, standing,
+   walking, turning a prop) and locomotion do NOT count toward this limit and are H3's most reliable register. A
+   character with no dialogue still performs — for them, favour large-body beats over face-only ones: a long
+   exhale with the shoulders dropping, a hand wiping on a thigh then gripping the back of the neck, the head
+   pulling back a few centimetres, the grip on a held object loosening.
 4. Camera: express movement as motion type + amplitude ("with small/large amplitude") + speed ("at slow/fast
    speed") in natural prose, using this vocabulary: Zoom In/Out, Push In/Pull Out, Pan Left/Right, Truck Left/Right,
    Tilt Up/Down, Pedestal Up/Down, Arc Shot, Tracking Shot, Static Shot, Shake Slightly/Strongly, POV, Roll
    Clockwise/Counterclockwise. One primary camera behavior per shot. Translate any requested camera moves into this
    vocabulary. Always specify a camera behavior explicitly — the model defaults to continuous drift and reframing
    when none is given. For a genuinely static shot, don't just say "Static Shot": say "the frame never moves" and
-   name the movements that should NOT happen (no pan, no push-in, no reframing).
+   name the movements that should NOT happen (no pan, no push-in, no reframing). Decide each shot's camera from
+   what its characters are looking at: if the thing a character looks at is not in frame, H3 makes them stare into
+   the lens. Do not fix that by adding a head-turn or "looks up at the camera" — that fights blocking the scene has
+   already fixed; instead place the camera in the direction the character is already looking, and state explicitly
+   that they do NOT look into the lens.
 5. Cuts only when they introduce new information (subject, space, state, viewpoint, time) — prefer camera movement
    over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, " followed by a cut phrase
    — vary it naturally rather than repeating the same wording every time (e.g. "the camera cuts to", "the shot
@@ -938,19 +953,68 @@ GENERAL RULES
    engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of these exact
    language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian] [Japanese]
    [Korean] [Portuguese] [Russian] [Spanish]. For a voiceover, write "says in an off-screen voiceover" and state
-   that the visible character's lips stay closed. At the moment ANY character's spoken dialogue ends (voiceover or
-   on-screen), describe their lips closing and speaking motion ceasing, so the mouth doesn't keep moving after the
-   audio stops. In a multi-shot clip, if dialogue is cut off by the end of the video, mark it with <cutoff>; if a
-   line continues uninterrupted across a shot cut, mark both connection points with <scenetrans>.
+   that the visible character's lips stay closed. H3 spreads mouth motion across the ENTIRE shot the speaker is in
+   and ignores any later "finishes speaking" timestamp — so a shot that carries a line must contain only that
+   delivery, running from the shot's start to its end. Do not timestamp a lip-closure or any post-speech beat (a
+   swallow, a blink, a glance away, a settle) inside the speaking shot; place those at the cut into the next shot,
+   or in the next shot itself. Only the final shot of the whole clip, if it carries the last line, gets a
+   lips-closing beat before its settle. A spoken line also pulls screen time toward its own shot and starves its
+   neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
+   detail that a later shot depends on; keep continuity-critical staging in silent shots. In a multi-shot clip, if
+   dialogue is cut off by the end of the video, mark it with <cutoff>; if a line continues uninterrupted across a
+   shot cut, mark both connection points with <scenetrans>.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
 8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
    music" notes if given. If that field is empty, judge from the scene whether music serves it — if not, or if the
    field says "none"/"silence"/no music, output exactly N/A.
-9. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
+9. EMOTION IS OBSERVABLE ACTION, NEVER A LABEL. Never pass an emotion word through to the output ("shocked",
+   "confused", "uneasy", "relieved", "conflicted", "tender"). Translate each into the muscle and body actions a
+   viewer could point at, ordered by physiology: brow first (smallest, earliest), then eyes, then mouth last
+   (delay the mouth 0.3–0.5s when the feeling is being held back). E.g. shock = the head draws back a few
+   centimetres, the upper eyelids open fully, a breath is drawn in and the shoulders stay raised; relief = the
+   shoulders drop once and the held breath goes out through the mouth; a genuine smile = the eyes narrow first,
+   the mouth corners follow. Give every emotional beat one visible breath; a held breath (shoulders up, everything
+   still) reads as tension better than any expression and is the one thing H3 renders reliably — it is just "hold
+   still". Write hands as action and contact only, never the detailed shape of the fingers (a high-risk region for
+   extra digits).
+10. EMOTIONAL TRANSITIONS MUST NOT PLAY OUT CONTINUOUSLY ON CAMERA. A sentence that gives the face a start state
+   and an end state ("the crease between her brows smooths out", "her smile fades") makes H3 crossfade between the
+   two and the face reads like rubber — the top cause of "the expression looks fake". Instead: (a) hide the change
+   behind an occluder — the eyes close and stay closed, the head tips forward, a hand passes across, or a cut —
+   and reveal the new state already fully set ("her eyes open onto a face that is already loose"); or (b) precede
+   a release with a brief opposite beat (tighten before it loosens; hold the tears back harder before they fall) —
+   an action renders more reliably than a state change. The trigger that motivates the turn must sit in the same
+   shot or the one immediately before it, with one beat left for the character to take it in. When you write "eyes
+   close", describe the closed shape ("each eye narrows to a single smooth curved line, no part of the eye
+   showing") rather than "the eyelids come down", which can land as half-closed.
+11. NEVER INSTRUCT THAT NOTHING CHANGES. Do not write that a character holds perfectly still, that nothing about
+   them moves, or that a feature stays exactly where it is across a span — a strong "do not move" instruction
+   bleeds across the whole shot and freezes motion that should happen. If the scene needs a held pause before a
+   reaction lands, end the shot on the last motion and let the cut carry the pause; timed stillness is the edit's
+   job, not the prompt's.
+12. SIZE AND DISTANCE ARE CROPPING RELATIONSHIPS, NOT NUMBERS. H3 ignores fractions of the frame ("two thirds as
+   tall as the frame" renders at ~45–52%) and absolute units ("a hand's width short of the base") alike. Say
+   instead which frame edges the subject crosses or is cut by ("its ears sit just under the top edge; the bottom
+   edge cuts across its belly so its base is out of shot"), and measure any gap against something visible in
+   frame ("a band of bare dry wood as wide as the figurine is tall, between the pool and its base"). Control a
+   secondary object's size by limiting how much of it enters frame, not by stating a size. In a portrait / 9:16
+   frame, a subject that must be fully in frame tops out around 50–60% of the frame height — to read larger it has
+   to be cropped, usually at the bottom. When physical scale matters, still give a comparison to a known object
+   and an absolute measurement, but only the cropping cue controls how big it looks.
+13. DON'T NAME WHAT SHOULDN'T APPEAR; DON'T STAGE COLLISIONS OR LIQUID VOLUME. H3 tends to render any object it is
+   given a name for — bound a shaped empty area by the frame edges rather than naming it, and avoid similes that
+   invoke drawable content ("the proportions of a phone screen", "like a tarot card"). H3 also cannot do
+   contact-driven causality or conserve a liquid's volume: a hand knocking a cup never makes contact, and a spill
+   grows without bound. Cut around it — sweep something across frame, cut, and open on the settled aftermath ("the
+   cup already lies on its side, the spill already spread and stopped"). If a spreading substance must be on
+   screen, bound it with an observable limit and avoid open-ended verbs ("spreading", "widening"). Never tie a
+   messy substance to a surface that must stay clean with a preposition (coffee "around" / "on" / "through" a
+   figurine) — state a gap between them and add that the clean surface is dry.
+14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
    decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
    plan, or ending condition.
-10. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences.
+15. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences.
 
 MODE-SPECIFIC OUTPUT
 
@@ -1094,7 +1158,7 @@ export const TARGETS = {
     subtitle: 'Text, first/last frame, or up to 6 role-tagged references → MiniMax H3 audio-video prompt',
     resolutions: MINIMAX_H3_RESOLUTIONS,
     durations: MINIMAX_H3_DURATIONS,
-    durationHint: 'MiniMax H3 requires an integer duration from 4–15s. 4–6s: one shot. 7–10s: one developed shot or 2–3 shots. 11–15s: 2–4 shots.',
+    durationHint: 'MiniMax H3 requires an integer duration from 4–15s. 4–6s: one shot. 7–10s: one developed shot or 2–3 shots. 11–15s: 2–4 shots. Split an emotional moment across 2–3s shots (one expression beat each) rather than holding it in one long take. Keep the last ~1.5s free of any key beat — H3 often degrades over the final 1.2–1.7s.',
     frameModeOptions: MINIMAX_H3_FRAME_MODE_OPTIONS,
     defaultFrameMode: 'ref',
     show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false },

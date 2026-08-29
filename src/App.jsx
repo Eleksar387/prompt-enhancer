@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import JSZip from 'jszip'
 import {
   TARGETS, DURATION_OPTIONS, OUTPUT_COUNT_OPTIONS, VARIANT_TEMPS, VARIANT_NUDGES,
@@ -14,6 +14,7 @@ import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage } from './c
 import {
   getAllHistory, addHistoryEntry, deleteHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
+  setHistoryEntryProject, loadProjects, saveProjects,
 } from './db'
 import { btn, selStyle, moveLabel, presetById, syllableBudget } from './utils'
 import ConfigBar from './components/ConfigBar'
@@ -26,6 +27,23 @@ const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   temp,
   nudge: VARIANT_NUDGES[i] || '',
 }))
+
+// History-filter helpers — pure, work on any saved entry shape (old or new).
+const entryTargetId = (h) => (h.type === 'scriptwriter' ? 'scriptwriter' : h.target)
+const entryTargetLabel = (id) => (id === 'scriptwriter' ? 'Scriptwriter' : TARGETS[id]?.label || id)
+const entryHasImages = (h) => !!(
+  h.firstImg || h.midImg || h.lastImg ||
+  (Array.isArray(h.refImages) && h.refImages.length) ||
+  h.vision
+)
+const modelProvider = (m) => {
+  const s = (m || '').toLowerCase()
+  if (!s) return '—'
+  if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
+  if (s.includes('grok')) return 'Grok'
+  return 'Ollama'
+}
+const modelFilterLabel = (m) => `${modelProvider(m)} · ${m}`
 
 export default function App() {
   const [cfg, setCfg]                 = useState(loadCfg)
@@ -68,6 +86,12 @@ export default function App() {
   const [copied, setCopied]           = useState(null)
   const [history, setHistory]         = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [projects, setProjects]       = useState(loadProjects)
+  const [activeProject, setActiveProject] = useState('')       // '' = save new generations unfiled
+  const [historyFilter, setHistoryFilter] = useState('all')    // 'all' | 'unfiled' | <project name>
+  const [histTargetFilter, setHistTargetFilter] = useState('all')  // 'all' | <target id> ('scriptwriter' for those)
+  const [histModelFilter, setHistModelFilter]   = useState('all')  // 'all' | <exact model string>
+  const [histImageFilter, setHistImageFilter]   = useState('all')  // 'all' | 'with' | 'without'
   const [adminMode, setAdminMode]     = useState(false)
   const [adminSystem, setAdminSystem] = useState(() => systemPromptFor(TARGETS['minimax_h3'], 'single'))
   const [adminSystemOpen, setAdminSystemOpen] = useState(false)
@@ -99,12 +123,64 @@ export default function App() {
     saveCfg(cfg)
   }, [cfg])
   useEffect(() => { saveComfyCfg(comfyCfg) }, [comfyCfg])
+  useEffect(() => { saveProjects(projects) }, [projects])
   useEffect(() => {
     migrateFromLocalStorage()
       .then(() => getAllHistory())
       .then(setHistory)
       .catch(() => {})
   }, [])
+
+  // Dropdowns and the history filter list every project that either has been
+  // created explicitly (persisted, may be empty) or is referenced by an entry.
+  const allProjects = useMemo(() => {
+    const s = new Set(projects)
+    for (const h of history) if (h.project) s.add(h.project)
+    return [...s].sort((a, b) => a.localeCompare(b))
+  }, [projects, history])
+
+  const ensureProject = useCallback((name) => {
+    const n = (name || '').trim()
+    if (!n) return
+    setProjects(prev => prev.includes(n) ? prev : [...prev, n].sort((a, b) => a.localeCompare(b)))
+  }, [])
+
+  const histTargets = useMemo(() => {
+    const s = new Set(history.map(entryTargetId).filter(Boolean))
+    return [...s].sort((a, b) => entryTargetLabel(a).localeCompare(entryTargetLabel(b)))
+  }, [history])
+  const histModels = useMemo(() => {
+    const s = new Set(history.map(h => h.model).filter(Boolean))
+    return [...s].sort((a, b) => modelFilterLabel(a).localeCompare(modelFilterLabel(b)))
+  }, [history])
+
+  const histFiltersActive = historyFilter !== 'all' || histTargetFilter !== 'all'
+    || histModelFilter !== 'all' || histImageFilter !== 'all'
+  const resetHistFilters = () => {
+    setHistoryFilter('all'); setHistTargetFilter('all'); setHistModelFilter('all'); setHistImageFilter('all')
+  }
+
+  const visibleHistory = useMemo(() => history.filter(h => {
+    if (historyFilter === 'unfiled' && h.project) return false
+    if (historyFilter !== 'all' && historyFilter !== 'unfiled' && h.project !== historyFilter) return false
+    if (histTargetFilter !== 'all' && entryTargetId(h) !== histTargetFilter) return false
+    if (histModelFilter !== 'all' && h.model !== histModelFilter) return false
+    if (histImageFilter === 'with' && !entryHasImages(h)) return false
+    if (histImageFilter === 'without' && entryHasImages(h)) return false
+    return true
+  }), [history, historyFilter, histTargetFilter, histModelFilter, histImageFilter])
+
+  const entryProjectSelect = (h) => (
+    <select
+      value={h.project || ''}
+      onChange={e => assignEntryProject(h.id, e.target.value)}
+      title="Assign this generation to a project"
+      style={{ fontSize: 10.5, color: h.project ? '#c4b8ff' : '#777', background: '#12121f', border: '1px solid #2d2060', borderRadius: 6, padding: '2px 6px', cursor: 'pointer', maxWidth: 150 }}>
+      <option value="">Unfiled</option>
+      {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
+      <option value="__new__">+ New project…</option>
+    </select>
+  )
 
   const reloadModels = async () => {
     setModelStatus({ loading: true, ok: false, error: '' })
@@ -124,17 +200,72 @@ export default function App() {
 
   const refreshHistory = useCallback(() => getAllHistory().then(setHistory).catch(() => {}), [])
 
+  // Kept in a ref so saveScriptHistory (a stable useCallback passed to the
+  // scriptwriter panel) always reads the current selection without churning.
+  const saveCtxRef = useRef({ activeProject: '', history: [] })
+  saveCtxRef.current = { activeProject, history }
+
   const saveHistory = (snap, outputs) => {
-    const entry = { ...snap, outputs, type: 'standard', id: generateId() }
+    const entry = { ...snap, outputs, type: 'standard', id: generateId(), project: activeProject || null }
     addHistoryEntry(entry).then(refreshHistory).catch(() => {})
   }
   const saveScriptHistory = useCallback((entry) => {
-    addHistoryEntry(entry).then(refreshHistory).catch(() => {})
+    const { activeProject: ap, history: hist } = saveCtxRef.current
+    // The scriptwriter re-saves the same id across its three phases — keep a
+    // project the user reassigned in the meantime rather than resetting it.
+    const existing = hist.find(h => h.id === entry.id)
+    const project = existing ? (existing.project ?? null) : (ap || null)
+    addHistoryEntry({ ...entry, project }).then(refreshHistory).catch(() => {})
   }, [refreshHistory])
 
   const clearHistory = () => { dbClearHistory().then(() => setHistory([])).catch(() => setHistory([])) }
   const removeHistoryEntry = (id) => {
     deleteHistoryEntry(id).then(() => setHistory(prev => prev.filter(h => h.id !== id))).catch(() => {})
+  }
+
+  // Reassign one history entry. value '' → unfiled; '__new__' → prompt for a name.
+  const assignEntryProject = async (id, value) => {
+    let project = value
+    if (value === '__new__') {
+      project = (window.prompt('New project name:') || '').trim()
+      if (!project) return
+    }
+    if (project) ensureProject(project)
+    await setHistoryEntryProject(id, project || null).catch(() => {})
+    refreshHistory()
+  }
+
+  const createProject = () => {
+    const n = (window.prompt('New project name:') || '').trim()
+    if (!n) return
+    ensureProject(n)
+    setActiveProject(n)
+  }
+  const renameProject = async (oldName) => {
+    const n = (window.prompt(`Rename project "${oldName}" to:`, oldName) || '').trim()
+    if (!n || n === oldName) return
+    for (const h of history.filter(x => x.project === oldName)) {
+      await setHistoryEntryProject(h.id, n).catch(() => {})
+    }
+    setProjects(prev => {
+      const next = prev.filter(p => p !== oldName)
+      if (!next.includes(n)) next.push(n)
+      return next.sort((a, b) => a.localeCompare(b))
+    })
+    setActiveProject(p => (p === oldName ? n : p))
+    setHistoryFilter(f => (f === oldName ? n : f))
+    refreshHistory()
+  }
+  const deleteProject = async (name) => {
+    const n = history.filter(x => x.project === name).length
+    if (!window.confirm(`Remove project "${name}"?${n ? ` Its ${n} generation${n > 1 ? 's' : ''} become Unfiled.` : ''}`)) return
+    for (const h of history.filter(x => x.project === name)) {
+      await setHistoryEntryProject(h.id, null).catch(() => {})
+    }
+    setProjects(prev => prev.filter(p => p !== name))
+    setActiveProject(p => (p === name ? '' : p))
+    setHistoryFilter(f => (f === name ? 'all' : f))
+    refreshHistory()
   }
 
   const exportHistory = () => {
@@ -150,7 +281,12 @@ export default function App() {
     try {
       const text = await file.text()
       const entries = JSON.parse(text)
-      for (const entry of entries) { await addHistoryEntry(entry) }
+      const names = new Set(projects)
+      for (const entry of entries) {
+        await addHistoryEntry(entry)
+        if (entry.project) names.add(entry.project)
+      }
+      setProjects([...names].sort((a, b) => a.localeCompare(b)))
       refreshHistory()
     } catch {}
   }
@@ -211,6 +347,8 @@ export default function App() {
   }
 
   const restore = (h) => {
+    // Continue working in the same project the restored generation belongs to.
+    if (h.project) { ensureProject(h.project); setActiveProject(h.project) }
     if (h.type === 'scriptwriter') {
       setTarget('scriptwriter')
       setScriptwriterInitial(h)
@@ -695,6 +833,29 @@ export default function App() {
         </div>
       </div>
 
+      {/* Project — tags each new generation so History can group them */}
+      <div style={{ marginBottom: 18 }}>
+        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Project <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>· new generations are saved here</span>
+        </label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={activeProject}
+            onChange={e => { e.target.value === '__new__' ? createProject() : setActiveProject(e.target.value) }}
+            style={{ ...selStyle, maxWidth: 260 }}>
+            <option value="">(No project)</option>
+            {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
+            <option value="__new__">+ New project…</option>
+          </select>
+          {activeProject && (
+            <>
+              <button onClick={() => renameProject(activeProject)} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Rename</button>
+              <button onClick={() => deleteProject(activeProject)} style={{ fontSize: 11, color: '#a06a6a', background: 'none', border: '1px solid #3a2040', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Delete</button>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Models */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <div style={{ flex: '1 1 240px' }}>
@@ -1068,10 +1229,10 @@ export default function App() {
           <button onClick={() => setHistoryOpen(v => !v)}
             style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#777', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
-            History {history.length > 0 ? `(${history.length})` : ''}
+            History {history.length > 0 ? `(${histFiltersActive ? `${visibleHistory.length}/${history.length}` : history.length})` : ''}
           </button>
           {historyOpen && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }}
                 onChange={e => { if (e.target.files[0]) importHistory(e.target.files[0]); e.target.value = '' }} />
               <button onClick={exportHistory} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Export ↓</button>
@@ -1080,12 +1241,55 @@ export default function App() {
             </div>
           )}
         </div>
+        {historyOpen && history.length > 1 && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+            {(() => {
+              const fsel = { fontSize: 11, color: '#c4b8ff', background: '#12121f', border: '1px solid #2d2060', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', maxWidth: 200 }
+              return <>
+                {(allProjects.length > 0 || history.some(h => !h.project)) && (
+                  <select value={historyFilter} onChange={e => setHistoryFilter(e.target.value)} style={fsel} title="Project">
+                    <option value="all">All projects</option>
+                    <option value="unfiled">Unfiled</option>
+                    {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                )}
+                {histTargets.length > 1 && (
+                  <select value={histTargetFilter} onChange={e => setHistTargetFilter(e.target.value)} style={fsel} title="Generated for">
+                    <option value="all">All targets</option>
+                    {histTargets.map(id => <option key={id} value={id}>{entryTargetLabel(id)}</option>)}
+                  </select>
+                )}
+                {histModels.length > 1 && (
+                  <select value={histModelFilter} onChange={e => setHistModelFilter(e.target.value)} style={fsel} title="Writer model">
+                    <option value="all">All models</option>
+                    {histModels.map(m => <option key={m} value={m}>{modelFilterLabel(m)}</option>)}
+                  </select>
+                )}
+                {history.some(entryHasImages) && history.some(h => !entryHasImages(h)) && (
+                  <select value={histImageFilter} onChange={e => setHistImageFilter(e.target.value)} style={fsel} title="Image inputs">
+                    <option value="all">Any input</option>
+                    <option value="with">With images</option>
+                    <option value="without">Without images</option>
+                  </select>
+                )}
+                {histFiltersActive && (
+                  <button onClick={resetHistFilters} style={{ fontSize: 11, color: '#888', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>Reset</button>
+                )}
+              </>
+            })()}
+          </div>
+        )}
         {historyOpen && history.length === 0 && (
           <div style={{ fontSize: 12, color: '#555', padding: '8px 0' }}>No history yet.</div>
         )}
-        {historyOpen && history.length > 0 && (
+        {historyOpen && history.length > 0 && visibleHistory.length === 0 && (
+          <div style={{ fontSize: 12, color: '#555', padding: '8px 0' }}>
+            No generations match these filters.
+          </div>
+        )}
+        {historyOpen && visibleHistory.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {history.map((h, i) => {
+            {visibleHistory.map((h, i) => {
               if (h.type === 'scriptwriter') {
                 const ideaShort = h.idea && h.idea.length > 80 ? h.idea.slice(0, 80) + '…' : (h.idea || '')
                 const phaseLabel = h.phase === 'done' ? 'Done' : h.phase === 'dircut' ? "Director's cut" : 'Script'
@@ -1093,7 +1297,8 @@ export default function App() {
                   <div key={i} style={{ background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '12px 14px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
                       <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {entryProjectSelect(h)}
                         <button onClick={() => restore(h)} style={{ fontSize: 11, color: '#c4b8ff', background: '#1e1850', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore</button>
                         <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                       </div>
@@ -1132,7 +1337,8 @@ export default function App() {
                 <div key={i} style={{ background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '12px 14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
                     <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {entryProjectSelect(h)}
                       <button onClick={() => restore(h)} style={{ fontSize: 11, color: '#c4b8ff', background: '#1e1850', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore settings</button>
                       <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                     </div>
