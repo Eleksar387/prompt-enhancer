@@ -37,7 +37,8 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
   const [open, setOpen] = useState(false)
   const images = useMemo(() => collectImages(history), [history])
 
-  if (images.length === 0) return null
+  // Nothing to reuse and no history at all — stay out of the way entirely.
+  if (images.length === 0 && (history || []).length === 0) return null
 
   const onDragStart = (e, img) => {
     setDragImage({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName })
@@ -60,6 +61,13 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
 
       {open && (
         <div style={{ marginTop: 10, background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '12px 14px' }}>
+          {images.length === 0 ? (
+            <p style={{ fontSize: 11.5, color: '#777', margin: 0, lineHeight: 1.6 }}>
+              No reusable images yet. An image is saved here once you run a generation with one loaded
+              (use the <strong style={{ color: '#9a8fd8' }}>+ Add reference image</strong> box below to load one now).
+              History entries from older versions saved only the filename, not the image itself.
+            </p>
+          ) : (<>
           <p style={{ fontSize: 11, color: '#666', margin: '0 0 10px', lineHeight: 1.5 }}>
             Every image used in a past generation. Drag one onto an image slot below{onPick ? ', or click it' : ''}
             {pickHint ? ` — ${pickHint}` : ''}.
@@ -92,6 +100,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
               </div>
             ))}
           </div>
+          </>)}
         </div>
       )}
     </div>
