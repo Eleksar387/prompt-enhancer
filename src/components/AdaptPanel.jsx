@@ -12,13 +12,13 @@ const sub = { color: '#555', textTransform: 'none', letterSpacing: 0 }
 const durationsFor = (id) => TARGETS[id].durations || DURATION_OPTIONS
 
 export default function AdaptPanel({
-  caption, scene, sourceFrameMode, sourceTarget, originalPrompt, fromHistory, sourceTs,
+  caption, captioning = false, scene, sourceFrameMode, sourceTarget, originalPrompt, fromHistory, sourceTs,
   models, defaultModel, cfg,
   style, creativity, negative, dialogue, delivery, promptLength, soundscape, music,
   duration, h3RatioId,
   onSaveAdapt, onClose,
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(fromHistory)
   const [destTarget, setDestTarget] = useState(
     ADAPT_TARGETS.some(t => t.id === sourceTarget) ? sourceTarget : 'ltx'
   )
@@ -44,7 +44,10 @@ export default function AdaptPanel({
   const effectiveAdaptModel = models.length ? adaptModel : adaptModelManual.trim()
   const hasOriginal = !!(originalPrompt && originalPrompt.trim())
 
+  const notReady = captioning || !caption
+
   const runAdapt = async () => {
+    if (notReady) return
     if (!effectiveAdaptModel) { setResult({ text: '', usage: null, loading: false, error: 'Pick a model.' }); return }
     setResult({ text: '', usage: null, loading: true, error: '' })
     setCopied(false)
@@ -158,10 +161,14 @@ export default function AdaptPanel({
             </label>
           )}
 
+          {captioning && (
+            <div style={{ fontSize: 12, color: '#9aa6c0', marginBottom: 10 }}>👁 Reading the images from the original generation…</div>
+          )}
+
           <button
             onClick={runAdapt}
-            disabled={result?.loading}
-            style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: result?.loading ? '#2a2a3f' : 'linear-gradient(135deg, #5a4fcf, #8b5cf6)', color: result?.loading ? '#555' : '#fff', fontSize: 13, fontWeight: 600, cursor: result?.loading ? 'not-allowed' : 'pointer' }}
+            disabled={result?.loading || notReady}
+            style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: (result?.loading || notReady) ? '#2a2a3f' : 'linear-gradient(135deg, #5a4fcf, #8b5cf6)', color: (result?.loading || notReady) ? '#555' : '#fff', fontSize: 13, fontWeight: 600, cursor: (result?.loading || notReady) ? 'not-allowed' : 'pointer' }}
           >
             {result?.loading ? '✦ Adapting…' : result?.text ? '✦ Regenerate' : '✦ Adapt prompt'}
           </button>

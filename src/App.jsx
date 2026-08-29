@@ -499,8 +499,8 @@ export default function App() {
   // Every vision-model call funnels through here: content-addressed cache
   // (L1 in-memory Map -> L2 IndexedDB), so an image whose bytes + model +
   // prompt are all unchanged is never re-described, even across reloads.
-  const cachedVision = async (content, system, stats) => {
-    const key = visionCacheKey(effectiveVision, system, content)
+  const cachedVision = async (content, system, stats, model = effectiveVision) => {
+    const key = visionCacheKey(model, system, content)
     const mem = captionMemRef.current.get(key)
     if (mem != null) { stats.fromCache++; console.debug('[vision-cache] hit (mem)'); return mem }
     let persisted = null
@@ -511,7 +511,7 @@ export default function App() {
       console.debug('[vision-cache] hit (idb)')
       return persisted
     }
-    const { text } = await callOllama(effectiveVision, content, system, cfg, 0.3)
+    const { text } = await callOllama(model, content, system, cfg, 0.3)
     captionMemRef.current.set(key, text)
     putCaption(key, text).catch(() => {})
     stats.fresh++
@@ -519,63 +519,104 @@ export default function App() {
     return text
   }
 
-  const captionImages = async () => {
+  // src overrides the live workspace state — passed by captionForEntry(h) to
+  // re-describe a stored history entry's images without touching the workspace.
+  const captionImages = async (src = null) => {
+    const s = src || {
+      frameMode, refImages, firstImg, midImg, lastImg, refAudio, scene,
+      targetType: t.type, visionPromptSingle: t.visionPrompt, visionModel: effectiveVision,
+    }
+    const model = s.visionModel || effectiveVision
     const stats = { fromCache: 0, fresh: 0 }
-    if (frameMode === 'ref') {
+    if (s.frameMode === 'ref') {
       const role = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id) || MINIMAX_H3_REF_ROLES[0]
       const roleLabel = (id) => role(id).label
       const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
       const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
-      const captions = await Promise.all(refImages.map((im) => cachedVision([
+      const captions = await Promise.all((s.refImages || []).map((im) => cachedVision([
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
         { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
-      ], VISION_PROMPT_MINIMAX_H3_REF, stats)))
-      const imageBlock = refImages.map((im, i) => {
+      ], VISION_PROMPT_MINIMAX_H3_REF, stats, model)))
+      const imageBlock = (s.refImages || []).map((im, i) => {
         let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
         return line
       }).join('\n\n')
-      const text = refAudio
-        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
+      const text = s.refAudio
+        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${s.refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
         : imageBlock
       return { text, stats }
     }
     let system, content
-    if (t.type === 'image') {
-      system = t.visionPrompt
+    const sceneT = (s.scene || '').trim()
+    if (s.targetType === 'image') {
+      system = s.visionPromptSingle
       content = [
-        { type: 'image', source: { type: 'base64', media_type: firstImg.mediaType, data: firstImg.base64 } },
-        { type: 'text', text: scene.trim() ? `The user's intended subject/scene: ${scene.trim()}\nDescribe the reference image in precise, prompt-ready language.` : 'Describe this reference image in precise, prompt-ready language.' },
+        { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
+        { type: 'text', text: sceneT ? `The user's intended subject/scene: ${sceneT}\nDescribe the reference image in precise, prompt-ready language.` : 'Describe this reference image in precise, prompt-ready language.' },
       ]
-    } else if (frameMode === 'firstmidlast') {
+    } else if (s.frameMode === 'firstmidlast') {
       system = VISION_PROMPT_LTX_FIRSTMIDLAST
       content = [
         { type: 'text', text: 'FIRST FRAME (clip starts here):' },
-        { type: 'image', source: { type: 'base64', media_type: firstImg.mediaType, data: firstImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
         { type: 'text', text: 'MID FRAME (clip passes through here):' },
-        { type: 'image', source: { type: 'base64', media_type: midImg.mediaType, data: midImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.midImg.mediaType, data: s.midImg.base64 } },
         { type: 'text', text: 'LAST FRAME (clip ends here):' },
-        { type: 'image', source: { type: 'base64', media_type: lastImg.mediaType, data: lastImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.lastImg.mediaType, data: s.lastImg.base64 } },
         { type: 'text', text: 'Describe all three frames and the changes, as instructed.' },
       ]
-    } else if (frameMode === 'firstlast') {
+    } else if (s.frameMode === 'firstlast') {
       system = VISION_PROMPT_LTX_FIRSTLAST
       content = [
         { type: 'text', text: 'FIRST FRAME (clip starts here):' },
-        { type: 'image', source: { type: 'base64', media_type: firstImg.mediaType, data: firstImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
         { type: 'text', text: 'LAST FRAME (clip ends here):' },
-        { type: 'image', source: { type: 'base64', media_type: lastImg.mediaType, data: lastImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.lastImg.mediaType, data: s.lastImg.base64 } },
         { type: 'text', text: 'Describe both frames and the change, as instructed.' },
       ]
     } else {
-      system = t.visionPrompt || VISION_PROMPT_LTX_SINGLE
+      system = s.visionPromptSingle || VISION_PROMPT_LTX_SINGLE
       content = [
-        { type: 'image', source: { type: 'base64', media_type: firstImg.mediaType, data: firstImg.base64 } },
+        { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
         { type: 'text', text: 'Describe this first frame as instructed.' },
       ]
     }
-    const text = await cachedVision(content, system, stats)
+    const text = await cachedVision(content, system, stats, model)
     return { text, stats }
+  }
+
+  // Re-run the vision step for a stored history entry (uses the caption cache;
+  // for entries generated since the cache landed this is usually a free hit).
+  const captionForEntry = (h) => captionImages({
+    frameMode: h.frameMode,
+    refImages: Array.isArray(h.refImages) ? h.refImages : null,
+    firstImg: h.firstImg, midImg: h.midImg, lastImg: h.lastImg, refAudio: h.refAudio,
+    scene: h.scene || '',
+    targetType: TARGETS[h.target]?.type,
+    visionPromptSingle: TARGETS[h.target]?.visionPrompt,
+    visionModel: h.vision || effectiveVision,
+  })
+
+  const entryHasStoredImages = (h) =>
+    (Array.isArray(h.refImages) && h.refImages.some(im => im && im.base64)) ||
+    [h.firstImg, h.midImg, h.lastImg].some(im => im && typeof im === 'object' && im.base64)
+
+  const startAdapt = async (h) => {
+    setHistoryOpen(false)
+    const base = {
+      scene: h.scene || '', frameMode: h.frameMode, sourceTarget: h.target,
+      originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
+    }
+    if (h.caption) { setAdaptSourceOverride({ ...base, caption: h.caption }); return }
+    setAdaptSourceOverride({ ...base, caption: '', captioning: true })
+    try {
+      const { text } = await captionForEntry(h)
+      setAdaptSourceOverride(prev => (prev && prev.ts === h.ts ? { ...base, caption: text } : prev))
+    } catch (e) {
+      setGlobalError(`Couldn't read the images from that generation (${h.vision || effectiveVision}): ${e.message}`)
+      setAdaptSourceOverride(prev => (prev && prev.ts === h.ts ? null : prev))
+    }
   }
 
   const enhance = async () => {
@@ -1253,7 +1294,8 @@ export default function App() {
       {(caption || adaptSourceOverride) && (
         <AdaptPanel
           key={adaptSourceOverride?.ts || 'live'}
-          caption={adaptSourceOverride?.caption ?? caption}
+          caption={adaptSourceOverride ? (adaptSourceOverride.caption || '') : caption}
+          captioning={!!adaptSourceOverride?.captioning}
           scene={adaptSourceOverride?.scene ?? scene}
           sourceFrameMode={adaptSourceOverride?.frameMode ?? frameMode}
           sourceTarget={adaptSourceOverride?.sourceTarget ?? target}
@@ -1386,15 +1428,10 @@ export default function App() {
                     <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {entryProjectSelect(h)}
-                      {h.caption && (
+                      {(h.caption || entryHasStoredImages(h)) && (
                         <button
-                          onClick={() => {
-                            setAdaptSourceOverride({
-                              caption: h.caption, scene: h.scene || '', frameMode: h.frameMode,
-                              sourceTarget: h.target, originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
-                            })
-                            setHistoryOpen(false)
-                          }}
+                          onClick={() => startAdapt(h)}
+                          title="Rewrite this generation as a text-only prompt for another model"
                           style={{ fontSize: 11, color: '#c4b8ff', background: 'none', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
                         >⇄ Adapt</button>
                       )}
