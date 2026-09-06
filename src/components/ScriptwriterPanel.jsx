@@ -3,7 +3,7 @@ import { callOllama } from '../api'
 import {
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, buildLtxGuideSystemPrompt,
   SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
-  VISION_PROMPT_SCRIPTWRITER,
+  SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash } from '../utils'
 import { generateId } from '../db'
@@ -53,11 +53,13 @@ const ghostBtn = {
 const FRAME_TARGETS = [
   { id: 'flux',       label: 'Flux.dev' },
   { id: 'flux2klein', label: 'Klein'    },
+  { id: 'zimage',     label: 'Z-Image Turbo' },
   { id: 'sdxl',       label: 'SDXL'    },
 ]
 const FRAME_SYSTEM = {
   flux: SYSTEM_PROMPT_FLUX,
   flux2klein: SYSTEM_PROMPT_FLUX2_KLEIN,
+  zimage: SYSTEM_PROMPT_Z_IMAGE_TURBO,
   sdxl: SYSTEM_PROMPT_SDXL,
 }
 const SHOT_SYSTEM_PROMPT = buildLtxGuideSystemPrompt('single')
@@ -807,9 +809,11 @@ export default function ScriptwriterPanel({
                           ))}
                           <button onClick={() => generateFramePrompt(si, fk)} disabled={fp.loading}
                             style={{
-                              marginLeft: 'auto', padding: '4px 12px', borderRadius: 6, border: 'none',
-                              background: fp.loading ? 'var(--pe-line)' : 'var(--pe-accent)',
-                              color: fp.loading ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 13,
+                              marginLeft: 'auto', padding: '4px 12px', borderRadius: 6,
+                              border: `1px solid ${fp.loading ? 'var(--pe-line)' : 'var(--pe-accent-line)'}`,
+                              background: fp.loading ? 'var(--pe-line-soft)' : 'var(--pe-accent-bg)',
+                              color: fp.loading ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)',
+                              fontSize: 13, fontWeight: 600,
                               cursor: fp.loading ? 'not-allowed' : 'pointer',
                             }}>
                             {fp.loading ? 'Generating…' : fp.text ? 'Regenerate' : 'Generate'}
