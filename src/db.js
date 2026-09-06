@@ -98,6 +98,25 @@ export async function clearCaptions() {
   })
 }
 
+// Shallow-merge `patch` into one history entry (read-modify-write). Used to attach
+// rendered images to an already-saved entry's `outputs`. No-op if the id is gone.
+export async function updateHistoryEntry(id, patch) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite')
+    const store = tx.objectStore(STORE)
+    const req = store.get(id)
+    req.onsuccess = () => {
+      const entry = req.result
+      if (!entry) { resolve(); return }
+      const put = store.put({ ...entry, ...patch })
+      put.onsuccess = () => resolve()
+      put.onerror = (e) => reject(e.target.error)
+    }
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
 // Reassign a single history entry to a project (or null to unfile it).
 // Read-modify-write so it works on entries that were saved before projects existed.
 export async function setHistoryEntryProject(id, project) {

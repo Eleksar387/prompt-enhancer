@@ -34,17 +34,43 @@ export const presetById = (id, presets) => presets.find(p => p.id === id)
 export const snap32 = (n) => Math.round(n / 32) * 32
 
 export const btn = (active) => ({
-  padding: '6px 14px', borderRadius: 6, border: '1px solid',
-  borderColor: active ? '#7c6af7' : '#333',
-  background: active ? '#2d2060' : '#1a1a2e',
-  color: active ? '#c4b8ff' : '#888',
-  fontSize: 12, cursor: 'pointer', transition: 'all 0.15s',
+  padding: '9px 15px', borderRadius: 8, border: '1px solid',
+  borderColor: active ? 'var(--pe-accent-line)' : 'var(--pe-line)',
+  background: active ? 'var(--pe-accent-bg)' : 'var(--pe-surface)',
+  color: active ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)',
+  fontSize: 15, fontWeight: active ? 600 : 500, cursor: 'pointer', transition: 'all 0.12s',
 })
 
 export const selStyle = {
-  width: '100%', boxSizing: 'border-box', background: '#12121f',
-  border: '1px solid #2e2e44', borderRadius: 8, padding: '9px 12px',
-  color: '#e0e0f0', fontSize: 13, outline: 'none', cursor: 'pointer',
+  width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)',
+  border: '1px solid var(--pe-line)', borderRadius: 8, padding: '11px 12px',
+  color: 'var(--pe-ink)', fontSize: 15, outline: 'none', cursor: 'pointer',
+}
+
+// Section label — the small upper-case caption above a control group.
+export const lbl = {
+  fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block',
+  marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+}
+
+// Inline "· note" text that trails a label (not upper-case, muted).
+export const lblNote = { color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }
+
+// Muted helper paragraph under a control.
+export const hint = { fontSize: 14, color: 'var(--pe-ink-3)', lineHeight: 1.5 }
+
+// A white grouping card.
+export const card = {
+  background: 'var(--pe-surface)', border: '1px solid var(--pe-line)',
+  borderRadius: 12, padding: 20,
+}
+
+// A textarea in the compose column.
+export const taStyle = {
+  width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)',
+  border: '1px solid var(--pe-line)', borderRadius: 8, padding: '13px 15px',
+  color: 'var(--pe-ink)', fontSize: 15, resize: 'vertical', outline: 'none',
+  lineHeight: 1.6, transition: 'border-color 0.15s', fontFamily: 'var(--pe-mono)',
 }
 
 export const moveLabel = (id) =>

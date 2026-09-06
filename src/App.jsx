@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import JSZip from 'jszip'
 import {
   TARGETS, DURATION_OPTIONS, OUTPUT_COUNT_OPTIONS, VARIANT_TEMPS, VARIANT_NUDGES,
+  GROK_IMAGE_RESOLUTIONS,
   STYLE_OPTIONS, CREATIVITY_OPTIONS, CAMERA_GROUPS,
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
@@ -9,10 +10,10 @@ import {
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   systemPromptFor,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, fetchModels, pickWriter, pickVision, isAnthropic, isGrok } from './api'
-import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage } from './comfy'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok } from './api'
+import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
-  getAllHistory, addHistoryEntry, deleteHistoryEntry,
+  getAllHistory, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
   setHistoryEntryProject, loadProjects, saveProjects,
   getCaption, putCaption, clearCaptions,
@@ -40,6 +41,21 @@ const entryHasImages = (h) => !!(
   (Array.isArray(h.refImages) && h.refImages.length) ||
   h.vision
 )
+// Flattened, lowercased text of one history entry for the free-text search box.
+// Skips image bytes; covers the scene, vision caption, generated output(s),
+// project, model and target label (and the scriptwriter's idea / script / shots).
+const entrySearchText = (h) => {
+  const parts = [h.project, h.model, entryTargetLabel(entryTargetId(h))]
+  if (h.type === 'scriptwriter') {
+    parts.push(h.idea, h.script?.title)
+    parts.push(JSON.stringify(h.script?.scenes || ''), JSON.stringify(h.directorsCut?.shots || ''))
+    for (const p of h.finalPrompts || []) parts.push(p.text, p.sceneTitle)
+  } else {
+    parts.push(h.scene, h.caption, h.negative, h.dialogue, h.style)
+    for (const o of h.outputs || []) parts.push(o.text, o.label)
+  }
+  return parts.filter(Boolean).join('  ').toLowerCase()
+}
 const modelProvider = (m) => {
   const s = (m || '').toLowerCase()
   if (!s) return '—'
@@ -48,6 +64,13 @@ const modelProvider = (m) => {
   return 'Ollama'
 }
 const modelFilterLabel = (m) => `${modelProvider(m)} · ${m}`
+const imgExt = (mediaType) => ((mediaType || 'image/jpeg').split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+  const fr = new FileReader()
+  fr.onload = () => resolve(String(fr.result).split(',')[1] || '')
+  fr.onerror = () => reject(fr.error)
+  fr.readAsDataURL(blob)
+})
 
 export default function App() {
   const [cfg, setCfg]                 = useState(loadCfg)
@@ -55,6 +78,32 @@ export default function App() {
   const [modelStatus, setModelStatus] = useState({ loading: true, ok: false, error: '' })
   const [comfyCfg, setComfyCfg]       = useState(loadComfyCfg)
   const [comfyCopyStatus, setComfyCopyStatus] = useState({ state: 'idle' })
+  const [comfySendStatus, setComfySendStatus] = useState({ state: 'idle', idx: null })
+  // xAI (Grok) image-render options — a compact strip shown above the results when on an xAI backend.
+  const [imageAspect, setImageAspect]         = useState('auto')   // GROK_IMAGE_RESOLUTIONS.ar
+  const [imageCount, setImageCount]           = useState(1)        // n, 1–4
+  const [imageResolution, setImageResolution] = useState('1k')     // '1k' | '2k'
+  // xAI (Grok) video-render options — second row of the same strip.
+  const [videoDuration, setVideoDuration]     = useState(8)        // seconds, 1–15
+  const [videoResolution, setVideoResolution] = useState('720p')   // '480p' | '720p' | '1080p'
+  const [videoAspect, setVideoAspect]         = useState('auto')
+  const [videoAudio, setVideoAudio]           = useState(true)
+  const [upStatus, setUpStatus]               = useState({})       // `${i}-${k}` -> 'loading' | { error }
+  // 🎨 Render provider. Grok (needs an xAI backend) and Gemini (needs cfg.geminiKey, any
+  // backend) are independent; `renderProvider` only matters when BOTH are available.
+  const [renderProvider, setRenderProvider]   = useState('grok')   // 'grok' | 'gemini' — only consulted when both are available
+  // Id of the history entry the current results were last saved as — so a 🎨 Render can
+  // patch its `outputs` in place instead of spawning a new entry.
+  const lastSavedEntryIdRef = useRef(null)
+  const resultsRef = useRef([])            // freshest `results` for the long-running video poll
+  const videoAbortRef = useRef(new Map())  // result idx -> AbortController for an in-flight video render
+
+  // 🎨 Render availability. Grok render needs an xAI backend; Gemini render needs only a
+  // key (works on any backend). `imgProvider` is what a click actually uses.
+  const grokRenderOn = isGrok(cfg.base)
+  const geminiRenderOn = !!(cfg.geminiKey && cfg.geminiKey.trim())
+  const canRender = grokRenderOn || geminiRenderOn
+  const imgProvider = grokRenderOn && geminiRenderOn ? renderProvider : (grokRenderOn ? 'grok' : 'gemini')
 
   const [target, setTarget]           = useState('minimax_h3')
   const [scene, setScene]             = useState('')
@@ -92,6 +141,7 @@ export default function App() {
   const [visionBusy, setVisionBusy]   = useState(false)
   const [globalError, setGlobalError] = useState('')
   const [copied, setCopied]           = useState(null)
+  const [savedEditFlash, setSavedEditFlash] = useState(false)
   const [history, setHistory]         = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [projects, setProjects]       = useState(loadProjects)
@@ -100,6 +150,7 @@ export default function App() {
   const [histTargetFilter, setHistTargetFilter] = useState('all')  // 'all' | <target id> ('scriptwriter' for those)
   const [histModelFilter, setHistModelFilter]   = useState('all')  // 'all' | <exact model string>
   const [histImageFilter, setHistImageFilter]   = useState('all')  // 'all' | 'with' | 'without'
+  const [histSearch, setHistSearch]             = useState('')     // free-text query (AND over whitespace-split terms)
   const [adminMode, setAdminMode]     = useState(false)
   const [adminSystem, setAdminSystem] = useState(() => systemPromptFor(TARGETS['minimax_h3'], 'single'))
   const [adminSystemOpen, setAdminSystemOpen] = useState(false)
@@ -162,10 +213,18 @@ export default function App() {
   }, [history])
 
   const histFiltersActive = historyFilter !== 'all' || histTargetFilter !== 'all'
-    || histModelFilter !== 'all' || histImageFilter !== 'all'
+    || histModelFilter !== 'all' || histImageFilter !== 'all' || histSearch.trim() !== ''
   const resetHistFilters = () => {
-    setHistoryFilter('all'); setHistTargetFilter('all'); setHistModelFilter('all'); setHistImageFilter('all')
+    setHistoryFilter('all'); setHistTargetFilter('all'); setHistModelFilter('all'); setHistImageFilter('all'); setHistSearch('')
   }
+
+  // Per-entry flattened search text, rebuilt only when the history changes.
+  const histSearchIndex = useMemo(() => {
+    const m = new Map()
+    for (const h of history) m.set(h, entrySearchText(h))
+    return m
+  }, [history])
+  const histSearchTerms = histSearch.trim().toLowerCase().split(/\s+/).filter(Boolean)
 
   const visibleHistory = useMemo(() => history.filter(h => {
     if (historyFilter === 'unfiled' && h.project) return false
@@ -174,15 +233,19 @@ export default function App() {
     if (histModelFilter !== 'all' && h.model !== histModelFilter) return false
     if (histImageFilter === 'with' && !entryHasImages(h)) return false
     if (histImageFilter === 'without' && entryHasImages(h)) return false
+    if (histSearchTerms.length) {
+      const hay = histSearchIndex.get(h) || ''
+      if (!histSearchTerms.every(t => hay.includes(t))) return false
+    }
     return true
-  }), [history, historyFilter, histTargetFilter, histModelFilter, histImageFilter])
+  }), [history, historyFilter, histTargetFilter, histModelFilter, histImageFilter, histSearch, histSearchIndex])
 
   const entryProjectSelect = (h) => (
     <select
       value={h.project || ''}
       onChange={e => assignEntryProject(h.id, e.target.value)}
       title="Assign this generation to a project"
-      style={{ fontSize: 10.5, color: h.project ? '#c4b8ff' : '#777', background: '#12121f', border: '1px solid #2d2060', borderRadius: 6, padding: '2px 6px', cursor: 'pointer', maxWidth: 150 }}>
+      style={{ fontSize: 13.5, color: h.project ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '2px 6px', cursor: 'pointer', maxWidth: 150 }}>
       <option value="">Unfiled</option>
       {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
       <option value="__new__">+ New project…</option>
@@ -208,6 +271,15 @@ export default function App() {
     if (adaptSourceOverride) document.getElementById('adapt-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [adaptSourceOverride])
 
+  resultsRef.current = results
+  const abortAllVideos = () => { videoAbortRef.current.forEach(c => c.abort()); videoAbortRef.current.clear() }
+  useEffect(() => () => abortAllVideos(), [])
+  // Keep the video-render duration in step with the target's chosen duration ("8 seconds" etc.).
+  useEffect(() => {
+    const m = String(duration).match(/(\d+)\s*second/)
+    if (m) setVideoDuration(Math.min(15, Math.max(1, parseInt(m[1], 10))))
+  }, [duration])
+
   const refreshHistory = useCallback(() => getAllHistory().then(setHistory).catch(() => {}), [])
 
   // Kept in a ref so saveScriptHistory (a stable useCallback passed to the
@@ -215,8 +287,11 @@ export default function App() {
   const saveCtxRef = useRef({ activeProject: '', history: [] })
   saveCtxRef.current = { activeProject, history }
 
-  const saveHistory = (snap, outputs) => {
+  const saveHistory = (snap, outputs, trackForRender = true) => {
     const entry = { ...snap, outputs, type: 'standard', id: generateId(), project: activeProject || null }
+    // Only the live workspace results should become the 🎨 Render patch target — an
+    // Adapt-panel save produces a separate entry the main results don't correspond to.
+    if (trackForRender) lastSavedEntryIdRef.current = entry.id
     addHistoryEntry(entry).then(refreshHistory).catch(() => {})
   }
   const saveScriptHistory = useCallback((entry) => {
@@ -330,26 +405,27 @@ export default function App() {
     : 'to load it as the reference image'
 
   const currentImages = () => {
+    const mt = (im) => im.mediaType || 'image/jpeg'
     if (frameMode === 'ref') {
-      return refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64 }))
+      return refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64, mediaType: mt(im), role: 'ref' }))
     }
     if (frameMode === 'firstlast') {
       return [
-        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64 },
-        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64 },
+        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' },
+        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64, mediaType: mt(lastImg), role: 'last' },
       ].filter(Boolean)
     }
     if (frameMode === 'firstmidlast') {
       return [
-        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64 },
-        midImg && { name: 'mid-frame.jpg', base64: midImg.base64 },
-        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64 },
+        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' },
+        midImg && { name: 'mid-frame.jpg', base64: midImg.base64, mediaType: mt(midImg), role: 'mid' },
+        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64, mediaType: mt(lastImg), role: 'last' },
       ].filter(Boolean)
     }
     if (frameMode === 'last') {
-      return firstImg ? [{ name: 'last-frame.jpg', base64: firstImg.base64 }] : []
+      return firstImg ? [{ name: 'last-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'last' }] : []
     }
-    return firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: firstImg.base64 }] : []
+    return firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' }] : []
   }
 
   const exportBundle = async () => {
@@ -357,6 +433,10 @@ export default function App() {
     for (const img of currentImages()) zip.file(img.name, img.base64, { base64: true })
     results.forEach((r, i) => {
       if (r.text) zip.file(results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`, r.text)
+      ;(r.images || []).forEach((img, k) => {
+        if (img.b64) zip.file(`render-${i + 1}-${k + 1}.${imgExt(img.mediaType)}`, img.b64, { base64: true })
+      })
+      if (r.video?.b64) zip.file(results.length === 1 ? 'render.mp4' : `render-${i + 1}.mp4`, r.video.b64, { base64: true })
     })
     const blob = await zip.generateAsync({ type: 'blob' })
     const url = URL.createObjectURL(blob)
@@ -369,6 +449,8 @@ export default function App() {
 
   // A previous copy's status shouldn't linger against a different set of loaded images.
   useEffect(() => { setComfyCopyStatus({ state: 'idle' }) }, [firstImg, midImg, lastImg, refImages])
+  // Same for a send — the shot it reported on is no longer the one on screen.
+  useEffect(() => { setComfySendStatus({ state: 'idle', idx: null }) }, [firstImg, midImg, lastImg, refImages, results])
 
   const copyImagesToComfy = async () => {
     const imgs = currentImages()
@@ -381,6 +463,145 @@ export default function App() {
       setComfyCopyStatus({ state: 'done' })
     } catch (e) {
       setComfyCopyStatus({ state: 'error', error: e.message })
+    }
+  }
+
+  // Pushes one generated prompt to the Prompt Enhancer Bridge node pack in ComfyUI,
+  // uploading the current image(s) first so the shot can name them by their input/
+  // filename. A workflow wired to the bridge nodes then picks it all up on the next run.
+  const sendShotToComfy = async (idx) => {
+    if (!results[idx]?.text) return
+    setComfySendStatus({ state: 'sending', idx })
+    try {
+      const images = { first: '', mid: '', last: '', ref: [] }
+      for (const img of currentImages()) {
+        // Prefer the name ComfyUI reports back — it, not ours, is what landed in input/.
+        const name = await uploadComfyImage(img.base64, img.name, 'image/jpeg', comfyCfg.url) || img.name
+        if (img.role === 'ref') images.ref.push(name)
+        else images[img.role] = name
+      }
+      await sendComfyShot(
+        { positive: results[idx].text, negative, target, duration, frameMode, images },
+        comfyCfg.url, comfyCfg.slot,
+      )
+      setComfySendStatus({ state: 'done', idx })
+      setTimeout(() => setComfySendStatus(prev =>
+        prev.state === 'done' && prev.idx === idx ? { state: 'idle', idx: null } : prev), 2500)
+    } catch (e) {
+      setComfySendStatus({ state: 'error', idx, error: e.message })
+    }
+  }
+
+  // Rebuild the history entry's `outputs` from the freshest results (with `override`
+  // merged into result `idx`) and patch it onto the entry the results were last saved as.
+  // Reads resultsRef so a 10-minute video poll doesn't persist against a stale array.
+  const persistOutputs = async (idx, override) => {
+    const outs = resultsRef.current
+      .map((r, i) => (i === idx ? { ...r, ...override } : r))
+      .filter(r => r.text && !r.error)
+      .map(r => ({
+        label: r.label, text: r.text,
+        ...(r.images?.length ? { images: r.images } : {}),
+        ...(r.video ? { video: r.video } : {}),
+      }))
+    const id = lastSavedEntryIdRef.current
+    if (id) await updateHistoryEntry(id, { outputs: outs }).then(refreshHistory).catch(() => {})
+    else saveHistory(buildSnapshot(caption || null, hasImgNow, outs.length), outs)
+  }
+
+  // Render one generated prompt into an actual image, then patch the images onto the
+  // already-saved history entry (or save a fresh one as a fallback). Provider is
+  // `imgProvider` (Grok via xAI /images/{generations,edits}, or Gemini via
+  // generateContent). When input image(s) are loaded, both run image-to-image.
+  const renderImage = async (idx) => {
+    const prompt = resultsRef.current[idx]?.text
+    if (!prompt || !canRender) return
+    setResults(prev => prev.map((r, i) => i === idx ? { ...r, imgLoading: true, imgError: '' } : r))
+    try {
+      const refs = currentImages().map(im => ({ base64: im.base64, mediaType: im.mediaType }))
+      let images
+      if (imgProvider === 'gemini') {
+        // Gemini returns one image per call — fan out for count > 1.
+        const settled = await Promise.allSettled(
+          Array.from({ length: Math.max(1, imageCount) }, () => generateImagesGemini(prompt, {
+            key: cfg.geminiKey, model: cfg.geminiImageModel, aspectRatio: imageAspect, images: refs.slice(0, 3),
+          }))
+        )
+        const ok = settled.filter(s => s.status === 'fulfilled').flatMap(s => s.value)
+        if (!ok.length) throw new Error(settled.find(s => s.status === 'rejected')?.reason?.message || 'Gemini render failed.')
+        images = ok.map(im => ({ b64: im.b64, mediaType: im.mediaType || 'image/png', revisedPrompt: im.revisedPrompt }))
+      } else {
+        const imgs = await generateImages(prompt, cfg, {
+          n: imageCount, aspectRatio: imageAspect, resolution: imageResolution,
+          images: refs.slice(0, 5),
+        })
+        images = imgs.map(im => ({ b64: im.b64, mediaType: im.mediaType || 'image/jpeg', revisedPrompt: im.revisedPrompt }))
+      }
+      setResults(prev => prev.map((r, i) => i === idx ? { ...r, images, imgLoading: false } : r))
+      await persistOutputs(idx, { images })
+    } catch (e) {
+      setResults(prev => prev.map((r, i) => i === idx ? { ...r, imgLoading: false, imgError: e.message } : r))
+    }
+  }
+
+  // Render one generated prompt into a video via xAI's video API (submit + poll).
+  // With an input image loaded, the first frame is used for image-to-video.
+  const renderVideo = async (idx) => {
+    const prompt = resultsRef.current[idx]?.text
+    if (!prompt || !isGrok(cfg.base)) return
+    videoAbortRef.current.get(idx)?.abort()
+    const ctrl = new AbortController()
+    videoAbortRef.current.set(idx, ctrl)
+    const inputImg = currentImages()[0] || null
+    const imageDataUri = inputImg ? `data:${inputImg.mediaType || 'image/jpeg'};base64,${inputImg.base64}` : undefined
+    setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidLoading: true, vidError: '', vidProgress: 0, vidStatus: 'pending' } : r))
+    try {
+      const { url, duration } = await generateVideo(prompt, cfg, {
+        duration: videoDuration, resolution: videoResolution, aspectRatio: videoAspect,
+        audio: videoAudio, image: imageDataUri, signal: ctrl.signal,
+        onProgress: (s, p) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidStatus: s, vidProgress: p } : r)),
+      })
+      let video = { url, mediaType: 'video/mp4', duration }
+      // The video is a temporary vidgen.x.ai URL — try to capture the bytes for history /
+      // offline / ZIP. A cross-origin block leaves it URL-only (still playable in <video>).
+      try {
+        const resp = await fetch(url, { signal: ctrl.signal })
+        if (resp.ok) {
+          const blob = await resp.blob()
+          video = { url, b64: await blobToBase64(blob), mediaType: blob.type || 'video/mp4', duration }
+        }
+      } catch { /* keep URL-only */ }
+      setResults(prev => prev.map((r, i) => i === idx ? { ...r, video, vidLoading: false, vidProgress: 100 } : r))
+      await persistOutputs(idx, { video })
+    } catch (e) {
+      if (e.name === 'AbortError') setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidLoading: false } : r))
+      else setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidLoading: false, vidError: e.message } : r))
+    } finally {
+      if (videoAbortRef.current.get(idx) === ctrl) videoAbortRef.current.delete(idx)
+    }
+  }
+
+  // "Upscale to 2K" — re-run one rendered image through Grok img2img at resolution:2k.
+  // It's an edit pass, not a true upscaler, so fine detail shifts slightly.
+  const upscaleImage = async (i, k) => {
+    const r = resultsRef.current[i]
+    const img = r?.images?.[k]
+    if (!img?.b64 || !isGrok(cfg.base)) return
+    const key = `${i}-${k}`
+    setUpStatus(s => ({ ...s, [key]: 'loading' }))
+    try {
+      const out = await generateImages(r.text, cfg, {
+        images: [{ base64: img.b64, mediaType: img.mediaType }],
+        resolution: '2k', aspectRatio: imageAspect,
+      })
+      if (!out[0]?.b64) throw new Error('No image returned')
+      const newImg = { b64: out[0].b64, mediaType: out[0].mediaType || img.mediaType, revisedPrompt: out[0].revisedPrompt || img.revisedPrompt, upscaled: true }
+      const nextImages = r.images.map((im, ki) => ki === k ? newImg : im)
+      setResults(prev => prev.map((rr, ri) => ri === i ? { ...rr, images: nextImages } : rr))
+      setUpStatus(s => { const n = { ...s }; delete n[key]; return n })
+      await persistOutputs(i, { images: nextImages })
+    } catch (e) {
+      setUpStatus(s => ({ ...s, [key]: { error: e.message } }))
     }
   }
 
@@ -419,10 +640,17 @@ export default function App() {
     setRefAudio(h.refAudio && typeof h.refAudio === 'object' && h.refAudio.base64
       ? { base64: h.refAudio.base64, mediaType: h.refAudio.mediaType || 'audio/mpeg', fileName: h.refAudio.fileName }
       : null)
-    setResults([]); setCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
+    // `saved` = the text as restored, so a later hand-edit is detectable (resultsEdited).
+    setResults(Array.isArray(h.outputs)
+      ? h.outputs.filter(o => o && typeof o === 'object').map(o => ({ label: o.label || h.model || 'output', text: o.text || '', saved: o.text || '', usage: null, loading: false, error: '', images: Array.isArray(o.images) ? o.images : [], imgLoading: false, imgError: '', video: (o.video && typeof o.video === 'object' && (o.video.url || o.video.b64)) ? o.video : null, vidLoading: false, vidError: '', vidProgress: 0 }))
+      : [])
+    // A 🎨 Render right after a restore should patch this same entry.
+    lastSavedEntryIdRef.current = h.id || null
+    setCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
     setH3RatioId(ratioPreset?.id || '')
+    setHistoryOpen(false)
   }
 
   const sendToWriter = async () => {
@@ -435,7 +663,7 @@ export default function App() {
       setResults([{ label: lbl, text: '', usage: null, loading: true, error: '' }])
       try {
         const { text, usage } = await callOllama(effectiveWriter, userToUse, systemToUse, cfg, cfg.temperature)
-        setResults([{ label: lbl, text, usage, loading: false, error: '' }])
+        setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
         if (snapshot) saveHistory(snapshot, [{ label: lbl, text }])
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
@@ -446,7 +674,7 @@ export default function App() {
       const proms = variants.map((v, i) =>
         callOllama(effectiveWriter, userToUse + v.nudge, systemToUse, cfg, v.temp)
           .then(({ text, usage }) => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r))
+            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
             return { label: v.label, text }
           })
           .catch(e => {
@@ -484,11 +712,13 @@ export default function App() {
     })
   }
   const switchMode = (m) => {
+    abortAllVideos()
     setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
     setSeeds({ first: null, mid: null, last: null })
     if (target === 'minimax_h3' && m === 'ref') setH3RatioId(prev => prev || 'port916')
   }
   const switchTarget = (id) => {
+    abortAllVideos()
     const opts = TARGETS[id].durations || DURATION_OPTIONS
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
     setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
@@ -645,6 +875,7 @@ export default function App() {
     if (!canGen) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
+    abortAllVideos()
     setGlobalError(''); setCopied(null); setCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
 
     const stylePart = buildStylePart({
@@ -670,6 +901,31 @@ export default function App() {
       await runWriter(frameDescription, stylePart, lengthPart, hasImg)
     } else {
       await runWriter(null, stylePart, lengthPart, hasImg)
+    }
+  }
+
+  // The history snapshot for the current workspace state. `frameDescription` is
+  // the assembled vision caption (null for text-only); `count` is how many
+  // outputs the entry carries. Used by runWriter() after a fresh generation and
+  // by saveResultsEdit() to persist hand-edited result text as a new entry.
+  const buildSnapshot = (frameDescription, hasImg, count) => {
+    const isH3 = target === 'minimax_h3'
+    return {
+      ts: Date.now(), target, outputCount: count, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
+      duration, style, creativity, frameMode, negative,
+      scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
+      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName, hash: firstImg.hash || imageHash(firstImg.base64) } : null,
+      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName, hash: midImg.hash || imageHash(midImg.base64) } : null,
+      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName, hash: lastImg.hash || imageHash(lastImg.base64) } : null,
+      ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
+      soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
+      refImages: isH3 && frameMode === 'ref'
+        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '', hash: im.hash || imageHash(im.base64) }))
+        : null,
+      refAudio: isH3 && frameMode === 'ref' && refAudio
+        ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
+        : null,
+      caption: frameDescription || null,
     }
   }
 
@@ -729,24 +985,7 @@ export default function App() {
       userText = `${frame}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
     }
 
-    const isH3 = target === 'minimax_h3'
-    const snapshot = {
-      ts: Date.now(), target, outputCount, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
-      duration, style, creativity, frameMode, negative,
-      scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
-      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName, hash: firstImg.hash || imageHash(firstImg.base64) } : null,
-      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName, hash: midImg.hash || imageHash(midImg.base64) } : null,
-      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName, hash: lastImg.hash || imageHash(lastImg.base64) } : null,
-      ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
-      soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
-      refImages: isH3 && frameMode === 'ref'
-        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '', hash: im.hash || imageHash(im.base64) }))
-        : null,
-      refAudio: isH3 && frameMode === 'ref' && refAudio
-        ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
-        : null,
-      caption: frameDescription || null,
-    }
+    const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
 
     if (adminMode) {
       setAdminUserMsg(userText)
@@ -762,7 +1001,7 @@ export default function App() {
       setResults([{ label: lbl, text: '', usage: null, loading: true, error: '' }])
       try {
         const { text, usage } = await callOllama(effectiveWriter, userText, activeSystem, cfg, cfg.temperature)
-        setResults([{ label: lbl, text, usage, loading: false, error: '' }])
+        setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
         saveHistory(snapshot, [{ label: lbl, text }])
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
@@ -773,7 +1012,7 @@ export default function App() {
       const proms = variants.map((v, i) =>
         callOllama(effectiveWriter, userText + v.nudge, activeSystem, cfg, v.temp)
           .then(({ text, usage }) => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, usage, loading: false } : r))
+            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
             return { label: v.label, text }
           })
           .catch(e => {
@@ -791,6 +1030,28 @@ export default function App() {
 
   const writing = results.some(r => r.loading)
   const isLoading = visionBusy || writing
+
+  // Whether the workspace currently holds any input image (mirrors enhance()'s
+  // local `hasImg`) — used to stamp the Vision model onto a manually-saved snapshot.
+  const hasImgNow = t.type === 'image' ? !!firstImg
+    : frameMode === 'firstlast' ? !!(firstImg && lastImg)
+    : frameMode === 'firstmidlast' ? !!(firstImg && midImg && lastImg)
+    : frameMode === 'last' ? !!firstImg
+    : frameMode === 'ref' ? refImages.length > 0
+    : !!firstImg
+
+  // A result's text has been hand-edited away from what was generated/restored
+  // (`r.saved`) — offer to persist it as a new history entry.
+  const resultsEdited = !writing && results.some(r => r.text && !r.error && r.text !== r.saved)
+
+  const saveResultsEdit = () => {
+    const outs = results.filter(r => r.text && !r.error).map(r => ({ label: r.label, text: r.text, ...(r.images?.length ? { images: r.images } : {}), ...(r.video ? { video: r.video } : {}) }))
+    if (!outs.length) return
+    saveHistory(buildSnapshot(caption || null, hasImgNow, outs.length), outs)
+    setResults(prev => prev.map(r => ({ ...r, saved: r.text })))
+    setSavedEditFlash(true)
+    setTimeout(() => setSavedEditFlash(false), 1800)
+  }
   const canGenerate = t.type === 'image'
     ? (!!scene.trim() || !!firstImg)
     : frameMode === 'firstlast' ? (!!firstImg && !!lastImg)
@@ -844,8 +1105,8 @@ export default function App() {
   const selectedRatio = target === 'minimax_h3' ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]) : null
   const ratioPicker = target === 'minimax_h3' ? (
     <div style={{ marginBottom: 14 }}>
-      <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-        Aspect Ratio <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(no exact frame to derive it from — pick one explicitly)</span>
+      <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Aspect Ratio <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(no exact frame to derive it from — pick one explicitly)</span>
       </label>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {t.resolutions.map(p => (
@@ -853,12 +1114,12 @@ export default function App() {
         ))}
       </div>
       {frameMode === 'ref' && (
-        <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>
+        <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>
           Ref2VA renders best at 9:16 portrait (the validated short-drama format).
         </p>
       )}
       {!h3RatioId && (
-        <p style={{ fontSize: 11, color: '#f0b070', margin: '4px 0 0', lineHeight: 1.5 }}>
+        <p style={{ fontSize: 13, color: 'var(--pe-warn)', margin: '4px 0 0', lineHeight: 1.5 }}>
           No ratio picked — defaulting to {selectedRatio.label}.
         </p>
       )}
@@ -867,46 +1128,65 @@ export default function App() {
 
   const genBtnDisabled = isLoading || !canGenerate || pendingSend
   const genBtnStyle = {
-    padding: '10px 24px', borderRadius: 8, border: 'none',
-    background: genBtnDisabled ? '#2a2a3f' : 'linear-gradient(135deg, #5a4fcf, #8b5cf6)',
-    color: genBtnDisabled ? '#555' : '#fff',
-    fontSize: 14, fontWeight: 600, cursor: genBtnDisabled ? 'not-allowed' : 'pointer',
-    transition: 'all 0.15s', marginTop: 6,
+    width: '100%', height: 54, padding: '0 24px', borderRadius: 10, border: 'none',
+    background: genBtnDisabled ? 'var(--pe-line-soft)' : 'var(--pe-accent)',
+    color: genBtnDisabled ? 'var(--pe-ink-3)' : '#fff',
+    fontSize: 17, fontWeight: 600, cursor: genBtnDisabled ? 'not-allowed' : 'pointer',
+    transition: 'all 0.15s', marginTop: 10,
   }
 
+  const scriptwriterMode = target === 'scriptwriter'
+
   return (
-    <div style={{ fontFamily: "'Inter', sans-serif", maxWidth: 720, margin: '0 auto', padding: '28px 20px', color: '#e8e8f0' }}>
+    <div style={{ fontFamily: 'var(--pe-font)', minHeight: '100vh', color: 'var(--pe-ink)' }}>
       {/* Header */}
-      <div style={{ marginBottom: 18, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px', color: '#fff', letterSpacing: '-0.3px' }}>Prompt Enhancer</h1>
-          <p style={{ fontSize: 13, color: '#888', margin: 0 }}>{t.subtitle}{showImage ? ' · two-stage: vision → writer, local Ollama' : ' · single-stage writer, local Ollama'}</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '0 28px', height: 72, background: 'var(--pe-surface)', borderBottom: '1px solid var(--pe-line)', position: 'sticky', top: 0, zIndex: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
+          <h1 style={{ fontSize: 27, fontWeight: 700, margin: 0, color: 'var(--pe-ink)', letterSpacing: '-0.02em' }}>Prompt Enhancer</h1>
+          <p style={{ fontSize: 14, color: 'var(--pe-ink-3)', margin: 0 }}>{t.subtitle}{showImage ? ' · two-stage: vision → writer' : ' · single-stage writer'}</p>
         </div>
         <button
           onClick={() => { setAdminMode(v => !v); setPendingSend(false) }}
-          style={{ flexShrink: 0, padding: '5px 12px', borderRadius: 6, border: '1px solid', borderColor: adminMode ? '#7c6af7' : '#333', background: adminMode ? '#2d2060' : '#1a1a2e', color: adminMode ? '#c4b8ff' : '#666', fontSize: 11, cursor: 'pointer', marginTop: 4 }}
+          style={{ flexShrink: 0, padding: '9px 15px', borderRadius: 8, border: '1px solid', borderColor: adminMode ? 'var(--pe-accent-line)' : 'var(--pe-line)', background: adminMode ? 'var(--pe-accent-bg)' : 'var(--pe-surface)', color: adminMode ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
         >
           {adminMode ? '⚙ Admin: ON' : '⚙ Admin'}
         </button>
       </div>
 
-      <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus} reloadModels={reloadModels}
-        onClearCaptionCache={() => { clearCaptions().catch(() => {}); captionMemRef.current.clear(); setVisionStats(null) }} />
+      <div style={{ display: 'grid', gridTemplateColumns: scriptwriterMode ? 'minmax(0,1fr)' : '360px minmax(0, 900px) minmax(420px, 760px)', gap: 28, padding: 24, alignItems: 'start', justifyContent: 'center', maxWidth: scriptwriterMode ? 1080 : 2200, margin: '0 auto' }}>
+
+      {/* ================= LEFT RAIL ================= */}
+      <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 12, padding: 20 }}>
 
       {/* Target */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Generate for</label>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {Object.values(TARGETS).map(tg => (
-            <button key={tg.id} onClick={() => switchTarget(tg.id)} style={btn(target === tg.id)}>{tg.label}</button>
-          ))}
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate for</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {Object.values(TARGETS).map(tg => {
+            const on = target === tg.id
+            const [name, kind] = tg.label.split(' · ')
+            return (
+              <button key={tg.id} onClick={() => switchTarget(tg.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                  width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 8,
+                  border: '1px solid', borderColor: on ? 'var(--pe-accent-line)' : 'transparent',
+                  background: on ? 'var(--pe-accent-bg)' : 'transparent',
+                  color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)',
+                  fontSize: 15, fontWeight: on ? 600 : 500, cursor: 'pointer', transition: 'all 0.12s',
+                }}>
+                <span>{name}</span>
+                {kind && <span style={{ fontSize: 12, fontWeight: 500, color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', opacity: on ? 0.7 : 1 }}>{kind}</span>}
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* Project — tags each new generation so History can group them */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Project <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>· new generations are saved here</span>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Project <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· new generations are saved here</span>
         </label>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <select
@@ -919,8 +1199,8 @@ export default function App() {
           </select>
           {activeProject && (
             <>
-              <button onClick={() => renameProject(activeProject)} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Rename</button>
-              <button onClick={() => deleteProject(activeProject)} style={{ fontSize: 11, color: '#a06a6a', background: 'none', border: '1px solid #3a2040', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Delete</button>
+              <button onClick={() => renameProject(activeProject)} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Rename</button>
+              <button onClick={() => deleteProject(activeProject)} style={{ fontSize: 13, color: 'var(--pe-danger)', background: 'none', border: '1px solid var(--pe-danger-line)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Delete</button>
             </>
           )}
         </div>
@@ -929,8 +1209,8 @@ export default function App() {
       {/* Models */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <div style={{ flex: '1 1 240px' }}>
-          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Writer model <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>· builds the prompt</span>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Writer model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· builds the prompt</span>
           </label>
           {models.length > 0
             ? <select style={selStyle} value={writerModel} onChange={e => setWriterModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
@@ -938,8 +1218,8 @@ export default function App() {
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
-            <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Vision model <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>· reads image inputs</span>
+            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Vision model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· reads image inputs</span>
             </label>
             {models.length > 0
               ? <select style={selStyle} value={visionModel} onChange={e => setVisionModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
@@ -947,6 +1227,16 @@ export default function App() {
           </div>
         )}
       </div>
+
+      <div style={{ marginTop: 4 }}>
+        <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus} reloadModels={reloadModels}
+          onClearCaptionCache={() => { clearCaptions().catch(() => {}); captionMemRef.current.clear(); setVisionStats(null) }} />
+      </div>
+
+      </div>{/* ================= END LEFT RAIL ================= */}
+
+      {/* ================= CENTER · COMPOSE ================= */}
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
 
       {target === 'scriptwriter' ? (
         <ScriptwriterPanel
@@ -960,33 +1250,33 @@ export default function App() {
 
       {/* Output count */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Output</label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Output</label>
         <div style={{ display: 'flex', gap: 6 }}>
           {OUTPUT_COUNT_OPTIONS.map(o => (
             <button key={o.value} onClick={() => setOutputCount(o.value)} style={btn(outputCount === o.value)}>{o.label}</button>
           ))}
         </div>
-        {outputCount === 3 && <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0' }}>Vision runs once; the writer then runs 3× at temperatures {VARIANT_TEMPS.join(' / ')}, each with a short literal → balanced → bold phrasing nudge so variants stay distinct even on models that ignore temperature.</p>}
+        {outputCount === 3 && <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0' }}>Vision runs once; the writer then runs 3× at temperatures {VARIANT_TEMPS.join(' / ')}, each with a short literal → balanced → bold phrasing nudge so variants stay distinct even on models that ignore temperature.</p>}
       </div>
 
       {/* Duration */}
       {show.duration && (
         <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Duration</label>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Duration</label>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(t.durations || DURATION_OPTIONS).map(o => (
               <button key={o.value} onClick={() => setDuration(o.value)} style={btn(duration === o.value)}>{o.label}</button>
             ))}
           </div>
-          <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>
-            {t.durationHint || (<>Sweet spot: <span style={{ color: '#9a8fd8' }}>≤10s renders cleanest</span>. 12–20s can show subject drift — consider the Extend workflow (e.g. 8s + 8s) for longer clips.</>)}
+          <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>
+            {t.durationHint || (<>Sweet spot: <span style={{ color: 'var(--pe-accent-ink)' }}>≤10s renders cleanest</span>. 12–20s can show subject drift — consider the Extend workflow (e.g. 8s + 8s) for longer clips.</>)}
           </p>
         </div>
       )}
 
       {/* Style */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t.type === 'image' ? 'Style' : 'Scene Style'}</label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.type === 'image' ? 'Style' : 'Scene Style'}</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {STYLE_OPTIONS.map(o => (
             <button key={o.id} onClick={() => setStyle(o.id)} title={o.hint} style={btn(style === o.id)}>{o.label}</button>
@@ -996,13 +1286,13 @@ export default function App() {
 
       {/* Creativity */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t.type === 'image' ? 'Image Fidelity' : 'Creativity'}</label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.type === 'image' ? 'Image Fidelity' : 'Creativity'}</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {CREATIVITY_OPTIONS.map(o => (
             <button key={o.id} onClick={() => setCreativity(o.id)} title={o.hint} style={btn(creativity === o.id)}>{o.label}</button>
           ))}
         </div>
-        <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>
+        <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>
           {t.type === 'image'
             ? 'How closely the prompt recreates your reference image vs. invents something new.'
             : t.type === 'text'
@@ -1013,7 +1303,7 @@ export default function App() {
 
       {/* Prompt length */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Prompt Length</label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Prompt Length</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {PROMPT_LENGTH_OPTIONS.map(o => (
             <button key={o.id} onClick={() => setPromptLength(o.id)} title={o.hint} style={btn(promptLength === o.id)}>{o.label}</button>
@@ -1023,23 +1313,23 @@ export default function App() {
 
       {/* Scene */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           {sceneLabel}{' '}
-          {sceneHint && <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>{sceneHint}</span>}
+          {sceneHint && <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>{sceneHint}</span>}
         </label>
         <textarea ref={sceneTextareaRef} value={scene} onChange={e => setScene(e.target.value)} placeholder={scenePlaceholder} rows={4}
-          style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '12px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s' }}
-          onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '12px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
       </div>
 
       {/* Avoid */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Avoid <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — things to keep out of the result, e.g. "text, watermark", or a likely mistake to correct, e.g. "blue car", "horse in background")</span>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Avoid <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — things to keep out of the result, e.g. "text, watermark", or a likely mistake to correct, e.g. "blue car", "horse in background")</span>
         </label>
         <textarea value={negative} onChange={e => setNegative(e.target.value)} placeholder="e.g. text, watermark, blue car, horse in background" rows={2}
-          style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
-          onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+          onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
       </div>
 
       {/* Camera */}
@@ -1047,26 +1337,26 @@ export default function App() {
         <div style={{ marginBottom: 18 }}>
           <button
             onClick={() => setCameraOpen(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#777', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--pe-ink-3)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}
           >
             <span style={{ fontSize: 13, transition: 'transform 0.2s', display: 'inline-block', transform: cameraOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
             Camera
           </button>
           {cameraOpen && (
-            <div style={{ marginTop: 12, background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '16px 18px' }}>
-              <p style={{ fontSize: 11, color: '#666', margin: '0 0 14px', lineHeight: 1.5 }}>
-                Click a move to insert it into your scene at the cursor, e.g. <code style={{ color: '#9a8fd8' }}>[camera: a slow dolly-in toward the subject]</code>.
-                You can also type <code style={{ color: '#9a8fd8' }}>[camera: ...]</code> markers by hand, anywhere in the text, in your own words.
+            <div style={{ marginTop: 12, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '16px 18px' }}>
+              <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '0 0 14px', lineHeight: 1.5 }}>
+                Click a move to insert it into your scene at the cursor, e.g. <code style={{ color: 'var(--pe-accent-ink)' }}>[camera: a slow dolly-in toward the subject]</code>.
+                You can also type <code style={{ color: 'var(--pe-accent-ink)' }}>[camera: ...]</code> markers by hand, anywhere in the text, in your own words.
               </p>
               {CAMERA_GROUPS.map(g => (
                 <div key={g.group} style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 10, color: '#555', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>{g.group}</div>
+                  <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>{g.group}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {g.moves.map(m => {
                       const flashed = flashId === m.id
                       return (
                         <button key={m.id} title={m.desc} onClick={() => insertCameraMarker(m)}
-                          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 6, border: '1px solid', borderColor: flashed ? '#7c6af7' : '#2a2a3f', background: flashed ? '#1e1850' : '#13131f', color: flashed ? '#c4b8ff' : '#888', fontSize: 12, transition: 'all 0.15s' }}>
+                          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 6, border: '1px solid', borderColor: flashed ? 'var(--pe-accent)' : 'var(--pe-line)', background: flashed ? 'var(--pe-accent-bg)' : 'var(--pe-surface)', color: flashed ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', fontSize: 13.5, transition: 'all 0.15s' }}>
                           {flashed ? '✓ Inserted' : m.label}
                         </button>
                       )
@@ -1074,11 +1364,11 @@ export default function App() {
                   </div>
                 </div>
               ))}
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1e1e30' }}>
-                <a href="https://camerapromptsgenerator.vercel.app/" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: '#5a4fcf', textDecoration: 'none' }}>
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--pe-line-soft)' }}>
+                <a href="https://camerapromptsgenerator.vercel.app/" target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: 'var(--pe-accent)', textDecoration: 'none' }}>
                   camerapromptsgenerator.vercel.app ↗
                 </a>
-                <span style={{ fontSize: 11, color: '#444', marginLeft: 8 }}>— browse more angle & shot references</span>
+                <span style={{ fontSize: 13, color: 'var(--pe-line)', marginLeft: 8 }}>— browse more angle & shot references</span>
               </div>
             </div>
           )}
@@ -1088,17 +1378,17 @@ export default function App() {
       {/* Dialogue */}
       {show.dialogue && (
         <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Dialogue <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — spoken aloud; needs 8s+ for more than a few words)</span>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Dialogue <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — spoken aloud; needs 8s+ for more than a few words)</span>
           </label>
           <textarea value={dialogue} onChange={e => setDialogue(e.target.value)} placeholder="Exact words to be spoken, e.g.  We need to leave. Now." rows={2}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
           {dialogue.trim() && (() => {
             const b = syllableBudget(duration, dialogue)
             const over = b.max != null && b.count > b.max
             return (
-              <div style={{ fontSize: 11, color: over ? '#f0b070' : '#555', marginTop: 6, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 13, color: over ? 'var(--pe-warn)' : 'var(--pe-ink-3)', marginTop: 6, lineHeight: 1.5 }}>
                 {b.count} syllable{b.count === 1 ? '' : 's'}
                 {b.max != null && (
                   <> · budget ≈{b.min}–{b.max} for a {b.seconds}s clip ({b.german ? 'German' : 'English'} pacing, ~{b.spsLo}–{b.spsHi} syll/s)</>
@@ -1109,33 +1399,33 @@ export default function App() {
           })()}
           <input value={delivery} onChange={e => setDelivery(e.target.value)}
             placeholder="Delivery / voice / accent (optional) — e.g. calm and slow, urgent whisper, British accent"
-            style={{ width: '100%', boxSizing: 'border-box', marginTop: 8, background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '9px 14px', color: '#e0e0f0', fontSize: 13, outline: 'none', transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+            style={{ width: '100%', boxSizing: 'border-box', marginTop: 8, background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '9px 14px', color: 'var(--pe-ink)', fontSize: 13, outline: 'none', transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
         </div>
       )}
 
       {/* Soundscape / music (MiniMax H3 only) */}
       {target === 'minimax_h3' && (
         <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Ambient Sound <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)</span>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Ambient Sound <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)</span>
           </label>
           <textarea value={soundscape} onChange={e => setSoundscape(e.target.value)} placeholder="e.g. steady ventilation hum, quiet servo motors, a soft mechanical click" rows={2}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
-          <label style={{ fontSize: 11, color: '#777', display: 'block', margin: '12px 0 6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Music <span style={{ color: '#555', textTransform: 'none', letterSpacing: 0 }}>(optional — non_diegetic_music, audience-only; leave blank to let the writer decide, or type "none" for silence)</span>
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', margin: '14px 0 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Music <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — non_diegetic_music, audience-only; leave blank to let the writer decide, or type "none" for silence)</span>
           </label>
           <textarea value={music} onChange={e => setMusic(e.target.value)} placeholder='e.g. sparse electronic pulse, moderate tempo, restrained low synth bass — or "none"' rows={2}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 14px', color: '#e0e0f0', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
-            onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
+            onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
         </div>
       )}
 
       {/* Frame mode */}
       {show.frameMode && (
         <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Image Input</label>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Image Input</label>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).map(o => (
               <button key={o.id} onClick={() => switchMode(o.id)} style={btn(frameMode === o.id)}>{o.label}</button>
@@ -1143,7 +1433,7 @@ export default function App() {
           </div>
           {(() => {
             const hint = (t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).find(o => o.id === frameMode)?.hint
-            return hint ? <p style={{ fontSize: 11, color: '#555', margin: '6px 0 0', lineHeight: 1.5 }}>{hint}</p> : null
+            return hint ? <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>{hint}</p> : null
           })()}
         </div>
       )}
@@ -1177,50 +1467,56 @@ export default function App() {
         </>
       ))}
 
-      {/* Copy loaded image(s) into ComfyUI's input folder */}
-      {showImage && currentImages().length > 0 && (
+      {/* ComfyUI handoff: input-folder copy, plus the slot the per-result send targets */}
+      {((showImage && currentImages().length > 0) || results.some(r => r.text)) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
           <input
             value={comfyCfg.url} onChange={e => setComfyCfg({ ...comfyCfg, url: e.target.value })}
             placeholder="http://127.0.0.1:8188" spellCheck={false}
-            style={{ flex: '0 1 220px', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 7, padding: '6px 10px', color: '#e0e0f0', fontSize: 12, outline: 'none' }}
+            style={{ flex: '0 1 220px', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 7, padding: '6px 10px', color: 'var(--pe-ink)', fontSize: 13.5, outline: 'none' }}
           />
-          <button
+          <input
+            value={comfyCfg.slot} onChange={e => setComfyCfg({ ...comfyCfg, slot: e.target.value })}
+            placeholder="slot" spellCheck={false}
+            title="Named slot on the Prompt Enhancer Bridge nodes. Match this to the 'slot' widget on the node in your workflow."
+            style={{ flex: '0 1 110px', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 7, padding: '6px 10px', color: 'var(--pe-ink)', fontSize: 13.5, outline: 'none' }}
+          />
+          {showImage && currentImages().length > 0 && <button
             onClick={copyImagesToComfy} disabled={comfyCopyStatus.state === 'sending'}
             title={comfyCopyStatus.state === 'error' ? comfyCopyStatus.error : "Uploads the loaded image(s) into ComfyUI's input/ folder via its own /upload/image API — needs ComfyUI running and started with --enable-cors-header."}
             style={{
-              padding: '6px 12px', borderRadius: 6, border: '1px solid #333',
-              background: comfyCopyStatus.state === 'done' ? '#1a3a2a' : comfyCopyStatus.state === 'error' ? '#2a1020' : '#1a1a2e',
-              color: comfyCopyStatus.state === 'done' ? '#4ade80' : comfyCopyStatus.state === 'error' ? '#f87171' : '#9a8fd8',
-              fontSize: 11.5, cursor: comfyCopyStatus.state === 'sending' ? 'wait' : 'pointer',
+              padding: '6px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
+              background: comfyCopyStatus.state === 'done' ? 'var(--pe-ok-bg)' : comfyCopyStatus.state === 'error' ? 'var(--pe-danger-bg)' : 'var(--pe-surface)',
+              color: comfyCopyStatus.state === 'done' ? 'var(--pe-ok)' : comfyCopyStatus.state === 'error' ? 'var(--pe-danger)' : 'var(--pe-accent-ink)',
+              fontSize: 13, cursor: comfyCopyStatus.state === 'sending' ? 'wait' : 'pointer',
             }}
           >
             {comfyCopyStatus.state === 'sending' ? 'Copying…'
               : comfyCopyStatus.state === 'done' ? '✓ Copied to ComfyUI'
               : comfyCopyStatus.state === 'error' ? '✕ Failed — hover for details'
               : '⇪ Copy to ComfyUI input'}
-          </button>
+          </button>}
         </div>
       )}
 
       {/* Admin system prompt */}
       {adminMode && (
-        <div style={{ marginBottom: 18, background: '#0e0e1c', border: '1px solid #3a2f6e', borderRadius: 10, padding: '12px 16px' }}>
+        <div style={{ marginBottom: 18, background: 'var(--pe-rail)', border: '1px solid var(--pe-accent-line)', borderRadius: 10, padding: '12px 16px' }}>
           <button
             onClick={() => setAdminSystemOpen(v => !v)}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#9a8fd8', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: adminSystemOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
               System Prompt
             </span>
-            <span style={{ fontSize: 10, color: '#555' }}>editable · sent on every generation</span>
+            <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>editable · sent on every generation</span>
           </button>
           {adminSystemOpen && (
             <div style={{ marginTop: 12 }}>
               <textarea value={adminSystem} onChange={e => setAdminSystem(e.target.value)} rows={12}
-                style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 12px', color: '#b0b8d0', fontSize: 12, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => setAdminSystem(systemPromptFor(t, frameMode))} style={{ marginTop: 6, fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+                style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
+              <button onClick={() => setAdminSystem(systemPromptFor(t, frameMode))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>
@@ -1228,17 +1524,17 @@ export default function App() {
 
       {/* Admin user message review */}
       {adminMode && pendingSend && (
-        <div style={{ marginBottom: 18, background: '#0e0e1c', border: '1px solid #3a2f6e', borderRadius: 10, padding: '14px 16px' }}>
-          <div style={{ fontSize: 11, color: '#9a8fd8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>User Message · review & edit before sending</div>
+        <div style={{ marginBottom: 18, background: 'var(--pe-rail)', border: '1px solid var(--pe-accent-line)', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-accent-ink)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>User Message · review & edit before sending</div>
           <textarea value={adminUserMsg} onChange={e => setAdminUserMsg(e.target.value)} rows={10}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#12121f', border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 12px', color: '#b0b8d0', fontSize: 12, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
           <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
             <button onClick={sendToWriter} disabled={writing}
-              style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: writing ? '#2a2a3f' : 'linear-gradient(135deg, #5a4fcf, #8b5cf6)', color: writing ? '#555' : '#fff', fontSize: 14, fontWeight: 600, cursor: writing ? 'not-allowed' : 'pointer', transition: 'all 0.15s' }}>
+              style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: writing ? 'var(--pe-line)' : 'var(--pe-accent)', color: writing ? 'var(--pe-ink-3)' : '#fff', fontSize: 14, fontWeight: 600, cursor: writing ? 'not-allowed' : 'pointer', transition: 'all 0.15s' }}>
               {writing ? '✦ Writing prompt…' : '→ Send to Writer'}
             </button>
             <button onClick={() => setPendingSend(false)} disabled={writing}
-              style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid #333', background: 'none', color: '#666', fontSize: 13, cursor: writing ? 'not-allowed' : 'pointer' }}>
+              style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: writing ? 'not-allowed' : 'pointer' }}>
               Cancel
             </button>
           </div>
@@ -1252,28 +1548,124 @@ export default function App() {
 
       {/* Global error */}
       {globalError && (
-        <div style={{ marginTop: 16, padding: '12px 14px', background: '#2a1020', border: '1px solid #5a2030', borderRadius: 8, fontSize: 13, color: '#f87171' }}>{globalError}</div>
+        <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>{globalError}</div>
+      )}
+
+      </>)}
+      </div>{/* ================= END CENTER · COMPOSE ================= */}
+
+      {/* ================= RIGHT · OUTPUT ================= */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+
+      {!scriptwriterMode && results.length === 0 && !caption && !globalError && (
+        <div style={{ background: 'var(--pe-surface)', border: '1px dashed var(--pe-line)', borderRadius: 12, padding: '28px 24px', color: 'var(--pe-ink-3)', fontSize: 15, lineHeight: 1.6 }}>
+          Your enhanced {t.type === 'image' ? 'image prompt' : t.type === 'text' ? 'script' : 'prompt'} will appear here. Fill in the scene (or load a reference image) and hit <span style={{ color: 'var(--pe-accent-ink)', fontWeight: 600 }}>Enhance Prompt</span>.
+        </div>
       )}
 
       {/* Vision caption */}
       {caption && (
-        <details style={{ marginTop: 16, background: '#0e0e1c', border: '1px solid #2a2a3f', borderRadius: 8, padding: '10px 14px' }}>
-          <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6f7a92', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <details style={{ marginTop: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             👁 vision description (read-only) · {effectiveVision}
             {visionStats && (visionStats.fromCache + visionStats.fresh > 0) && (
-              <span style={{ color: '#556', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.fromCache} cached, {visionStats.fresh} described</span>
+              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.fromCache} cached, {visionStats.fresh} described</span>
             )}
           </summary>
-          <div style={{ marginTop: 8, fontSize: 12.5, color: '#9aa6c0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{caption}</div>
+          <div style={{ marginTop: 8, fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{caption}</div>
         </details>
       )}
 
       {/* Results */}
       {results.length > 0 && (
         <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {canRender && results.some(r => r.text) && (
+           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>
+              <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>🎨 Render</span>
+              {grokRenderOn && geminiRenderOn && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  via
+                  <select value={renderProvider} onChange={e => setRenderProvider(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                    <option value="grok">Grok</option>
+                    <option value="gemini">Gemini</option>
+                  </select>
+                </label>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                aspect
+                <select value={imageAspect} onChange={e => setImageAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  {GROK_IMAGE_RESOLUTIONS.map(r => <option key={r.id} value={r.ar}>{r.label}</option>)}
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                count
+                <select value={imageCount} onChange={e => setImageCount(parseInt(e.target.value, 10) || 1)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              {imgProvider === 'grok' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  resolution
+                  <select value={imageResolution} onChange={e => setImageResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                    <option value="1k">1K</option>
+                    <option value="2k">2K</option>
+                  </select>
+                </label>
+              )}
+              <span style={{ color: 'var(--pe-ink-3)' }}>
+                model: {imgProvider === 'gemini'
+                  ? (cfg.geminiImageModel || 'gemini-2.5-flash-image')
+                  : (cfg.imageModel || 'grok-imagine-image-2.0')} · set in ⚙ Backend
+              </span>
+              {currentImages().length > 0 && (
+                <span style={{ color: 'var(--pe-ok)' }}>· image-to-image: {currentImages().length} reference{currentImages().length > 1 ? 's' : ''} loaded</span>
+              )}
+            </div>
+            {isGrok(cfg.base) && (
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>
+              <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>🎬 Grok video</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                duration
+                <select value={videoDuration} onChange={e => setVideoDuration(parseInt(e.target.value, 10) || 8)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  {Array.from({ length: 15 }, (_, n) => n + 1).map(n => <option key={n} value={n}>{n}s</option>)}
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                resolution
+                <select value={videoResolution} onChange={e => setVideoResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  <option value="480p">480p</option>
+                  <option value="720p">720p</option>
+                  <option value="1080p">1080p</option>
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                aspect
+                <select value={videoAspect} onChange={e => setVideoAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  {GROK_IMAGE_RESOLUTIONS.filter(r => r.id !== 'cine219').map(r => <option key={r.id} value={r.ar}>{r.label}</option>)}
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <input type="checkbox" checked={videoAudio} onChange={e => setVideoAudio(e.target.checked)} /> audio
+              </label>
+              <span style={{ color: 'var(--pe-ink-3)' }}>model: {cfg.videoModel || 'grok-imagine-video-1.5'} · set in ⚙ Backend</span>
+              {currentImages().length > 0 && <span style={{ color: 'var(--pe-ok)' }}>· image-to-video: first frame used</span>}
+              {videoResolution === '1080p' && currentImages().length > 0 && (
+                <span style={{ color: 'var(--pe-warn)' }}>· 1080p may be rejected for image-to-video — retries automatically</span>
+              )}
+            </div>
+            )}
+           </div>
+          )}
           {results.some(r => r.text) && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={exportBundle} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              {(resultsEdited || savedEditFlash) && (
+                <button onClick={saveResultsEdit} disabled={savedEditFlash}
+                  style={{ fontSize: 13, color: savedEditFlash ? 'var(--pe-ok)' : 'var(--pe-accent-ink)', background: 'none', border: `1px solid ${savedEditFlash ? 'var(--pe-ok-bg)' : 'var(--pe-accent-line)'}`, borderRadius: 6, padding: '5px 12px', cursor: savedEditFlash ? 'default' : 'pointer' }}>
+                  {savedEditFlash ? '✓ Saved to history' : '💾 Save edited prompt to history'}
+                </button>
+              )}
+              <button onClick={exportBundle} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>
                 Export ZIP (images + prompt{results.filter(r => r.text).length > 1 ? 's' : ''}) ↓
               </button>
             </div>
@@ -1281,25 +1673,136 @@ export default function App() {
           {results.map((r, i) => (
             <div key={i}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <label style={{ fontSize: 11, color: '#777', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{r.label}</label>
+                <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{r.label}</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {r.usage && <span style={{ fontSize: 11, color: '#555' }}>in {r.usage.input_tokens} · out {r.usage.output_tokens} tokens</span>}
-                  {r.text && <button onClick={() => copy(i)} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #333', background: copied === i ? '#1a3a2a' : '#1a1a2e', color: copied === i ? '#4ade80' : '#888', fontSize: 11, cursor: 'pointer' }}>{copied === i ? '✓ Copied' : 'Copy'}</button>}
+                  {r.usage && <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>in {r.usage.input_tokens} · out {r.usage.output_tokens} tokens</span>}
+                  {r.text && <button onClick={() => copy(i)} style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copied === i ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copied === i ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>{copied === i ? '✓ Copied' : 'Copy'}</button>}
+                  {r.text && (() => {
+                    const sent = comfySendStatus.idx === i ? comfySendStatus.state : 'idle'
+                    return (
+                      <button
+                        onClick={() => sendShotToComfy(i)} disabled={comfySendStatus.state === 'sending'}
+                        title={sent === 'error' ? comfySendStatus.error : `Uploads the current image(s), then pushes this prompt to ComfyUI slot "${comfyCfg.slot || 'default'}" for the Prompt Enhancer Bridge nodes to read.`}
+                        style={{
+                          padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                          background: sent === 'done' ? 'var(--pe-ok-bg)' : sent === 'error' ? 'var(--pe-danger-bg)' : 'var(--pe-surface)',
+                          color: sent === 'done' ? 'var(--pe-ok)' : sent === 'error' ? 'var(--pe-danger)' : 'var(--pe-accent-ink)',
+                          fontSize: 13, cursor: comfySendStatus.state === 'sending' ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {sent === 'sending' ? 'Sending…' : sent === 'done' ? '✓ Sent' : sent === 'error' ? '✕ Failed' : '→ ComfyUI'}
+                      </button>
+                    )
+                  })()}
+                  {r.text && canRender && (() => {
+                    const edit = currentImages().length > 0
+                    const verb = edit ? 'Render from image' : 'Render'
+                    const pModel = imgProvider === 'gemini' ? (cfg.geminiImageModel || 'gemini-2.5-flash-image') : (cfg.imageModel || 'grok-imagine-image-2.0')
+                    return (
+                    <button
+                      onClick={() => renderImage(i)} disabled={r.imgLoading}
+                      title={r.imgError ? r.imgError : `${edit ? 'Image-to-image edit' : 'Render'} with ${pModel} (${imageCount}× · ${imageAspect}${imgProvider === 'grok' ? ` · ${imageResolution}` : ''})${edit ? ` · ${currentImages().length} reference image(s)` : ''}.`}
+                      style={{
+                        padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                        background: r.imgError ? 'var(--pe-danger-bg)' : r.images?.length ? 'var(--pe-ok-bg)' : 'var(--pe-surface)',
+                        color: r.imgError ? 'var(--pe-danger)' : r.images?.length ? 'var(--pe-ok)' : 'var(--pe-accent-ink)',
+                        fontSize: 13, cursor: r.imgLoading ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {r.imgLoading ? 'Rendering…' : r.imgError ? '✕ Retry render' : r.images?.length ? '🎨 Re-render' : `🎨 ${verb}`}
+                    </button>
+                    )
+                  })()}
+                  {r.text && isGrok(cfg.base) && (() => {
+                    const fromImg = currentImages().length > 0
+                    const label = r.vidLoading
+                      ? `Rendering video… ${Math.round(r.vidProgress || 0)}%`
+                      : r.vidError ? '✕ Retry video'
+                      : r.video ? '🎬 Re-render video'
+                      : fromImg ? '🎬 Render video from image' : '🎬 Render video'
+                    return (
+                      <button
+                        onClick={() => renderVideo(i)} disabled={r.vidLoading}
+                        title={r.vidError || `Submit + poll ${cfg.videoModel || 'grok-imagine-video-1.5'} (${videoDuration}s · ${videoResolution} · ${videoAspect} · audio ${videoAudio ? 'on' : 'off'})${fromImg ? ' · image-to-video' : ''}. Takes 1–5 min — keep the tab open.`}
+                        style={{
+                          padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                          background: r.vidError ? 'var(--pe-danger-bg)' : r.video ? 'var(--pe-ok-bg)' : 'var(--pe-surface)',
+                          color: r.vidError ? 'var(--pe-danger)' : r.video ? 'var(--pe-ok)' : 'var(--pe-accent-ink)',
+                          fontSize: 13, cursor: r.vidLoading ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })()}
                 </div>
               </div>
-              {r.loading && <div style={{ padding: '18px 20px', background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, fontSize: 13, color: '#555' }}>Generating…</div>}
-              {r.error && <div style={{ padding: '12px 14px', background: '#2a1020', border: '1px solid #5a2030', borderRadius: 8, fontSize: 13, color: '#f87171' }}>Error: {r.error}</div>}
+              {r.loading && <div style={{ padding: '18px 20px', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>Generating…</div>}
+              {r.error && <div style={{ padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Error: {r.error}</div>}
               {r.text && (
                 <textarea value={r.text} onChange={e => editResult(i, e.target.value)}
                   rows={Math.max(4, Math.ceil(r.text.length / 70))} spellCheck={false}
-                  style={{ width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: '#d0d0e8', whiteSpace: 'pre-wrap', fontFamily: "'Georgia', serif", resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
-                  onFocus={e => e.target.style.borderColor = '#5a4fcf'} onBlur={e => e.target.style.borderColor = '#2e2e44'} />
+                  style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
+                  onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
+              )}
+              {r.imgError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Render failed: {r.imgError}</div>}
+              {r.images?.length > 0 && (
+                <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                  {r.images.map((img, k) => img.b64 && (
+                    <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 340 }}>
+                      <img src={`data:${img.mediaType || 'image/png'};base64,${img.b64}`} alt={`render ${k + 1}`}
+                        style={{ width: '100%', borderRadius: 10, border: '1px solid var(--pe-line)', display: 'block' }} />
+                      <a href={`data:${img.mediaType || 'image/jpeg'};base64,${img.b64}`}
+                        download={`render-${i + 1}-${k + 1}.${imgExt(img.mediaType)}`}
+                        style={{ fontSize: 13, color: 'var(--pe-accent-ink)', textDecoration: 'none' }}>⬇ Save image</a>
+                      {isGrok(cfg.base) && (() => {
+                        const st = upStatus[`${i}-${k}`]
+                        return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <button onClick={() => upscaleImage(i, k)} disabled={st === 'loading'}
+                              title="Re-runs this image through Grok img2img at 2K. Being image-to-image, fine details shift slightly."
+                              style={{ fontSize: 13, color: st && st.error ? 'var(--pe-danger)' : img.upscaled ? 'var(--pe-ok)' : 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: st === 'loading' ? 'wait' : 'pointer' }}>
+                              {st === 'loading' ? 'Upscaling…' : st && st.error ? '✕ Retry 2K' : img.upscaled ? '✓ 2K' : '⬆ Upscale to 2K'}
+                            </button>
+                            <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>img2img — slightly alters the image</span>
+                            {st && st.error && <span style={{ fontSize: 13.5, color: 'var(--pe-danger)' }}>{st.error}</span>}
+                          </div>
+                        )
+                      })()}
+                      {img.revisedPrompt && img.revisedPrompt.trim() && img.revisedPrompt.trim() !== r.text.trim() && (
+                        <details style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
+                          <summary style={{ cursor: 'pointer' }}>Grok's revised prompt</summary>
+                          <div style={{ marginTop: 4, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{img.revisedPrompt}</div>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {r.vidError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Video render failed: {r.vidError}</div>}
+              {r.vidLoading && !r.vidError && (
+                <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, fontSize: 13.5, color: 'var(--pe-ink-3)' }}>
+                  Rendering video… {r.vidStatus || 'pending'} {Math.round(r.vidProgress || 0)}% · takes a few minutes; keep this tab open.
+                </div>
+              )}
+              {r.video && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 480 }}>
+                  <video controls src={r.video.b64 ? `data:${r.video.mediaType || 'video/mp4'};base64,${r.video.b64}` : r.video.url}
+                    style={{ width: '100%', borderRadius: 10, border: '1px solid var(--pe-line)', display: 'block' }} />
+                  {r.video.b64
+                    ? <a href={`data:${r.video.mediaType || 'video/mp4'};base64,${r.video.b64}`} download={`grok-video-${i + 1}.mp4`}
+                        style={{ fontSize: 13, color: 'var(--pe-accent-ink)', textDecoration: 'none' }}>⬇ Save video</a>
+                    : <>
+                        <a href={r.video.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: 'var(--pe-accent-ink)', textDecoration: 'none' }}>Open video ↗</a>
+                        <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>The xAI link expires after a while — open and download it soon.</span>
+                      </>}
+                  {r.video.duration ? <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>{r.video.duration}s</span> : null}
+                </div>
               )}
             </div>
           ))}
         </div>
       )}
-      </>)}
 
       {(caption || adaptSourceOverride || results.some(r => r.text)) && (
         <AdaptPanel
@@ -1317,16 +1820,16 @@ export default function App() {
           dialogue={dialogue} delivery={delivery} promptLength={promptLength}
           soundscape={soundscape} music={music}
           duration={duration} h3RatioId={h3RatioId}
-          onSaveAdapt={saveHistory}
+          onSaveAdapt={(snap, outs) => saveHistory(snap, outs, false)}
           onClose={() => setAdaptSourceOverride(null)}
         />
       )}
 
       {/* History */}
-      <div style={{ marginTop: 28, borderTop: '1px solid #1e1e30', paddingTop: 16 }}>
+      <div style={{ marginTop: 28, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <button onClick={() => setHistoryOpen(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#777', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--pe-ink-3)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
             History {history.length > 0 ? `(${histFiltersActive ? `${visibleHistory.length}/${history.length}` : history.length})` : ''}
           </button>
@@ -1334,17 +1837,23 @@ export default function App() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }}
                 onChange={e => { if (e.target.files[0]) importHistory(e.target.files[0]); e.target.value = '' }} />
-              <button onClick={exportHistory} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Export ↓</button>
-              <button onClick={() => importInputRef.current?.click()} style={{ fontSize: 11, color: '#9a8fd8', background: 'none', border: '1px solid #2d2060', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Import ↑</button>
-              {history.length > 0 && <button onClick={clearHistory} style={{ fontSize: 11, color: '#a06a6a', background: 'none', border: '1px solid #3a2040', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Clear</button>}
+              <button onClick={exportHistory} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Export ↓</button>
+              <button onClick={() => importInputRef.current?.click()} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Import ↑</button>
+              {history.length > 0 && <button onClick={clearHistory} style={{ fontSize: 13, color: 'var(--pe-danger)', background: 'none', border: '1px solid var(--pe-danger-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Clear</button>}
             </div>
           )}
         </div>
         {historyOpen && history.length > 1 && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
             {(() => {
-              const fsel = { fontSize: 11, color: '#c4b8ff', background: '#12121f', border: '1px solid #2d2060', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', maxWidth: 200 }
+              const fsel = { fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', maxWidth: 200 }
               return <>
+                <input
+                  type="search" value={histSearch} onChange={e => setHistSearch(e.target.value)}
+                  placeholder="Search history…" spellCheck={false}
+                  style={{ ...fsel, cursor: 'text', minWidth: 160, maxWidth: 240, color: 'var(--pe-ink)' }}
+                  title="Match scene, prompt text, vision caption, model or project (space = AND)"
+                />
                 {(allProjects.length > 0 || history.some(h => !h.project)) && (
                   <select value={historyFilter} onChange={e => setHistoryFilter(e.target.value)} style={fsel} title="Project">
                     <option value="all">All projects</option>
@@ -1372,17 +1881,17 @@ export default function App() {
                   </select>
                 )}
                 {histFiltersActive && (
-                  <button onClick={resetHistFilters} style={{ fontSize: 11, color: '#888', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>Reset</button>
+                  <button onClick={resetHistFilters} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>Reset</button>
                 )}
               </>
             })()}
           </div>
         )}
         {historyOpen && history.length === 0 && (
-          <div style={{ fontSize: 12, color: '#555', padding: '8px 0' }}>No history yet.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', padding: '8px 0' }}>No history yet.</div>
         )}
         {historyOpen && history.length > 0 && visibleHistory.length === 0 && (
-          <div style={{ fontSize: 12, color: '#555', padding: '8px 0' }}>
+          <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', padding: '8px 0' }}>
             No generations match these filters.
           </div>
         )}
@@ -1393,32 +1902,32 @@ export default function App() {
                 const ideaShort = h.idea && h.idea.length > 80 ? h.idea.slice(0, 80) + '…' : (h.idea || '')
                 const phaseLabel = h.phase === 'done' ? 'Done' : h.phase === 'dircut' ? "Director's cut" : 'Script'
                 return (
-                  <div key={i} style={{ background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '12px 14px' }}>
+                  <div key={i} style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
+                      <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(h.ts).toLocaleString()}</span>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         {entryProjectSelect(h)}
-                        <button onClick={() => restore(h)} style={{ fontSize: 11, color: '#c4b8ff', background: '#1e1850', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore</button>
-                        <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
+                        <button onClick={() => restore(h)} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore</button>
+                        <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                       </div>
                     </div>
-                    <div style={{ fontSize: 11.5, color: '#9a8fd8', marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 4 }}>
                       Scriptwriter · {h.model} · {phaseLabel}
                       {h.script ? ` · ${h.script.scenes?.length ?? 0} scenes` : ''}
                       {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} shots` : ''}
                       {h.finalPrompts ? ` · ${h.finalPrompts.filter(p => p.text).length} prompts` : ''}
                     </div>
-                    {h.script?.title && <div style={{ fontSize: 12, color: '#c4b8ff', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
-                    {ideaShort && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
+                    {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
+                    {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
                     {h.finalPrompts && h.finalPrompts.filter(p => p.text).length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
                         {h.finalPrompts.filter(p => p.text).map((p, pi) => (
-                          <div key={pi} style={{ background: '#12121f', border: '1px solid #2a2a3f', borderRadius: 8, padding: '8px 10px' }}>
+                          <div key={pi} style={{ background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '8px 10px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                              <span style={{ fontSize: 10, color: '#7c6af7', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shot {p.shotNumber} · {p.sceneTitle}</span>
-                              <button onClick={() => navigator.clipboard.writeText(p.text)} style={{ fontSize: 10, color: '#888', background: 'none', border: '1px solid #333', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
+                              <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shot {p.shotNumber} · {p.sceneTitle}</span>
+                              <button onClick={() => navigator.clipboard.writeText(p.text)} style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
                             </div>
-                            <div style={{ fontSize: 12.5, color: '#cfcfe0', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: "'Georgia', serif" }}>{p.text}</div>
+                            <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)' }}>{p.text}</div>
                           </div>
                         ))}
                       </div>
@@ -1433,38 +1942,38 @@ export default function App() {
               const cl = CREATIVITY_OPTIONS.find(c => c.id === h.creativity)?.label
               const moves = (h.moves || []).map(moveLabel)
               return (
-                <div key={i} style={{ background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '12px 14px' }}>
+                <div key={i} style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, color: '#888' }}>{new Date(h.ts).toLocaleString()}</span>
+                    <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(h.ts).toLocaleString()}</span>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                       {entryProjectSelect(h)}
                       {h.outputs?.length > 0 && (
                         <button
                           onClick={() => startAdapt(h)}
                           title="Rewrite this generation's prompt for another model"
-                          style={{ fontSize: 11, color: '#c4b8ff', background: 'none', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
+                          style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
                         >⇄ Adapt</button>
                       )}
-                      <button onClick={() => restore(h)} style={{ fontSize: 11, color: '#c4b8ff', background: '#1e1850', border: '1px solid #3a2f6e', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore settings</button>
-                      <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 11, color: '#777', background: 'none', border: '1px solid #333', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
+                      <button onClick={() => restore(h)} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore settings</button>
+                      <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                     </div>
                   </div>
-                  <div style={{ fontSize: 11.5, color: '#9a8fd8', marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 6 }}>
                     {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : h.frameMode === 'last' ? ' · last frame' : h.frameMode === 'ref' ? ' · reference' : ''}{h.ratio ? ` · ${h.ratio}` : ''}{h.adaptedFrom ? ` · ⇄ from ${(TARGETS[h.adaptedFrom.target]?.label || h.adaptedFrom.target).split(' · ')[0]}` : ''}
                   </div>
-                  {moves.length > 0 && <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>Camera: {moves.join(', ')}</div>}
-                  <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>{h.scene ? h.scene : <span style={{ color: '#666' }}>(proposed from image)</span>}</div>
-                  {h.dialogue && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Dialogue: "{h.dialogue}"{h.delivery ? ` (${h.delivery})` : ''}</div>}
-                  {h.soundscape && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Soundscape: {h.soundscape}</div>}
-                  {h.music && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Music: {h.music}</div>}
-                  {h.negative && <div style={{ fontSize: 12, color: '#bbb', marginBottom: 6 }}>Avoid: {h.negative}</div>}
+                  {moves.length > 0 && <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 6 }}>Camera: {moves.join(', ')}</div>}
+                  <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>{h.scene ? h.scene : <span style={{ color: 'var(--pe-ink-3)' }}>(proposed from image)</span>}</div>
+                  {h.dialogue && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Dialogue: "{h.dialogue}"{h.delivery ? ` (${h.delivery})` : ''}</div>}
+                  {h.soundscape && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Soundscape: {h.soundscape}</div>}
+                  {h.music && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Music: {h.music}</div>}
+                  {h.negative && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Avoid: {h.negative}</div>}
                   {(h.firstImg || h.midImg || h.lastImg) && (
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
                       {[h.firstImg, h.midImg, h.lastImg].filter(Boolean).map((im, ii) =>
                         typeof im === 'object' && im.base64
                           ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={im.fileName}
-                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid #333' }} />
-                          : <span key={ii} style={{ fontSize: 11, color: '#777' }}>{im}</span>
+                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
+                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{im}</span>
                       )}
                     </div>
                   )}
@@ -1473,19 +1982,36 @@ export default function App() {
                       {h.refImages.map((im, ii) =>
                         typeof im === 'object' && im.base64
                           ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={`${im.fileName} (${im.role})`}
-                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid #333' }} />
-                          : <span key={ii} style={{ fontSize: 11, color: '#777' }}>{im}</span>
+                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
+                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{im}</span>
                       )}
                     </div>
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                     {(h.outputs || []).map((o, oi) => (
-                      <div key={oi} style={{ background: '#12121f', border: '1px solid #2a2a3f', borderRadius: 8, padding: '8px 10px' }}>
+                      <div key={oi} style={{ background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '8px 10px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                          <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{o.label}</span>
-                          <button onClick={() => navigator.clipboard.writeText(o.text)} style={{ fontSize: 10, color: '#888', background: 'none', border: '1px solid #333', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
+                          <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{o.label}</span>
+                          <button onClick={() => navigator.clipboard.writeText(o.text)} style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
                         </div>
-                        <div style={{ fontSize: 12.5, color: '#cfcfe0', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: "'Georgia', serif" }}>{o.text}</div>
+                        <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)' }}>{o.text}</div>
+                        {Array.isArray(o.images) && o.images.length > 0 && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                            {o.images.map((img, k) => img.b64 && (
+                              <img key={k} src={`data:${img.mediaType || 'image/png'};base64,${img.b64}`} alt={`render ${k + 1}`} title="🎨 Grok render"
+                                style={{ width: 54, height: 54, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
+                            ))}
+                          </div>
+                        )}
+                        {o.video && (o.video.url || o.video.b64) && (
+                          <div style={{ marginTop: 6 }}>
+                            <a href={o.video.b64 ? `data:${o.video.mediaType || 'video/mp4'};base64,${o.video.b64}` : o.video.url}
+                               target="_blank" rel="noreferrer" {...(o.video.b64 ? { download: 'grok-video.mp4' } : {})}
+                               style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', textDecoration: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px' }}>
+                              🎬 video{o.video.duration ? ` · ${o.video.duration}s` : ''}{o.video.b64 ? '' : ' ↗ (link may be expired)'}
+                            </a>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1495,6 +2021,10 @@ export default function App() {
           </div>
         )}
       </div>
+
+      </div>{/* ================= END RIGHT · OUTPUT ================= */}
+
+      </div>{/* ================= END GRID ================= */}
     </div>
   )
 }

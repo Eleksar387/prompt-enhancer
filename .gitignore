@@ -3,3 +3,6 @@ dist/
 .env
 .env.local
 *Zone.Identifier
+.claude/skills/*/screenshots/
+prompt-enhancer-history-RECOVERED*.json
+recovered-history-readable.txt

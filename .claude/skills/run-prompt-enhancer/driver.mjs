@@ -53,7 +53,11 @@ async function handle(line) {
   if (!trimmed || trimmed.startsWith('#')) return
   const [cmd, rest] = splitOne(trimmed)
 
-  if (cmd === 'nav') {
+  if (cmd === 'viewport') {
+    const [w, h] = rest.trim().split(/\s+/).map(Number)
+    await page.setViewportSize({ width: w || 1440, height: h || 900 })
+    console.log(`OK viewport ${w}x${h}`)
+  } else if (cmd === 'nav') {
     await page.goto(rest, { waitUntil: 'networkidle' })
     console.log(`OK nav ${rest}`)
   } else if (cmd === 'wait-for') {
