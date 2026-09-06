@@ -1245,6 +1245,8 @@ export default function App() {
           writerModel={effectiveWriter}
           initialState={scriptwriterInitial}
           onSaveHistory={saveScriptHistory}
+          comfyCfg={comfyCfg}
+          setComfyCfg={setComfyCfg}
         />
       ) : (<>
 
@@ -1919,6 +1921,22 @@ export default function App() {
                     </div>
                     {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
                     {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
+                    {(() => {
+                      const tiles = (h.framePrompts || []).flatMap((fp, si) =>
+                        ['first', 'mid', 'last']
+                          .filter(fk => fp?.frames?.[fk]?.image?.b64)
+                          .map(fk => ({ im: fp.frames[fk].image, si, fk })))
+                      if (!tiles.length) return null
+                      return (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
+                          {tiles.map((t, ti) => (
+                            <img key={ti} src={`data:${t.im.mediaType || 'image/jpeg'};base64,${t.im.b64}`}
+                              title={`Shot ${(h.directorsCut?.shots?.[t.si]?.shot_number) ?? t.si + 1} · ${t.fk} frame`}
+                              style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--pe-line)' }} />
+                          ))}
+                        </div>
+                      )
+                    })()}
                     {h.finalPrompts && h.finalPrompts.filter(p => p.text).length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
                         {h.finalPrompts.filter(p => p.text).map((p, pi) => (

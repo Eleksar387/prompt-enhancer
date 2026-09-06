@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash } from '../utils'
+import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash, shrinkToJpeg } from '../utils'
 import { hasDragImage, takeDragImage } from '../imageDrag'
 
 export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
@@ -17,20 +17,10 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
     const reader = new FileReader()
     reader.onload = (e) => {
       const img = new Image()
-      img.onload = () => {
+      img.onload = async () => {
         const nativeW = img.naturalWidth, nativeH = img.naturalHeight
-        const MAX = 1536
-        let w = img.width, h = img.height
-        if (w > MAX || h > MAX) {
-          if (w >= h) { h = Math.round(h * MAX / w); w = MAX }
-          else { w = Math.round(w * MAX / h); h = MAX }
-        }
-        const canvas = document.createElement('canvas')
-        canvas.width = w; canvas.height = h
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
-        let dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-        if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
-        const base64 = dataUrl.split(',')[1]
+        const { base64 } = await shrinkToJpeg(img, 1536, 0.85)
+        const dataUrl = `data:image/jpeg;base64,${base64}`
         const obj = {
           base64, mediaType: 'image/jpeg',
           previewUrl: dataUrl, originalUrl: e.target.result,

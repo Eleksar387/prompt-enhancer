@@ -1,11 +1,12 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { callOllama } from '../api'
 import {
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, buildLtxGuideSystemPrompt,
   SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
 } from '../constants'
-import { btn } from '../utils'
+import { btn, shrinkToJpeg } from '../utils'
 import { generateId } from '../db'
+import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 
 const GENRE_OPTIONS = [
   { id: 'auto',     label: 'Auto' },
@@ -41,6 +42,12 @@ const genBtn = (disabled) => ({
   fontSize: 14, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
 })
 
+// Small neutral action link/button used around attached frame images.
+const ghostBtn = {
+  padding: '3px 9px', borderRadius: 5, border: '1px solid var(--pe-line)',
+  background: 'var(--pe-surface)', color: 'var(--pe-ink-3)', fontSize: 12.5, cursor: 'pointer',
+}
+
 const FRAME_TARGETS = [
   { id: 'flux',       label: 'Flux.dev' },
   { id: 'flux2klein', label: 'Klein'    },
@@ -57,16 +64,51 @@ const FRAME_LABELS = { first: 'First frame', mid: 'Mid frame', last: 'Last frame
 
 const emptyFrameEntry = () => ({
   frames: {
-    first: { target: 'flux', text: '', loading: false, error: '' },
-    mid:   { target: 'flux', text: '', loading: false, error: '' },
-    last:  { target: 'flux', text: '', loading: false, error: '' },
+    first: { target: 'flux', text: '', image: null, loading: false, error: '' },
+    mid:   { target: 'flux', text: '', image: null, loading: false, error: '' },
+    last:  { target: 'flux', text: '', image: null, loading: false, error: '' },
   }
 })
 
+// Persisted frame entries carry only { target, text, image }; rebuild the
+// transient loading/error fields and tolerate a missing / older shape.
+const rehydrateFrameEntry = (fp) => ({
+  frames: Object.fromEntries(FRAME_KEYS.map(k => [k, {
+    target: fp?.frames?.[k]?.target || 'flux',
+    text:   fp?.frames?.[k]?.text   || '',
+    image:  fp?.frames?.[k]?.image  || null,
+    loading: false, error: '',
+  }])),
+})
+
+const serializeFramePrompts = (fps) => (fps || []).map(fp => ({
+  frames: Object.fromEntries(FRAME_KEYS.map(k => {
+    const f = fp.frames[k]
+    return [k, { target: f.target, text: f.text, image: f.image || null }]
+  })),
+}))
+
+// One scriptwriter history record over ~12 MB starts to be a liability
+// (it is re-put in full on every phase save). Above it, drop attached frame
+// images largest-first and tell the user.
+const HISTORY_SOFT_LIMIT = 12 * 1024 * 1024
+
 const STEPS = ['Script', "Director's Cut", 'LTX Prompts']
 
-export default function ScriptwriterPanel({ cfg, writerModel, initialState = null, onSaveHistory = null }) {
+export default function ScriptwriterPanel({
+  cfg, writerModel, initialState = null, onSaveHistory = null,
+  comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
+}) {
   const sessionId = useRef(initialState?.id || generateId())
+
+  // ComfyUI handoff config — use the shared one from App when provided, else a
+  // self-contained local copy so the panel still works standalone.
+  const [comfyCfgLocal, setComfyCfgLocal] = useState(loadComfyCfg)
+  const comfyCfg = comfyCfgProp || comfyCfgLocal
+  const setComfyCfg = setComfyCfgProp || setComfyCfgLocal
+  useEffect(() => { if (!setComfyCfgProp) saveComfyCfg(comfyCfgLocal) }, [comfyCfgLocal, setComfyCfgProp])
+  // { key: "<shotIdx>-<frameKey>" | null, state: 'idle'|'sending'|'done'|'error', error }
+  const [comfyFrame, setComfyFrame] = useState({ key: null, state: 'idle', error: '' })
 
   const [phase, setPhase] = useState(initialState?.phase || 'input')
   const [idea, setIdea] = useState(initialState?.idea || '')
@@ -77,26 +119,31 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
   const [finalPrompts, setFinalPrompts] = useState(
     initialState?.finalPrompts?.map(p => ({ ...p, loading: false, error: '' })) || []
   )
-  const [framePrompts, setFramePrompts] = useState(
-    initialState?.framePrompts?.map(fp => ({
-      frames: {
-        first: { ...fp.frames.first, loading: false, error: '' },
-        mid:   { ...fp.frames.mid,   loading: false, error: '' },
-        last:  { ...fp.frames.last,  loading: false, error: '' },
-      }
-    })) || []
-  )
+  const [framePrompts, setFramePrompts] = useState(() => {
+    if (initialState?.framePrompts?.length) return initialState.framePrompts.map(rehydrateFrameEntry)
+    if (initialState?.directorsCut?.shots?.length) return initialState.directorsCut.shots.map(() => emptyFrameEntry())
+    return []
+  })
   const [error, setError] = useState('')
   const [rawFallback, setRawFallback] = useState('')
   const [copied, setCopied] = useState(null)
   const [copiedAll, setCopiedAll] = useState(false)
   const [copiedFrame, setCopiedFrame] = useState(null)
+  // ComfyUI output picker: { key: "<shotIdx>-<frameKey>" | null, loading, error, items: [] }
+  const [picker, setPicker] = useState({ key: null, loading: false, error: '', items: [] })
+  // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
+  const [attach, setAttach] = useState({ key: null, state: 'idle', error: '' })
+  const [historyNote, setHistoryNote] = useState('')
 
   const reset = () => {
     sessionId.current = generateId()
     setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(3)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
+    setComfyFrame({ key: null, state: 'idle', error: '' })
+    setPicker({ key: null, loading: false, error: '', items: [] })
+    setAttach({ key: null, state: 'idle', error: '' })
+    setHistoryNote('')
   }
 
   const parseJSON = (text) => {
@@ -138,13 +185,15 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
       const data = parseJSON(text)
       data.shots = data.shots.map(s => ({ ...s, duration: s.duration || 4 }))
+      const freshFrames = data.shots.map(() => emptyFrameEntry())
       setDirectorsCut(data)
-      setFramePrompts(data.shots.map(() => emptyFrameEntry()))
+      setFramePrompts(freshFrames)
       setPhase('dircut')
       onSaveHistory?.({
         id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
         model: writerModel, idea: idea.trim(), genre, sceneCount,
         phase: 'dircut', script, directorsCut: data, finalPrompts: null,
+        framePrompts: serializeFramePrompts(freshFrames),
       })
     } catch (e) {
       setError(e.message)
@@ -181,6 +230,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
       id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
       model: writerModel, idea: idea.trim(), genre, sceneCount,
       phase: 'done', script, directorsCut, finalPrompts: results,
+      framePrompts: serializeFramePrompts(framePrompts),
     })
   }
 
@@ -237,6 +287,119 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
     setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
       ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], text: val } }
     }))
+  }
+
+  // Pushes one generated frame-image prompt to the Prompt Enhancer Bridge node
+  // pack in ComfyUI (same slot mechanism the main app's "→ ComfyUI" button uses).
+  // No input images in the scriptwriter flow, so the shot carries an empty image set.
+  const sendFrameToComfy = async (shotIdx, frameKey) => {
+    const fp = framePrompts[shotIdx]?.frames[frameKey]
+    if (!fp?.text) return
+    const shot = directorsCut.shots[shotIdx]
+    const ck = `${shotIdx}-${frameKey}`
+    setComfyFrame({ key: ck, state: 'sending', error: '' })
+    try {
+      await sendShot({
+        positive: fp.text, negative: '', target: fp.target,
+        duration: shot.duration || 4, frameMode: 'single',
+        shot: shot.shot_number, scene: shot.scene_title, frame: frameKey,
+        images: { first: '', mid: '', last: '', ref: [] },
+      }, comfyCfg.url, comfyCfg.slot)
+      setComfyFrame({ key: ck, state: 'done', error: '' })
+      setTimeout(() => setComfyFrame(prev =>
+        prev.key === ck && prev.state === 'done' ? { key: null, state: 'idle', error: '' } : prev), 2500)
+    } catch (e) {
+      setComfyFrame({ key: ck, state: 'error', error: e.message })
+    }
+  }
+
+  // Trim a would-be-oversized history payload by nulling the largest attached
+  // frame images first. Returns { payload, dropped }.
+  const guardHistorySize = (payload) => {
+    if (JSON.stringify(payload).length <= HISTORY_SOFT_LIMIT) return { payload, dropped: 0 }
+    const clone = JSON.parse(JSON.stringify(payload))
+    const imgs = []
+    ;(clone.framePrompts || []).forEach((fp, si) => FRAME_KEYS.forEach(k => {
+      const im = fp.frames?.[k]?.image
+      if (im?.b64) imgs.push({ si, k, len: im.b64.length })
+    }))
+    imgs.sort((a, b) => b.len - a.len)
+    let dropped = 0
+    for (const it of imgs) {
+      if (JSON.stringify(clone).length <= HISTORY_SOFT_LIMIT) break
+      clone.framePrompts[it.si].frames[it.k].image = null
+      dropped++
+    }
+    return { payload: clone, dropped }
+  }
+
+  // Re-save the whole session under the same id at the CURRENT phase — used after
+  // a frame image is attached or removed between phases. Pass the just-computed
+  // framePrompts array to sidestep the state-update lag.
+  const persistState = (framePromptsOverride) => {
+    if (!onSaveHistory || !directorsCut) return
+    const raw = {
+      id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
+      model: writerModel, idea: idea.trim(), genre, sceneCount,
+      phase, script, directorsCut,
+      finalPrompts: (phase === 'done' || phase === 'prompting') && finalPrompts.length
+        ? finalPrompts.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
+        : null,
+      framePrompts: serializeFramePrompts(framePromptsOverride || framePrompts),
+    }
+    const { payload, dropped } = guardHistorySize(raw)
+    setHistoryNote(dropped
+      ? `${dropped} attached image${dropped === 1 ? '' : 's'} couldn't be saved to history — the record got too large. ${dropped === 1 ? 'It stays' : 'They stay'} on screen until you reload.`
+      : '')
+    onSaveHistory(payload)
+  }
+
+  // --- pull a rendered image back from ComfyUI --------------------------------
+  const loadPickerItems = async (key) => {
+    setPicker({ key, loading: true, error: '', items: [] })
+    try {
+      const items = await fetchComfyOutputs(comfyCfg.url, { max: 24 })
+      setPicker({ key, loading: false, error: items.length ? '' : 'No recent ComfyUI outputs found. Render one first, then Refresh.', items })
+    } catch (e) {
+      setPicker({ key, loading: false, error: e.message, items: [] })
+    }
+  }
+
+  const openPicker = (shotIdx, frameKey) => {
+    const key = `${shotIdx}-${frameKey}`
+    if (picker.key === key) { setPicker({ key: null, loading: false, error: '', items: [] }); return }
+    loadPickerItems(key)
+  }
+
+  const attachImage = async (shotIdx, frameKey, item) => {
+    const key = `${shotIdx}-${frameKey}`
+    setAttach({ key, state: 'fetching', error: '' })
+    try {
+      const blob = await fetchComfyImageBlob(item.viewUrl)
+      const { base64, mediaType, width, height } = await shrinkToJpeg(blob, 1536, 0.85)
+      const image = {
+        b64: base64, mediaType, width, height,
+        source: { filename: item.filename, subfolder: item.subfolder, type: item.type },
+        ts: Date.now(),
+      }
+      const next = framePrompts.map((fp, i) => i !== shotIdx ? fp : {
+        ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], image } },
+      })
+      setFramePrompts(next)
+      setAttach({ key: null, state: 'idle', error: '' })
+      setPicker({ key: null, loading: false, error: '', items: [] })
+      persistState(next)
+    } catch (e) {
+      setAttach({ key, state: 'error', error: e.message })
+    }
+  }
+
+  const removeFrameImage = (shotIdx, frameKey) => {
+    const next = framePrompts.map((fp, i) => i !== shotIdx ? fp : {
+      ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], image: null } },
+    })
+    setFramePrompts(next)
+    persistState(next)
   }
 
   const copyAll = () => {
@@ -398,6 +561,29 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
       {/* Phase 3 — director's cut review */}
       {['dircut', 'prompting', 'done'].includes(phase) && directorsCut && (
         <div>
+          {framePrompts.some(fp => fp && FRAME_KEYS.some(k => fp.frames[k].text)) && (
+            <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ ...lbl, margin: 0 }}>ComfyUI</span>
+              <input value={comfyCfg.url}
+                onChange={e => setComfyCfg({ ...comfyCfg, url: e.target.value })}
+                placeholder="http://127.0.0.1:8188"
+                style={{ ...field({ width: 200, fontSize: 13 }) }}
+                onFocus={focusBorder} onBlur={blurBorder} />
+              <input value={comfyCfg.slot}
+                onChange={e => setComfyCfg({ ...comfyCfg, slot: e.target.value })}
+                placeholder="default"
+                style={{ ...field({ width: 100, fontSize: 13 }) }}
+                onFocus={focusBorder} onBlur={blurBorder} />
+              <span style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                push slot for → ComfyUI · also the source for ＋ Attach image (needs --enable-cors-header)
+              </span>
+            </div>
+          )}
+          {historyNote && (
+            <div style={{ ...card, fontSize: 12.5, color: 'var(--pe-danger)', background: 'var(--pe-danger-bg)', borderColor: 'var(--pe-danger-line)' }}>
+              {historyNote}
+            </div>
+          )}
           {directorsCut.shots.map((shot, si) => (
             <div key={si} style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -482,6 +668,35 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                               {copiedFrame === ck ? '✓' : 'Copy'}
                             </button>
                           )}
+                          {fp.text && !fp.loading && (() => {
+                            const cs = comfyFrame.key === ck ? comfyFrame.state : 'idle'
+                            return (
+                              <button onClick={() => sendFrameToComfy(si, fk)}
+                                disabled={comfyFrame.state === 'sending'}
+                                title={cs === 'error' ? comfyFrame.error
+                                  : `Pushes this ${FRAME_LABELS[fk].toLowerCase()} prompt to ComfyUI slot "${comfyCfg.slot || 'default'}" for the Prompt Enhancer Bridge nodes to read.`}
+                                style={{
+                                  padding: '4px 10px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                                  background: cs === 'done' ? 'var(--pe-ok-bg)' : cs === 'error' ? 'var(--pe-danger-bg)' : 'var(--pe-surface)',
+                                  color: cs === 'done' ? 'var(--pe-ok)' : cs === 'error' ? 'var(--pe-danger)' : 'var(--pe-ink-3)',
+                                  fontSize: 13, cursor: comfyFrame.state === 'sending' ? 'wait' : 'pointer',
+                                }}>
+                                {cs === 'sending' ? 'Sending…' : cs === 'done' ? '✓ Sent' : cs === 'error' ? '✕ Failed' : '→ ComfyUI'}
+                              </button>
+                            )
+                          })()}
+                          {fp.text && !fp.loading && (
+                            <button onClick={() => openPicker(si, fk)}
+                              title="Pick a rendered image from ComfyUI's recent outputs and attach it to this frame."
+                              style={{
+                                padding: '4px 10px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                                background: picker.key === ck ? 'var(--pe-accent-bg)' : 'var(--pe-surface)',
+                                color: picker.key === ck ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
+                                fontSize: 13, cursor: 'pointer',
+                              }}>
+                              {fp.image ? '🖼 Change image' : '＋ Attach image'}
+                            </button>
+                          )}
                         </div>
                         {fp.error && <div style={{ fontSize: 13.5, color: 'var(--pe-danger)', marginBottom: 4 }}>{fp.error}</div>}
                         {fp.text && (
@@ -495,6 +710,57 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                               transition: 'border-color 0.15s',
                             }}
                             onFocus={focusBorder} onBlur={blurBorder} />
+                        )}
+
+                        {fp.image && (
+                          <div style={{ marginTop: 8 }}>
+                            <img src={`data:${fp.image.mediaType};base64,${fp.image.b64}`} alt={`${FRAME_LABELS[fk]} render`}
+                              style={{ maxWidth: '100%', maxHeight: 360, borderRadius: 8, border: '1px solid var(--pe-line)', display: 'block' }} />
+                            <div style={{ display: 'flex', gap: 8, marginTop: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 12, color: 'var(--pe-ink-3)' }}>
+                                {fp.image.width}×{fp.image.height} · {fp.image.source?.filename}
+                              </span>
+                              <button onClick={() => openPicker(si, fk)} style={ghostBtn}>Replace</button>
+                              <a href={`data:${fp.image.mediaType};base64,${fp.image.b64}`}
+                                download={fp.image.source?.filename || `shot${shot.shot_number}-${fk}.jpg`}
+                                style={{ ...ghostBtn, textDecoration: 'none' }}>Download</a>
+                              <button onClick={() => removeFrameImage(si, fk)} style={{ ...ghostBtn, color: 'var(--pe-danger)', borderColor: 'var(--pe-danger-line)' }}>Remove</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {attach.key === ck && attach.state === 'fetching' && (
+                          <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginTop: 6 }}>Fetching image…</div>
+                        )}
+                        {attach.key === ck && attach.state === 'error' && (
+                          <div style={{ fontSize: 13, color: 'var(--pe-danger)', marginTop: 6 }}>{attach.error}</div>
+                        )}
+
+                        {picker.key === ck && (
+                          <div style={{ marginTop: 8, padding: 10, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                                {picker.loading ? 'Loading recent ComfyUI outputs…'
+                                  : `${picker.items.length} recent output${picker.items.length === 1 ? '' : 's'} · newest first`}
+                              </span>
+                              <button onClick={() => loadPickerItems(ck)} disabled={picker.loading} style={ghostBtn}>Refresh</button>
+                              <button onClick={() => setPicker({ key: null, loading: false, error: '', items: [] })} style={{ ...ghostBtn, marginLeft: 'auto' }}>Close</button>
+                            </div>
+                            {picker.error && <div style={{ fontSize: 13, color: 'var(--pe-danger)', marginBottom: 6 }}>{picker.error}</div>}
+                            {picker.items.length > 0 && (
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+                                {picker.items.map((it, ii) => (
+                                  <img key={ii} src={it.viewUrl} loading="lazy" alt={it.filename}
+                                    title={`${it.filename}${it.subfolder ? ` (${it.subfolder})` : ''}${it.type === 'temp' ? ' · preview' : ''}`}
+                                    onClick={() => attachImage(si, fk, it)}
+                                    style={{
+                                      width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 6,
+                                      border: '1px solid var(--pe-line)', cursor: 'pointer', background: 'var(--pe-surface)',
+                                    }} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )

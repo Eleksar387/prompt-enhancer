@@ -29,6 +29,37 @@ export function visionCacheKey(model, system, content) {
   return `v2|t0.3|${model}|s:${cyrb53(system || '')}|${parts.join('|')}`
 }
 
+// Re-encode an image to a bounded-size JPEG via canvas. `src` may be a Blob, a
+// data/object URL string, or an already-loaded HTMLImageElement. Clamps the
+// longest edge to `maxPx`, encodes at `quality`, and drops to 0.7 if the result
+// is still over ~4 MB. Resolves { base64, mediaType, width, height }.
+export function shrinkToJpeg(src, maxPx = 1536, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const encode = (img, revokeUrl) => {
+      try {
+        let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height
+        if (w > maxPx || h > maxPx) {
+          if (w >= h) { h = Math.round(h * maxPx / w); w = maxPx }
+          else { w = Math.round(w * maxPx / h); h = maxPx }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+        let dataUrl = canvas.toDataURL('image/jpeg', quality)
+        if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+        resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg', width: w, height: h })
+      } catch (e) { reject(e) }
+      finally { if (revokeUrl) URL.revokeObjectURL(revokeUrl) }
+    }
+    if (src instanceof HTMLImageElement && src.complete) return encode(src, null)
+    const objUrl = src instanceof Blob ? URL.createObjectURL(src) : src
+    const img = new Image()
+    img.onload = () => encode(img, src instanceof Blob ? objUrl : null)
+    img.onerror = () => { if (src instanceof Blob) URL.revokeObjectURL(objUrl); reject(new Error('Image failed to decode')) }
+    img.src = objUrl
+  })
+}
+
 export const presetById = (id, presets) => presets.find(p => p.id === id)
 
 export const snap32 = (n) => Math.round(n / 32) * 32
