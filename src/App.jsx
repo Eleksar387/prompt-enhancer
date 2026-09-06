@@ -50,6 +50,7 @@ const entrySearchText = (h) => {
     parts.push(h.idea, h.script?.title)
     parts.push(JSON.stringify(h.script?.scenes || ''), JSON.stringify(h.directorsCut?.shots || ''))
     for (const p of h.finalPrompts || []) parts.push(p.text, p.sceneTitle)
+    for (const im of h.refImages || []) parts.push(im.note, im.caption)
   } else {
     parts.push(h.scene, h.caption, h.negative, h.dialogue, h.style)
     for (const o of h.outputs || []) parts.push(o.text, o.label)
@@ -610,6 +611,8 @@ export default function App() {
     if (h.project) { ensureProject(h.project); setActiveProject(h.project) }
     if (h.type === 'scriptwriter') {
       setTarget('scriptwriter')
+      if (h.model)  { setWriterModel(h.model);  setWriterManual(h.model) }
+      if (h.vision) { setVisionModel(h.vision); setVisionManual(h.vision) }
       setScriptwriterInitial(h)
       setScriptwriterKey(k => k + 1)
       setHistoryOpen(false)
@@ -1243,6 +1246,7 @@ export default function App() {
           key={scriptwriterKey}
           cfg={cfg}
           writerModel={effectiveWriter}
+          visionModel={effectiveVision}
           initialState={scriptwriterInitial}
           onSaveHistory={saveScriptHistory}
           comfyCfg={comfyCfg}
@@ -1921,6 +1925,19 @@ export default function App() {
                     </div>
                     {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
                     {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
+                    {h.refImages?.length > 0 && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
+                        {h.refImages.map((im, ii) => im.base64
+                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`}
+                              title={`${im.note ? im.note + ' — ' : ''}${im.caption || im.fileName}`}
+                              style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
+                          : <span key={ii} title={im.caption || ''}
+                              style={{ fontSize: 12, color: 'var(--pe-ink-3)', border: '1px solid var(--pe-line)', borderRadius: 4, padding: '2px 6px' }}>
+                              📄 {im.note || im.fileName}
+                            </span>
+                        )}
+                      </div>
+                    )}
                     {(() => {
                       const tiles = (h.framePrompts || []).flatMap((fp, si) =>
                         ['first', 'mid', 'last']

@@ -717,6 +717,8 @@ then setting/background, then composition/framing, then lighting and mood.
 Use lowercase underscored Danbooru tag vocabulary (e.g. long_hair, school_uniform, looking_at_viewer, outdoors, upper_body).
 Separate tags with commas. Output only the tag list — no sentences, no preamble.`;
 
+export const VISION_PROMPT_SCRIPTWRITER = `You are a vision model describing a reference image for a downstream short-film scriptwriter and director. Your description is the ONLY thing they will see — the image itself is never shown to them, so it must stand on its own. Describe precisely what is visibly present: the main subject and its defining appearance (approximate age, build, hair, skin, wardrobe, distinguishing features), the location or setting and its notable objects, the time of day, lighting, weather, and the overall color palette and mood. If the instruction that follows the image names a specific intended use (a character, a location, a prop, an atmosphere), give that aspect the most detail while still noting the rest briefly. Quote any legible on-image text verbatim in quotation marks. Be concrete and specific in 3 to 5 sentences; do not invent story, motion, or anything outside the frame. Output only the description, with no preamble or labels.`;
+
 export const SYSTEM_PROMPT_SDXL = `You are converting a user request into a Stable Diffusion XL (SDXL) image-generation prompt using Danbooru-style tags.
 
 ABOUT SDXL PROMPTING
@@ -788,6 +790,7 @@ Rules:
 - Each scene description is filmable — what a director can actually shoot.
 - Dialogue entries use the format: "CHARACTER NAME: line" (uppercase name, colon, space, line).
 - Keep dialogue minimal: 0–3 lines per scene. Use an empty array [] when a scene has no dialogue.
+- If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: cast the described people as characters, use the described places as settings, and keep wardrobe, props, weather, and mood consistent with them. Treat any "(note: …)" after an image number as the user's instruction for how that reference should be used.
 - Do not include any text before or after the JSON object.`
 
 export const SYSTEM_PROMPT_DIRECTOR = `You are a film director breaking down a short-film script into individual camera shots for an AI video model (LTX-2.3). LTX-2.3 generates short clips of 4–8 seconds; each clip contains one continuous action and one camera move. Your job is to produce a shot list that works within these constraints.
@@ -813,6 +816,7 @@ Rules:
 - camera_movement must be ONE move — no 'then' or 'followed by' transitions.
 - visual_action must describe ONE continuous action — the model will execute it over 4–8 seconds.
 - visual_action is present tense and physical: 'she turns and slams her palm on the table' not 'she gets angry.'
+- If the user message contains a "Reference images provided by the user" block, keep every shot's camera_framing wording, wardrobe/location detail, and lighting_mood consistent with those descriptions and any per-image note.
 - Do not include any text before or after the JSON object.`
 
 export const SYSTEM_PROMPT_DRAMABOX = `You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloning). The user will give you a short, informal scene idea — a character, a mood, a rough situation, sometimes a target length. Your job is to expand that into a fully-formatted, ready-to-generate DramaBox prompt.

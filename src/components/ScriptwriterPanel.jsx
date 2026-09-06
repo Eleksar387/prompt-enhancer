@@ -3,10 +3,12 @@ import { callOllama } from '../api'
 import {
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, buildLtxGuideSystemPrompt,
   SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
+  VISION_PROMPT_SCRIPTWRITER,
 } from '../constants'
-import { btn, shrinkToJpeg } from '../utils'
+import { btn, shrinkToJpeg, imageHash } from '../utils'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
+import ScriptwriterRefImages from './ScriptwriterRefImages'
 
 const GENRE_OPTIONS = [
   { id: 'auto',     label: 'Auto' },
@@ -89,17 +91,64 @@ const serializeFramePrompts = (fps) => (fps || []).map(fp => ({
 }))
 
 // One scriptwriter history record over ~12 MB starts to be a liability
-// (it is re-put in full on every phase save). Above it, drop attached frame
-// images largest-first and tell the user.
+// (it is re-put in full on every phase save). Above it, drop reference-image
+// bytes first (the caption text carries the info), then attached frame images.
 const HISTORY_SOFT_LIMIT = 12 * 1024 * 1024
+
+// --- reference images ------------------------------------------------------
+const MAX_REF_IMAGES = 6
+const REF_MAX_DIM = 1536
+
+// Persisted shape — no id/previewUrl; bytes under `base64` (matches the
+// standard-entry / refImages convention elsewhere in the app).
+const serializeRefImages = (imgs) => (imgs || []).map(im => ({
+  base64: im.base64 || null,
+  mediaType: im.mediaType || 'image/jpeg',
+  fileName: im.fileName || 'reference.jpg',
+  note: im.note || '',
+  caption: im.caption || '',
+  hash: im.hash || (im.base64 ? imageHash(im.base64) : ''),
+}))
+
+const rehydrateRefImage = (d) => ({
+  id: generateId(),
+  base64: d.base64 || null,
+  mediaType: d.mediaType || 'image/jpeg',
+  previewUrl: d.base64 ? `data:${d.mediaType || 'image/jpeg'};base64,${d.base64}` : null,
+  fileName: d.fileName || 'reference.jpg',
+  note: d.note || '',
+  caption: d.caption || '',
+  hash: d.hash || (d.base64 ? imageHash(d.base64) : ''),
+})
+
+// The text block folded into a phase's user message — captioned images only.
+const assembleRefBlock = (refImages, heading) => {
+  const done = (refImages || []).filter(im => im.caption && im.caption.trim())
+  if (!done.length) return ''
+  const lines = done.map((im, i) => {
+    const tag = im.note && im.note.trim() ? ` (note: ${im.note.trim()})` : ''
+    return `Image ${i + 1}${tag}: ${im.caption.trim()}`
+  })
+  return `\n\n${heading}\n${lines.join('\n')}`
+}
+
+const REF_HEADING_CANON =
+  'Reference images provided by the user (treat these as canon for how the people, places, and props in this film look — cast and set-dress around them):'
+const REF_HEADING_DIRECTOR =
+  'Reference images provided by the user (keep every shot visually consistent with these — same faces, wardrobe, and locations):'
+const REF_HEADING_SHOT =
+  'Reference images provided by the user (keep this shot visually consistent with these — same faces, wardrobe, and location):'
+const REF_HEADING_LITE =
+  'Continuity references — keep the character(s), wardrobe, and location consistent with these descriptions; do NOT add them as new elements and do NOT describe them verbatim:'
 
 const STEPS = ['Script', "Director's Cut", 'LTX Prompts']
 
 export default function ScriptwriterPanel({
-  cfg, writerModel, initialState = null, onSaveHistory = null,
+  cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
 }) {
   const sessionId = useRef(initialState?.id || generateId())
+  const visModel = visionModel || writerModel
 
   // ComfyUI handoff config — use the shared one from App when provided, else a
   // self-contained local copy so the panel still works standalone.
@@ -134,6 +183,10 @@ export default function ScriptwriterPanel({
   // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
   const [attach, setAttach] = useState({ key: null, state: 'idle', error: '' })
   const [historyNote, setHistoryNote] = useState('')
+  const [refImages, setRefImages] = useState(() => (initialState?.refImages || []).map(rehydrateRefImage))
+  // { state: 'idle' | 'reading' | 'error', done, total, error }
+  const [refCaptionStatus, setRefCaptionStatus] = useState({ state: 'idle', done: 0, total: 0, error: '' })
+  const captioning = refCaptionStatus.state === 'reading'
 
   const reset = () => {
     sessionId.current = generateId()
@@ -144,6 +197,8 @@ export default function ScriptwriterPanel({
     setPicker({ key: null, loading: false, error: '', items: [] })
     setAttach({ key: null, state: 'idle', error: '' })
     setHistoryNote('')
+    setRefImages([])
+    setRefCaptionStatus({ state: 'idle', done: 0, total: 0, error: '' })
   }
 
   const parseJSON = (text) => {
@@ -155,22 +210,111 @@ export default function ScriptwriterPanel({
     }
   }
 
+  // --- reference images: upload + vision captioning -----------------------
+  const fileToRef = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Could not read file'))
+    reader.onload = () => shrinkToJpeg(reader.result, REF_MAX_DIM, 0.85)
+      .then(({ base64, mediaType }) => resolve({
+        id: generateId(), base64, mediaType,
+        previewUrl: `data:${mediaType};base64,${base64}`,
+        fileName: file.name || 'reference.jpg', note: '', caption: '',
+        hash: imageHash(base64),
+      }))
+      .catch(reject)
+    reader.readAsDataURL(file)
+  })
+
+  const addRefFiles = async (fileList) => {
+    const room = MAX_REF_IMAGES - refImages.length
+    const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/')).slice(0, room)
+    const added = []
+    for (const f of files) { try { added.push(await fileToRef(f)) } catch { /* skip bad file */ } }
+    if (added.length) setRefImages(prev => [...prev, ...added])
+  }
+
+  const removeRefImage   = (id) => setRefImages(prev => prev.filter(im => im.id !== id))
+  const updateRefNote    = (id, note)    => setRefImages(prev => prev.map(im => im.id === id ? { ...im, note } : im))
+  const updateRefCaption = (id, caption) => setRefImages(prev => prev.map(im => im.id === id ? { ...im, caption } : im))
+
+  // Describe every image lacking a caption (or all, with force). Returns the
+  // updated array so runPhase1 can use it without waiting on setState.
+  const captionRefImages = async ({ force = false } = {}) => {
+    const targets = refImages.filter(im => im.base64 && (force || !im.caption?.trim()))
+    if (!targets.length) return refImages
+    if (!visModel) {
+      setRefCaptionStatus({ state: 'error', done: 0, total: targets.length,
+        error: 'No vision model available — pick or type one in the left rail.' })
+      throw new Error('no vision model')
+    }
+    setRefCaptionStatus({ state: 'reading', done: 0, total: targets.length, error: '' })
+    let done = 0
+    const settled = await Promise.allSettled(targets.map(async (im) => {
+      const content = [
+        { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+        { type: 'text', text: im.note && im.note.trim()
+          ? `Describe this reference image as instructed. The user's note on how it will be used: "${im.note.trim()}".`
+          : 'Describe this reference image as instructed.' },
+      ]
+      const { text } = await callOllama(visModel, content, VISION_PROMPT_SCRIPTWRITER, cfg, 0.3)
+      done++; setRefCaptionStatus(s => ({ ...s, done }))
+      return { id: im.id, caption: (text || '').trim() }
+    }))
+    const byId = new Map()
+    settled.forEach(r => { if (r.status === 'fulfilled') byId.set(r.value.id, r.value.caption) })
+    const failed = settled.filter(r => r.status === 'rejected')
+    const updated = refImages.map(im => byId.has(im.id) ? { ...im, caption: byId.get(im.id) } : im)
+    setRefImages(updated)
+    setRefCaptionStatus(failed.length
+      ? { state: 'error', done, total: targets.length,
+          error: `${failed.length} image${failed.length === 1 ? '' : 's'} couldn't be described: ${failed[0].reason?.message || 'unknown error'}` }
+      : { state: 'idle', done, total: targets.length, error: '' })
+    return updated
+  }
+
+  // --- history payload assembly (shared by all four save sites) -----------
+  const basePayload = (phaseName, refsOverride) => {
+    const refs = refsOverride || refImages
+    return {
+      id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
+      model: writerModel,
+      vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
+      idea: idea.trim(), genre, sceneCount, phase: phaseName,
+      refImages: serializeRefImages(refs),
+    }
+  }
+
+  const commitHistory = (payload) => {
+    if (!onSaveHistory) return
+    const { payload: safe, dropped, droppedRefs } = guardHistorySize(payload)
+    const notes = []
+    if (droppedRefs) notes.push(`${droppedRefs} reference image${droppedRefs === 1 ? '' : 's'} kept as description only — the record was too large to store the pixels`)
+    if (dropped)     notes.push(`${dropped} attached frame image${dropped === 1 ? '' : 's'} couldn't be saved to history`)
+    setHistoryNote(notes.join('. '))
+    onSaveHistory(safe)
+  }
+
   const runPhase1 = async () => {
     if (!idea.trim()) return
     setError(''); setRawFallback('')
+    let refs = refImages
+    if (refImages.some(im => im.base64 && !im.caption?.trim())) {
+      try { refs = await captionRefImages() }
+      catch {
+        setError('Could not read the reference images (see the note above). Fix the vision model or remove the images to continue.')
+        return
+      }
+    }
     setPhase('scripting')
     const genreHint = genre === 'auto' ? 'Infer a suitable genre from the story idea.' : `Genre: ${genre}`
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}\n\nOutput only valid JSON.`
+    const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
       const data = parseJSON(text)
       setScript(data)
       setPhase('script')
-      onSaveHistory?.({
-        id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
-        model: writerModel, idea: idea.trim(), genre, sceneCount,
-        phase: 'script', script: data, directorsCut: null, finalPrompts: null,
-      })
+      commitHistory({ ...basePayload('script', refs), script: data, directorsCut: null, finalPrompts: null })
     } catch (e) {
       setError(e.message)
       setPhase('input')
@@ -180,7 +324,8 @@ export default function ScriptwriterPanel({
   const runPhase2 = async () => {
     setError(''); setRawFallback('')
     setPhase('directing')
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}\n\nOutput only valid JSON.`
+    const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR)
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
       const data = parseJSON(text)
@@ -189,10 +334,9 @@ export default function ScriptwriterPanel({
       setDirectorsCut(data)
       setFramePrompts(freshFrames)
       setPhase('dircut')
-      onSaveHistory?.({
-        id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
-        model: writerModel, idea: idea.trim(), genre, sceneCount,
-        phase: 'dircut', script, directorsCut: data, finalPrompts: null,
+      commitHistory({
+        ...basePayload('dircut'),
+        script, directorsCut: data, finalPrompts: null,
         framePrompts: serializeFramePrompts(freshFrames),
       })
     } catch (e) {
@@ -211,9 +355,10 @@ export default function ScriptwriterPanel({
     setFinalPrompts(initial)
     setPhase('prompting')
 
+    const refBlock = assembleRefBlock(refImages, REF_HEADING_SHOT)
     const results = new Array(shots.length)
     const proms = shots.map((shot, i) => {
-      const userMsg = `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${shot.visual_action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}`
+      const userMsg = `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${shot.visual_action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${refBlock}`
       return callOllama(writerModel, userMsg, SHOT_SYSTEM_PROMPT, cfg, 0.7)
         .then(({ text, usage }) => {
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
@@ -226,10 +371,9 @@ export default function ScriptwriterPanel({
     })
     await Promise.all(proms)
     setPhase('done')
-    onSaveHistory?.({
-      id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
-      model: writerModel, idea: idea.trim(), genre, sceneCount,
-      phase: 'done', script, directorsCut, finalPrompts: results,
+    commitHistory({
+      ...basePayload('done'),
+      script, directorsCut, finalPrompts: results,
       framePrompts: serializeFramePrompts(framePrompts),
     })
   }
@@ -260,7 +404,9 @@ export default function ScriptwriterPanel({
     const shot = directorsCut.shots[shotIdx]
     const target = framePrompts[shotIdx].frames[frameKey].target
     const framePos = frameKey === 'first' ? 'start (first)' : frameKey === 'mid' ? 'middle' : 'end (last)'
-    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${shot.visual_action}\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.`
+    // SDXL's writer is tag-based — a prose continuity block confuses it, so skip it there.
+    const refBlock = target === 'sdxl' ? '' : assembleRefBlock(refImages, REF_HEADING_LITE)
+    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${shot.visual_action}\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
 
     setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
       ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], loading: true, error: '' } }
@@ -313,11 +459,17 @@ export default function ScriptwriterPanel({
     }
   }
 
-  // Trim a would-be-oversized history payload by nulling the largest attached
-  // frame images first. Returns { payload, dropped }.
+  // Trim a would-be-oversized history payload. Reference-image bytes go first
+  // (their caption text carries what the pipeline needs), then the largest
+  // attached frame images. Returns { payload, dropped, droppedRefs }.
   const guardHistorySize = (payload) => {
-    if (JSON.stringify(payload).length <= HISTORY_SOFT_LIMIT) return { payload, dropped: 0 }
+    if (JSON.stringify(payload).length <= HISTORY_SOFT_LIMIT) return { payload, dropped: 0, droppedRefs: 0 }
     const clone = JSON.parse(JSON.stringify(payload))
+    let droppedRefs = 0
+    for (const im of (clone.refImages || [])) {
+      if (JSON.stringify(clone).length <= HISTORY_SOFT_LIMIT) break
+      if (im.base64) { im.base64 = null; droppedRefs++ }
+    }
     const imgs = []
     ;(clone.framePrompts || []).forEach((fp, si) => FRAME_KEYS.forEach(k => {
       const im = fp.frames?.[k]?.image
@@ -330,7 +482,7 @@ export default function ScriptwriterPanel({
       clone.framePrompts[it.si].frames[it.k].image = null
       dropped++
     }
-    return { payload: clone, dropped }
+    return { payload: clone, dropped, droppedRefs }
   }
 
   // Re-save the whole session under the same id at the CURRENT phase — used after
@@ -338,20 +490,14 @@ export default function ScriptwriterPanel({
   // framePrompts array to sidestep the state-update lag.
   const persistState = (framePromptsOverride) => {
     if (!onSaveHistory || !directorsCut) return
-    const raw = {
-      id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
-      model: writerModel, idea: idea.trim(), genre, sceneCount,
-      phase, script, directorsCut,
+    commitHistory({
+      ...basePayload(phase),
+      script, directorsCut,
       finalPrompts: (phase === 'done' || phase === 'prompting') && finalPrompts.length
         ? finalPrompts.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
         : null,
       framePrompts: serializeFramePrompts(framePromptsOverride || framePrompts),
-    }
-    const { payload, dropped } = guardHistorySize(raw)
-    setHistoryNote(dropped
-      ? `${dropped} attached image${dropped === 1 ? '' : 's'} couldn't be saved to history — the record got too large. ${dropped === 1 ? 'It stays' : 'They stay'} on screen until you reload.`
-      : '')
-    onSaveHistory(payload)
+    })
   }
 
   // --- pull a rendered image back from ComfyUI --------------------------------
@@ -465,6 +611,20 @@ export default function ScriptwriterPanel({
         </div>
       )}
 
+      {/* Reference images — editable pre-script, read-only after */}
+      <ScriptwriterRefImages
+        images={refImages}
+        editable={['input', 'scripting'].includes(phase)}
+        status={refCaptionStatus}
+        busy={isLoading || captioning}
+        max={MAX_REF_IMAGES}
+        onAddFiles={addRefFiles}
+        onRemove={removeRefImage}
+        onNote={updateRefNote}
+        onCaption={updateRefCaption}
+        onDescribe={(force) => captionRefImages({ force }).catch(() => {})}
+      />
+
       {/* Phase 1 — input */}
       {['input', 'scripting'].includes(phase) && (
         <div>
@@ -495,8 +655,8 @@ export default function ScriptwriterPanel({
               </div>
             </div>
           </div>
-          <button onClick={runPhase1} disabled={!idea.trim() || isLoading} style={genBtn(!idea.trim() || isLoading)}>
-            {phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
+          <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
+            {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
           </button>
         </div>
       )}

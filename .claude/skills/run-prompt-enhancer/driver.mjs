@@ -11,6 +11,8 @@
 //   click <selector>             click (selector may be any Playwright
 //                                 selector, e.g. button:has-text("Admin"))
 //   fill <selector> <text...>    fill an input/textarea
+//   setfiles <selector> <path>   set files on an <input type=file> (may be hidden;
+//                                 comma-separate for multiple)
 //   press <key>                  press a key (e.g. Enter)
 //   value <selector>             print inputValue() of a field
 //   text <selector>              print innerText() of an element
@@ -71,6 +73,11 @@ async function handle(line) {
     const [sel, value] = splitOne(rest)
     await page.fill(sel, value)
     console.log(`OK fill ${sel}`)
+  } else if (cmd === 'setfiles') {
+    // setfiles <selector> <path>[,<path>...]  — set files on an <input type=file> (may be hidden)
+    const [sel, paths] = splitOne(rest)
+    await page.setInputFiles(sel, paths.split(',').map(p => p.trim()))
+    console.log(`OK setfiles ${sel}`)
   } else if (cmd === 'press') {
     await page.keyboard.press(rest)
     console.log(`OK press ${rest}`)
