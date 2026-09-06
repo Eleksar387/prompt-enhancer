@@ -4,6 +4,7 @@ import {
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, buildLtxGuideSystemPrompt,
   SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
   SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER,
+  SYSTEM_PROMPT_MINIMAX_H3, MINIMAX_H3_RESOLUTIONS,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash } from '../utils'
 import { generateId } from '../db'
@@ -63,6 +64,15 @@ const FRAME_SYSTEM = {
   sdxl: SYSTEM_PROMPT_SDXL,
 }
 const SHOT_SYSTEM_PROMPT = buildLtxGuideSystemPrompt('single')
+
+// Phase 3 output model — one global choice for the whole run.
+const PROMPT_TARGETS = [
+  { id: 'ltx',        label: 'LTX-2.3'    },
+  { id: 'minimax_h3', label: 'MiniMax H3' },
+]
+const PROMPT_TARGET_LABEL = { ltx: 'LTX-2.3', minimax_h3: 'MiniMax H3' }
+const H3_DEFAULT_RATIO = 'land169'   // 16:9 landscape — film default
+
 const FRAME_KEYS = ['first', 'mid', 'last']
 const FRAME_LABELS = { first: 'First frame', mid: 'Mid frame', last: 'Last frame' }
 
@@ -143,7 +153,7 @@ const REF_HEADING_SHOT =
 const REF_HEADING_LITE =
   'Continuity references — keep the character(s), wardrobe, and location consistent with these descriptions; do NOT add them as new elements and do NOT describe them verbatim:'
 
-const STEPS = ['Script', "Director's Cut", 'LTX Prompts']
+const STEPS = ['Script', "Director's Cut", 'Video Prompts']
 
 export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
@@ -175,6 +185,9 @@ export default function ScriptwriterPanel({
     if (initialState?.directorsCut?.shots?.length) return initialState.directorsCut.shots.map(() => emptyFrameEntry())
     return []
   })
+  // Phase 3 output model + (H3-only) aspect ratio.
+  const [promptTarget, setPromptTarget] = useState(initialState?.promptTarget || 'ltx')
+  const [h3Ratio, setH3Ratio]           = useState(initialState?.h3Ratio || H3_DEFAULT_RATIO)
   const [error, setError] = useState('')
   const [rawFallback, setRawFallback] = useState('')
   const [copied, setCopied] = useState(null)
@@ -194,6 +207,7 @@ export default function ScriptwriterPanel({
     sessionId.current = generateId()
     setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(3)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
+    setPromptTarget('ltx'); setH3Ratio(H3_DEFAULT_RATIO)
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
     setComfyFrame({ key: null, state: 'idle', error: '' })
     setPicker({ key: null, loading: false, error: '', items: [] })
@@ -282,6 +296,7 @@ export default function ScriptwriterPanel({
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, sceneCount, phase: phaseName,
+      promptTarget, h3Ratio,
       refImages: serializeRefImages(refs),
     }
   }
@@ -347,6 +362,27 @@ export default function ScriptwriterPanel({
     }
   }
 
+  // A T2VA user message for one shot — mirrors the minimax_h3 branch of
+  // runWriter() in App.jsx (same section labels so the H3 compiler prompt parses
+  // it the same way). Scriptwriter shots are always text-only → T2VA.
+  const buildH3ShotMessage = (shot, ratio, refBlock) => {
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const dialogues = Array.isArray(scene?.dialogues)
+      ? scene.dialogues.filter(d => d && d.trim())
+      : []
+    const dialogueBlock = dialogues.length
+      ? `\n\nThis scene's dialogue lines (use only the line(s) that fit THIS shot's action; omit the rest — other shots of the scene carry the others):\n${dialogues.join('\n')}`
+      : ''
+    return `MODE: T2VA\n\n`
+      + `Aspect ratio: ${ratio.label} (${ratio.note})\n`
+      + `Target duration: ${shot.duration || 4} seconds\n\n`
+      + `Scene / action:\n${shot.visual_action}\n\n`
+      + `Requested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\n`
+      + `Style / mood: ${shot.lighting_mood}${refBlock}${dialogueBlock}`
+      + `\n\nAmbient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.`
+      + `\n\nAudience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.`
+  }
+
   const runPhase3 = async () => {
     setError('')
     const shots = directorsCut.shots
@@ -358,10 +394,15 @@ export default function ScriptwriterPanel({
     setPhase('prompting')
 
     const refBlock = assembleRefBlock(refImages, REF_HEADING_SHOT)
+    const isH3 = promptTarget === 'minimax_h3'
+    const systemPrompt = isH3 ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
+    const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
     const results = new Array(shots.length)
     const proms = shots.map((shot, i) => {
-      const userMsg = `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${shot.visual_action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${refBlock}`
-      return callOllama(writerModel, userMsg, SHOT_SYSTEM_PROMPT, cfg, 0.7)
+      const userMsg = isH3
+        ? buildH3ShotMessage(shot, ratio, refBlock)
+        : `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${shot.visual_action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${refBlock}`
+      return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
         .then(({ text, usage }) => {
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text }
@@ -934,9 +975,44 @@ export default function ScriptwriterPanel({
             </div>
           ))}
 
+          {/* Output model — one global choice for the whole Phase 3 run */}
+          <div style={{ ...card, marginTop: 6 }}>
+            <label style={lbl}>Output Model</label>
+            {phase === 'dircut' ? (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {PROMPT_TARGETS.map(pt => (
+                  <button key={pt.id} onClick={() => setPromptTarget(pt.id)} style={btn(promptTarget === pt.id)}>
+                    {pt.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>
+                {PROMPT_TARGET_LABEL[promptTarget] || promptTarget}
+              </div>
+            )}
+
+            {promptTarget === 'minimax_h3' && phase === 'dircut' && (
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl}>Aspect Ratio</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {MINIMAX_H3_RESOLUTIONS.map(r => (
+                    <button key={r.id} onClick={() => setH3Ratio(r.id)} title={r.note} style={btn(h3Ratio === r.id)}>
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 8 }}>
+                  H3 adds native synchronized audio and speaks each scene's dialogue lines. Shots longer
+                  than ~15s may be re-paced by H3's shot budget.
+                </div>
+              </div>
+            )}
+          </div>
+
           {phase === 'dircut' && (
             <button onClick={runPhase3} style={{ ...genBtn(false), marginTop: 6 }}>
-              → Generate LTX Prompts
+              → Generate {PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts
             </button>
           )}
 
@@ -944,7 +1020,7 @@ export default function ScriptwriterPanel({
           {['prompting', 'done'].includes(phase) && finalPrompts.length > 0 && (
             <div style={{ marginTop: 28 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>LTX-2.3 Prompts</label>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts</label>
                 {phase === 'done' && (
                   <button onClick={copyAll}
                     style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>

@@ -1921,7 +1921,7 @@ export default function App() {
                       Scriptwriter · {h.model} · {phaseLabel}
                       {h.script ? ` · ${h.script.scenes?.length ?? 0} scenes` : ''}
                       {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} shots` : ''}
-                      {h.finalPrompts ? ` · ${h.finalPrompts.filter(p => p.text).length} prompts` : ''}
+                      {h.finalPrompts ? ` · ${h.finalPrompts.filter(p => p.text).length} ${h.promptTarget === 'minimax_h3' ? 'H3' : 'LTX'} prompts` : ''}
                     </div>
                     {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
                     {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
