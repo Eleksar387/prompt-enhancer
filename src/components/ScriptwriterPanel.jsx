@@ -18,26 +18,26 @@ const GENRE_OPTIONS = [
 
 const field = (extra = {}) => ({
   width: '100%', boxSizing: 'border-box',
-  background: '#12121f', border: '1px solid #2e2e44', borderRadius: 6,
-  padding: '8px 10px', color: '#e0e0f0', fontSize: 13, outline: 'none',
+  background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6,
+  padding: '8px 10px', color: 'var(--pe-ink)', fontSize: 13, outline: 'none',
   fontFamily: 'inherit', lineHeight: 1.5, transition: 'border-color 0.15s',
   ...extra,
 })
 
 const card = {
-  background: '#0e0e1c', border: '1px solid #2e2e44',
+  background: 'var(--pe-rail)', border: '1px solid var(--pe-line)',
   borderRadius: 10, padding: '14px 16px', marginBottom: 12,
 }
 
 const lbl = {
-  fontSize: 10, color: '#666', textTransform: 'uppercase',
+  fontSize: 13.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase',
   letterSpacing: '0.5px', display: 'block', marginBottom: 4,
 }
 
 const genBtn = (disabled) => ({
   padding: '10px 24px', borderRadius: 8, border: 'none',
-  background: disabled ? '#2a2a3f' : 'linear-gradient(135deg, #5a4fcf, #8b5cf6)',
-  color: disabled ? '#555' : '#fff',
+  background: disabled ? 'var(--pe-line)' : 'var(--pe-accent)',
+  color: disabled ? 'var(--pe-ink-3)' : '#fff',
   fontSize: 14, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
 })
 
@@ -258,8 +258,8 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
 
   const isLoading = ['scripting', 'directing', 'prompting'].includes(phase)
 
-  const focusBorder = (e) => { e.target.style.borderColor = '#5a4fcf' }
-  const blurBorder  = (e) => { e.target.style.borderColor = '#2e2e44' }
+  const focusBorder = (e) => { e.target.style.borderColor = 'var(--pe-accent)' }
+  const blurBorder  = (e) => { e.target.style.borderColor = 'var(--pe-line)' }
 
   return (
     <div>
@@ -270,19 +270,19 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <div style={{
                 width: 22, height: 22, borderRadius: '50%', border: '2px solid',
-                borderColor: i <= stepIdx ? '#7c6af7' : '#333',
-                background: i < stepIdx ? '#7c6af7' : i === stepIdx ? '#2d2060' : 'transparent',
+                borderColor: i <= stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)',
+                background: i < stepIdx ? 'var(--pe-accent)' : i === stepIdx ? 'var(--pe-accent-bg)' : 'transparent',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 10, color: i <= stepIdx ? '#c4b8ff' : '#444', fontWeight: 700, flexShrink: 0,
+                fontSize: 13.5, color: i <= stepIdx ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: 700, flexShrink: 0,
               }}>
                 {i < stepIdx ? '✓' : i + 1}
               </div>
-              <span style={{ fontSize: 11, color: i <= stepIdx ? '#c4b8ff' : '#444', fontWeight: i === stepIdx ? 600 : 400 }}>
+              <span style={{ fontSize: 13, color: i <= stepIdx ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: i === stepIdx ? 600 : 400 }}>
                 {step}
               </span>
             </div>
             {i < STEPS.length - 1 && (
-              <div style={{ width: 32, height: 1, background: i < stepIdx ? '#7c6af7' : '#222', margin: '0 8px' }} />
+              <div style={{ width: 32, height: 1, background: i < stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)', margin: '0 8px' }} />
             )}
           </div>
         ))}
@@ -290,13 +290,13 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
 
       {/* Error */}
       {error && (
-        <div style={{ marginBottom: 16, padding: '12px 14px', background: '#2a1020', border: '1px solid #5a2030', borderRadius: 8, fontSize: 13, color: '#f87171' }}>
+        <div style={{ marginBottom: 16, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>
           {error}
           {rawFallback && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>Raw LLM output:</div>
+              <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 6 }}>Raw LLM output:</div>
               <textarea readOnly value={rawFallback} rows={6}
-                style={{ ...field({ background: '#1a0a10', color: '#f87171', fontSize: 11, fontFamily: 'monospace', resize: 'vertical' }) }} />
+                style={{ ...field({ background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical' }) }} />
             </div>
           )}
         </div>
@@ -306,7 +306,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
       {['input', 'scripting'].includes(phase) && (
         <div>
           <div style={{ marginBottom: 14 }}>
-            <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story Idea</label>
+            <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story Idea</label>
             <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={4} disabled={isLoading}
               placeholder="e.g. A retired deep-sea diver finds a mysterious package washed ashore — and recognizes the handwriting on it as her own."
               style={{ ...field({ resize: 'vertical' }) }}
@@ -314,7 +314,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
           </div>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 20 }}>
             <div>
-              <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
+              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {GENRE_OPTIONS.map(g => (
                   <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
@@ -322,11 +322,11 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
               </div>
             </div>
             <div>
-              <label style={{ fontSize: 11, color: '#777', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes</label>
+              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
                   style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
-                <span style={{ fontSize: 15, color: '#c4b8ff', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
+                <span style={{ fontSize: 15, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
                 <button onClick={() => setSceneCount(v => Math.min(5, v + 1))} disabled={isLoading || sceneCount >= 5}
                   style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
               </div>
@@ -344,13 +344,13 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
           <div style={{ marginBottom: 16 }}>
             <label style={lbl}>Film Title</label>
             <input value={script.title} onChange={e => setScript(s => ({ ...s, title: e.target.value }))}
-              style={{ ...field({ fontSize: 15, fontWeight: 600, color: '#fff' }) }}
+              style={{ ...field({ fontSize: 15, fontWeight: 600, color: 'var(--pe-ink)' }) }}
               onFocus={focusBorder} onBlur={blurBorder} />
           </div>
           {script.scenes.map((scene, si) => (
             <div key={si} style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <span style={{ fontSize: 10, color: '#7c6af7', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
+                <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
                   Scene {scene.id}
                 </span>
                 <input value={scene.title} onChange={e => updateScene(si, 'title', e.target.value)}
@@ -360,7 +360,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
               <div style={{ marginBottom: 10 }}>
                 <label style={lbl}>Setting</label>
                 <input value={scene.setting} onChange={e => updateScene(si, 'setting', e.target.value)}
-                  style={{ ...field({ fontFamily: 'monospace', fontSize: 12 }) }}
+                  style={{ ...field({ fontFamily: 'monospace', fontSize: 13.5 }) }}
                   onFocus={focusBorder} onBlur={blurBorder} />
               </div>
               <div style={{ marginBottom: 10 }}>
@@ -374,16 +374,16 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                 {scene.dialogues.map((line, di) => (
                   <div key={di} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                     <input value={line} onChange={e => updateDialogue(si, di, e.target.value)}
-                      style={{ ...field({ flex: 1, fontFamily: 'monospace', fontSize: 12 }) }}
+                      style={{ ...field({ flex: 1, fontFamily: 'monospace', fontSize: 13.5 }) }}
                       onFocus={focusBorder} onBlur={blurBorder} />
                     <button onClick={() => removeDialogue(si, di)}
-                      style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid #333', background: 'none', color: '#666', fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
+                      style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
                       ✕
                     </button>
                   </div>
                 ))}
                 <button onClick={() => addDialogue(si)}
-                  style={{ fontSize: 11, color: '#7c6af7', background: 'none', border: '1px solid #2d2060', borderRadius: 5, padding: '3px 10px', cursor: 'pointer', marginTop: 2 }}>
+                  style={{ fontSize: 13, color: 'var(--pe-accent)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer', marginTop: 2 }}>
                   + Add line
                 </button>
               </div>
@@ -401,10 +401,10 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
           {directorsCut.shots.map((shot, si) => (
             <div key={si} style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <span style={{ fontSize: 10, color: '#7c6af7', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
+                <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
                   Shot {shot.shot_number}
                 </span>
-                <span style={{ fontSize: 11, color: '#555' }}>{shot.scene_title}</span>
+                <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{shot.scene_title}</span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                 <div>
@@ -444,7 +444,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
 
               {/* Frame image prompts */}
               {framePrompts[si] && (
-                <div style={{ marginTop: 4, borderTop: '1px solid #1e1e30', paddingTop: 12 }}>
+                <div style={{ marginTop: 4, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 12 }}>
                   <label style={lbl}>Frame Image Prompts</label>
                   {FRAME_KEYS.map(fk => {
                     const fp = framePrompts[si].frames[fk]
@@ -452,7 +452,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                     return (
                       <div key={fk} style={{ marginBottom: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 5 }}>
-                          <span style={{ fontSize: 11, color: '#9b8fdb', fontWeight: 600, minWidth: 72 }}>
+                          <span style={{ fontSize: 13, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 72 }}>
                             {FRAME_LABELS[fk]}
                           </span>
                           {FRAME_TARGETS.map(t => (
@@ -462,8 +462,8 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                           <button onClick={() => generateFramePrompt(si, fk)} disabled={fp.loading}
                             style={{
                               marginLeft: 'auto', padding: '4px 12px', borderRadius: 6, border: 'none',
-                              background: fp.loading ? '#2a2a3f' : 'linear-gradient(135deg, #3a3060, #6b4fcf)',
-                              color: fp.loading ? '#555' : '#e0d8ff', fontSize: 11,
+                              background: fp.loading ? 'var(--pe-line)' : 'var(--pe-accent)',
+                              color: fp.loading ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 13,
                               cursor: fp.loading ? 'not-allowed' : 'pointer',
                             }}>
                             {fp.loading ? 'Generating…' : fp.text ? 'Regenerate' : 'Generate'}
@@ -475,23 +475,23 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                               setTimeout(() => setCopiedFrame(null), 2000)
                             }}
                               style={{
-                                padding: '4px 10px', borderRadius: 6, border: '1px solid #333',
-                                background: copiedFrame === ck ? '#1a3a2a' : '#1a1a2e',
-                                color: copiedFrame === ck ? '#4ade80' : '#888', fontSize: 11, cursor: 'pointer',
+                                padding: '4px 10px', borderRadius: 6, border: '1px solid var(--pe-line)',
+                                background: copiedFrame === ck ? 'var(--pe-ok-bg)' : 'var(--pe-surface)',
+                                color: copiedFrame === ck ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer',
                               }}>
                               {copiedFrame === ck ? '✓' : 'Copy'}
                             </button>
                           )}
                         </div>
-                        {fp.error && <div style={{ fontSize: 12, color: '#f87171', marginBottom: 4 }}>{fp.error}</div>}
+                        {fp.error && <div style={{ fontSize: 13.5, color: 'var(--pe-danger)', marginBottom: 4 }}>{fp.error}</div>}
                         {fp.text && (
                           <textarea value={fp.text} onChange={e => editFramePrompt(si, fk, e.target.value)}
                             rows={Math.max(3, Math.ceil(fp.text.length / 80))} spellCheck={false}
                             style={{
-                              width: '100%', boxSizing: 'border-box', background: '#0a0a18',
-                              border: '1px solid #2e2e44', borderRadius: 8, padding: '10px 12px',
-                              fontSize: 12.5, lineHeight: 1.7, color: '#c8c0e8',
-                              fontFamily: "'Georgia', serif", resize: 'vertical', outline: 'none',
+                              width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)',
+                              border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px',
+                              fontSize: 13.5, lineHeight: 1.7, color: 'var(--pe-accent-ink)',
+                              fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none',
                               transition: 'border-color 0.15s',
                             }}
                             onFocus={focusBorder} onBlur={blurBorder} />
@@ -514,10 +514,10 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
           {['prompting', 'done'].includes(phase) && finalPrompts.length > 0 && (
             <div style={{ marginTop: 28 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <label style={{ fontSize: 11, color: '#777', textTransform: 'uppercase', letterSpacing: '0.5px' }}>LTX-2.3 Prompts</label>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>LTX-2.3 Prompts</label>
                 {phase === 'done' && (
                   <button onClick={copyAll}
-                    style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #333', background: copiedAll ? '#1a3a2a' : '#1a1a2e', color: copiedAll ? '#4ade80' : '#888', fontSize: 11, cursor: 'pointer' }}>
+                    style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
                     {copiedAll ? '✓ Copied all' : 'Copy all'}
                   </button>
                 )}
@@ -527,29 +527,29 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
                   <div key={i}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <div>
-                        <span style={{ fontSize: 11, color: '#7c6af7', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Shot {p.shotNumber}</span>
-                        <span style={{ fontSize: 11, color: '#555', marginLeft: 8 }}>{p.sceneTitle}</span>
+                        <span style={{ fontSize: 13, color: 'var(--pe-accent)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Shot {p.shotNumber}</span>
+                        <span style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginLeft: 8 }}>{p.sceneTitle}</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {p.usage && <span style={{ fontSize: 11, color: '#555' }}>in {p.usage.input_tokens} · out {p.usage.output_tokens} tokens</span>}
+                        {p.usage && <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>in {p.usage.input_tokens} · out {p.usage.output_tokens} tokens</span>}
                         {p.text && !p.loading && (
                           <button onClick={() => copyOne(i)}
-                            style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #333', background: copied === i ? '#1a3a2a' : '#1a1a2e', color: copied === i ? '#4ade80' : '#888', fontSize: 11, cursor: 'pointer' }}>
+                            style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copied === i ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copied === i ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
                             {copied === i ? '✓ Copied' : 'Copy'}
                           </button>
                         )}
                       </div>
                     </div>
                     {p.loading && (
-                      <div style={{ padding: '18px 20px', background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, fontSize: 13, color: '#555' }}>Generating…</div>
+                      <div style={{ padding: '18px 20px', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>Generating…</div>
                     )}
                     {p.error && (
-                      <div style={{ padding: '12px 14px', background: '#2a1020', border: '1px solid #5a2030', borderRadius: 8, fontSize: 13, color: '#f87171' }}>Error: {p.error}</div>
+                      <div style={{ padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Error: {p.error}</div>
                     )}
                     {p.text && (
                       <textarea value={p.text} onChange={e => editPrompt(i, e.target.value)}
                         rows={Math.max(4, Math.ceil(p.text.length / 70))} spellCheck={false}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#0e0e1c', border: '1px solid #2e2e44', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: '#d0d0e8', whiteSpace: 'pre-wrap', fontFamily: "'Georgia', serif", resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
+                        style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
                         onFocus={focusBorder} onBlur={blurBorder} />
                     )}
                   </div>
@@ -557,7 +557,7 @@ export default function ScriptwriterPanel({ cfg, writerModel, initialState = nul
               </div>
               {phase === 'done' && (
                 <button onClick={reset}
-                  style={{ marginTop: 20, padding: '8px 18px', borderRadius: 8, border: '1px solid #333', background: 'none', color: '#666', fontSize: 13, cursor: 'pointer' }}>
+                  style={{ marginTop: 20, padding: '8px 18px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
                   ← Start over
                 </button>
               )}

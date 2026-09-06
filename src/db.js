@@ -1,15 +1,21 @@
 const DB_NAME = 'prompt-enhancer'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = 'history'
+const CAPTION_STORE = 'captions'
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = (e) => {
       const db = e.target.result
+      // Flat "create if missing" guards — no version ladder.
       if (!db.objectStoreNames.contains(STORE)) {
         const store = db.createObjectStore(STORE, { keyPath: 'id' })
         store.createIndex('ts', 'ts', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(CAPTION_STORE)) {
+        const s = db.createObjectStore(CAPTION_STORE, { keyPath: 'key' })
+        s.createIndex('ts', 'ts', { unique: false })  // for a future pruneCaptions()
       }
     }
     req.onsuccess = (e) => resolve(e.target.result)
@@ -59,6 +65,56 @@ export async function clearHistory() {
 
 export function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// Vision-caption cache (content-addressed — see visionCacheKey in utils.js).
+// Records are ~0.5 KB; no pruning yet (the `ts` index exists for a future
+// pruneCaptions() if the store ever grows large).
+export async function getCaption(key) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(CAPTION_STORE, 'readonly').objectStore(CAPTION_STORE).get(key)
+    req.onsuccess = () => resolve(req.result ? req.result.caption : null)
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+export async function putCaption(key, caption) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(CAPTION_STORE, 'readwrite').objectStore(CAPTION_STORE)
+      .put({ key, caption, ts: Date.now() })
+    req.onsuccess = () => resolve()
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+export async function clearCaptions() {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(CAPTION_STORE, 'readwrite').objectStore(CAPTION_STORE).clear()
+    req.onsuccess = () => resolve()
+    req.onerror = (e) => reject(e.target.error)
+  })
+}
+
+// Shallow-merge `patch` into one history entry (read-modify-write). Used to attach
+// rendered images to an already-saved entry's `outputs`. No-op if the id is gone.
+export async function updateHistoryEntry(id, patch) {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite')
+    const store = tx.objectStore(STORE)
+    const req = store.get(id)
+    req.onsuccess = () => {
+      const entry = req.result
+      if (!entry) { resolve(); return }
+      const put = store.put({ ...entry, ...patch })
+      put.onsuccess = () => resolve()
+      put.onerror = (e) => reject(e.target.error)
+    }
+    req.onerror = (e) => reject(e.target.error)
+  })
 }
 
 // Reassign a single history entry to a project (or null to unfile it).

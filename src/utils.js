@@ -1,21 +1,76 @@
 import { CAMERA_GROUPS } from './constants'
 
+// public-domain cyrb53 (Bryc) — fast 53-bit non-crypto string hash, base-36 out.
+// Used only for cache keys, never security.
+export function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i)
+    h1 = Math.imul(h1 ^ ch, 2654435761)
+    h2 = Math.imul(h2 ^ ch, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
+}
+
+// Content fingerprint of an image's base64 payload. Length-prefixed to cut
+// collisions further. Stable for byte-identical bytes across reload / restore /
+// re-upload of the same source file (same browser build).
+export const imageHash = (base64) => `${base64.length.toString(36)}-${cyrb53(base64)}`
+
+// Cache key for one vision call. Folds in the model, the system prompt, and each
+// content block positionally (text hashed, images content-hashed) so it
+// auto-invalidates on any model / prompt / scene / role / frame-order / bytes
+// change. Vision temperature is fixed at 0.3 everywhere, folded in as a literal.
+export function visionCacheKey(model, system, content) {
+  const parts = content.map(b =>
+    b.type === 'text' ? `t:${cyrb53(b.text || '')}` : `i:${imageHash(b.source.data)}`)
+  return `v2|t0.3|${model}|s:${cyrb53(system || '')}|${parts.join('|')}`
+}
+
 export const presetById = (id, presets) => presets.find(p => p.id === id)
 
 export const snap32 = (n) => Math.round(n / 32) * 32
 
 export const btn = (active) => ({
-  padding: '6px 14px', borderRadius: 6, border: '1px solid',
-  borderColor: active ? '#7c6af7' : '#333',
-  background: active ? '#2d2060' : '#1a1a2e',
-  color: active ? '#c4b8ff' : '#888',
-  fontSize: 12, cursor: 'pointer', transition: 'all 0.15s',
+  padding: '9px 15px', borderRadius: 8, border: '1px solid',
+  borderColor: active ? 'var(--pe-accent-line)' : 'var(--pe-line)',
+  background: active ? 'var(--pe-accent-bg)' : 'var(--pe-surface)',
+  color: active ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)',
+  fontSize: 15, fontWeight: active ? 600 : 500, cursor: 'pointer', transition: 'all 0.12s',
 })
 
 export const selStyle = {
-  width: '100%', boxSizing: 'border-box', background: '#12121f',
-  border: '1px solid #2e2e44', borderRadius: 8, padding: '9px 12px',
-  color: '#e0e0f0', fontSize: 13, outline: 'none', cursor: 'pointer',
+  width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)',
+  border: '1px solid var(--pe-line)', borderRadius: 8, padding: '11px 12px',
+  color: 'var(--pe-ink)', fontSize: 15, outline: 'none', cursor: 'pointer',
+}
+
+// Section label — the small upper-case caption above a control group.
+export const lbl = {
+  fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block',
+  marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+}
+
+// Inline "· note" text that trails a label (not upper-case, muted).
+export const lblNote = { color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }
+
+// Muted helper paragraph under a control.
+export const hint = { fontSize: 14, color: 'var(--pe-ink-3)', lineHeight: 1.5 }
+
+// A white grouping card.
+export const card = {
+  background: 'var(--pe-surface)', border: '1px solid var(--pe-line)',
+  borderRadius: 12, padding: 20,
+}
+
+// A textarea in the compose column.
+export const taStyle = {
+  width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)',
+  border: '1px solid var(--pe-line)', borderRadius: 8, padding: '13px 15px',
+  color: 'var(--pe-ink)', fontSize: 15, resize: 'vertical', outline: 'none',
+  lineHeight: 1.6, transition: 'border-color 0.15s', fontFamily: 'var(--pe-mono)',
 }
 
 export const moveLabel = (id) =>

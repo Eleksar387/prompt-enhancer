@@ -3,13 +3,16 @@ const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
 }
 
-const LTX_INTRO = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
+const LTX_INTRO = `You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.
 
 CONTEXT
 You are given a TEXT DESCRIPTION of the first frame (produced by a vision model). It already
 establishes subject, lighting, color, wardrobe, and setting. Do NOT re-describe what the
 description already covers — describe what HAPPENS over time. Clips are short by default
 (97 frames, ~4 seconds) unless a longer duration is specified, so keep the action budget tight.
+If NO frame description is given (a pure text request), treat the scene text and any "Visual
+details to incorporate" block as the full source — establish subject, setting, wardrobe, lighting
+and color from them in the opening phrase, then describe what happens over time.
 
 SCENE SOURCE
 If the user provides a scene description, base the prompt on it. If they provide NO
@@ -261,13 +264,46 @@ If a reference-image description is provided, use it so the result resembles tha
 OUTPUT: always English, even if the input is another language. Return exactly one prompt
 paragraph. No headers, bullets, JSON, negative prompts, or explanation.`;
 
-const LTX_GUIDE_INTRO = `You are rewriting a user request into an LTX-2.3 image-to-video prompt for ComfyUI.
+export const SYSTEM_PROMPT_GROK_IMAGE = `You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-image).
+Rewrite the user's input into ONE natural-language prompt paragraph. Grok reads plain
+descriptive English and rewrites the prompt again on its own side, so keep it clean and
+readable — never output booru tags, keyword lists, weighted syntax like (word:1.3), or a
+negative prompt.
+
+PROCESS
+1. Identify the subject, action, and mood already present in the input. Do not introduce a
+   new subject, character, prop, or color the user didn't imply.
+2. Preserve the user's stated medium (photograph, painting, illustration, 3D render, anime,
+   etc.). Only pick a medium yourself if none was given.
+3. Layer in only what's needed to round out the scene, in this order: a style anchor (for
+   non-photographic media name an artist / era / school — e.g. "in the style of Moebius" —
+   to stop drift toward generic modern art), then the subject and its key attributes, then
+   the environment/setting, then lighting and camera framing (for non-photographic media use
+   a finish/texture descriptor instead), then closing color and mood notes.
+4. If the input is already detailed, make light edits only — do not pad it with invented
+   specifics. Match the level of detail to the input.
+5. Phrase every constraint positively. Never write a negation ("no X", "without X") —
+   describe what should be present instead.
+6. If literal on-image text is requested, keep the exact words in quotes.
+7. Depict people with dignity; assume ordinary, non-explicit clothing and framing.
+
+REFERENCE
+If a reference-image description is provided, use it so the result resembles that image
+(subject, composition, lighting, palette, style) — unless a variation is asked.
+
+OUTPUT: always English, even if the input is another language. Return exactly one prompt
+paragraph. No headers, bullets, JSON, negative prompts, or explanation.`;
+
+const LTX_GUIDE_INTRO = `You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.
 
 CONTEXT
 You are given a TEXT DESCRIPTION of the first frame (produced by a vision model). It already
 establishes subject, lighting, color, wardrobe, and setting. Do NOT re-describe what the
 description already covers — describe what HAPPENS over time. Clips are short by default
 (97 frames, ~4 seconds) unless a longer duration is specified.
+If NO frame description is given (a pure text request), treat the scene text and any "Visual
+details to incorporate" block as the full source — establish subject, setting, wardrobe, lighting
+and color from them in the opening phrase, then describe what happens over time.
 
 SCENE SOURCE
 If the user provides a scene description, base the prompt on it. If they provide NO
@@ -516,6 +552,18 @@ export const FLUX_RESOLUTIONS = [
   { id: 'port23',  label: '832×1216',  w: 832,  h: 1216, ratio: 832 / 1216,  note: 'Portrait · 2:3' },
   { id: 'land169', label: '1344×768',  w: 1344, h: 768,  ratio: 1344 / 768,  note: 'Landscape · 16:9' },
   { id: 'port916', label: '768×1344',  w: 768,  h: 1344, ratio: 768 / 1344,  note: 'Portrait · 9:16' },
+]
+
+// `ar` is the string passed to the xAI image API's `aspect_ratio` param; `w`/`h`/`ratio`
+// keep recommendRes / ratioLabel working. 'auto' lets Grok choose.
+export const GROK_IMAGE_RESOLUTIONS = [
+  { id: 'auto',    label: 'Auto',      w: 1024, h: 1024, ratio: 1,           ar: 'auto', note: 'Grok chooses the aspect ratio' },
+  { id: 'sq',      label: '1:1',       w: 1024, h: 1024, ratio: 1,           ar: '1:1',  note: 'Square' },
+  { id: 'land169', label: '16:9',      w: 1344, h: 768,  ratio: 1344 / 768,  ar: '16:9', note: 'Landscape' },
+  { id: 'port916', label: '9:16',      w: 768,  h: 1344, ratio: 768 / 1344,  ar: '9:16', note: 'Portrait' },
+  { id: 'land43',  label: '4:3',       w: 1152, h: 896,  ratio: 1152 / 896,  ar: '4:3',  note: 'Landscape' },
+  { id: 'port34',  label: '3:4',       w: 896,  h: 1152, ratio: 896 / 1152,  ar: '3:4',  note: 'Portrait' },
+  { id: 'cine219', label: '21:9',      w: 1536, h: 640,  ratio: 1536 / 640,  ar: '21:9', note: 'Cinematic' },
 ]
 
 export const SDXL_RESOLUTIONS = [
@@ -1126,6 +1174,14 @@ export const TARGETS = {
     visionPrompt: VISION_PROMPT_KREA2_TURBO,
     subtitle: 'Describe your image → get a natural-language Krea 2 Turbo prompt',
     resolutions: FLUX_RESOLUTIONS,
+    show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+  },
+  grokimage: {
+    id: 'grokimage', label: 'Grok Image · Image', type: 'image', system: SYSTEM_PROMPT_GROK_IMAGE,
+    visionPrompt: VISION_PROMPT_KREA2_TURBO,
+    subtitle: 'Describe your image → get a Grok-ready prompt, then render it with Grok (🎨 on the result)',
+    resolutions: GROK_IMAGE_RESOLUTIONS,
+    presetNote: 'Grok picks the final pixel dimensions; the selected aspect ratio is passed to the 🎨 Render call.',
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
   },
   sdxl: {

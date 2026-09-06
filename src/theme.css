@@ -1,0 +1,112 @@
+/* ============================================================================
+   Command Rail redesign — light, high-contrast, large-type theme.
+   Design tokens live here; inline styles in the components reference them as
+   var(--pe-*). Native form controls are forced light here with !important
+   because the components set their own (dark, legacy) inline backgrounds.
+   ========================================================================== */
+
+:root {
+  --pe-bg:          #e8eaf0;
+  --pe-surface:     #ffffff;
+  --pe-rail:        #f3f4f8;
+  --pe-line:        #c1c5d0;
+  --pe-line-soft:   #dbdee6;
+
+  --pe-ink:         #14151b;
+  --pe-ink-2:       #41454e;
+  --pe-ink-3:       #666b78;
+
+  --pe-accent:      #5733d1;
+  --pe-accent-ink:  #452ab5;
+  --pe-accent-bg:   #eee9fd;
+  --pe-accent-line: #c1adf1;
+
+  --pe-ok:          #0e7538;
+  --pe-ok-bg:       #e0f2e7;
+  --pe-danger:      #b3261e;
+  --pe-danger-bg:   #fbe9e8;
+  --pe-danger-line: #eab3ae;
+  --pe-warn:        #8a5a00;
+  --pe-warn-bg:     #fbefda;
+  --pe-warn-line:   #e6cfa0;
+
+  --pe-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --pe-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+}
+
+html, body {
+  background: var(--pe-bg);
+  color: var(--pe-ink);
+}
+
+#root {
+  font-family: var(--pe-font);
+  font-size: 16.5px;
+  line-height: 1.55;
+  color: var(--pe-ink);
+}
+
+/* --- native form controls: force light, larger, readable ------------------ */
+#root textarea,
+#root input,
+#root select {
+  background: var(--pe-surface) !important;
+  border-color: var(--pe-line) !important;
+  color: var(--pe-ink) !important;
+  font-family: var(--pe-font);
+}
+
+#root textarea {
+  font-size: 15px !important;
+}
+
+#root input {
+  font-size: 15px !important;
+}
+
+#root select {
+  font-size: 15px !important;
+  cursor: pointer;
+}
+
+#root textarea:focus,
+#root input:focus,
+#root select:focus {
+  border-color: var(--pe-accent) !important;
+  outline: none;
+}
+
+#root ::placeholder {
+  color: var(--pe-ink-3) !important;
+  opacity: 1;
+}
+
+/* monospace prompt / scene / admin fields keep the mono face */
+#root textarea[data-pe-mono="1"] {
+  font-family: var(--pe-mono);
+}
+
+/* --- misc ---------------------------------------------------------------- */
+#root a { color: var(--pe-accent-ink); }
+#root a:hover { color: var(--pe-accent); }
+
+#root summary { cursor: pointer; }
+
+#root ::selection {
+  background: var(--pe-accent-bg);
+  color: var(--pe-accent-ink);
+}
+
+#root details {
+  color: var(--pe-ink-2);
+}
+
+/* light scrollbars for the internally-scrolling panels */
+#root *::-webkit-scrollbar { width: 12px; height: 12px; }
+#root *::-webkit-scrollbar-track { background: transparent; }
+#root *::-webkit-scrollbar-thumb {
+  background: #c7cbd6;
+  border-radius: 8px;
+  border: 3px solid var(--pe-bg);
+}
+#root *::-webkit-scrollbar-thumb:hover { background: #b3b8c6; }
