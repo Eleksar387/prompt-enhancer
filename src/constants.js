@@ -809,6 +809,7 @@ Output ONLY a valid JSON object — no markdown code fences, no preamble, no exp
 {
   "title": "Film title (3–6 words)",
   "logline": "One sentence naming the situation and the single turn — not a full plot.",
+  "format_note": "Empty string \\"\\" when the idea fits a 45s–3min film as-is. If the idea is really a larger story (multiple turns, an arc that needs time, several locations that all matter), put ONE sentence here naming what had to be left out and what this script narrows down to. Never refuse — always still deliver the narrowed script below.",
   "look": "The film's visual style in 1–2 sentences — colour palette, medium or film stock, lighting register, lens character, grain. This look applies to every shot.",
   "language": "Primary spoken language, written in English (e.g. English, German, Japanese).",
   "soundscape": "One line: the film-wide ambient / diegetic sound identity (room tone, weather, machines, off-screen life). Applies to every clip unless a scene overrides it.",
@@ -853,7 +854,7 @@ THE FORMAT (these decide whether the film works at this length):
 - Show the consequence, not the process. Cut straight to the result of an action instead of walking through every step.
 - Prefer a SINGLE location. Reuse one location id across scenes when the action stays in one place. Add a second location only when the turn is impossible without it — never for variety.
 - Keep it filmable in a handful of shots. Think in seconds, not minutes: each scene is roughly 10–40 seconds of screen time.
-- If the idea is really a larger story (several turns, an arc that needs time to land, multiple locations that all matter), do NOT compress the whole arc. Pick the smallest self-contained moment from it that still works on its own, and make THAT the film.
+- If the idea is really a larger story (several turns, an arc that needs time to land, multiple locations that all matter), do NOT compress the whole arc. Pick the smallest self-contained moment from it that still works on its own, make THAT the film, and record the narrowing in "format_note". If the idea already fits, "format_note" is an empty string.
 
 CRAFT:
 - The scenes array must contain exactly the requested number of scenes.

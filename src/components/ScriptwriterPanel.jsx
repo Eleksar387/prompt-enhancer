@@ -248,7 +248,10 @@ const normalizeScript = (data) => {
       location_id: resolveLoc(s?.location_id) || locs[0]?.id || '',
     }
   })
-  return { ...data, characters: chars, locations: locs, scenes }
+  // format_note: the writer's own flag that the idea was really a bigger story
+  // narrowed to fit the micro-film length. Coerce to a plain string (or '').
+  const format_note = typeof data.format_note === 'string' ? data.format_note.trim() : ''
+  return { ...data, format_note, characters: chars, locations: locs, scenes }
 }
 
 // Rewrite each shot's characters[]/location_id/scene_id against a normalized script.
@@ -1024,6 +1027,12 @@ export default function ScriptwriterPanel({
     return `${prefix}${n}`
   }
   const updateFilmField = (field_, val) => setScript(prev => ({ ...prev, [field_]: val }))
+  // Acknowledge + clear the writer's "this idea is bigger than the format" note.
+  const dismissFormatNote = () => {
+    const next = { ...script, format_note: '' }
+    setScript(next)
+    persistState(undefined, undefined, undefined, undefined, undefined, next)
+  }
   const updateCharacter = (ci, field_, val) => setScript(prev => ({
     ...prev, characters: (prev.characters || []).map((c, i) => i === ci ? { ...c, [field_]: val } : c),
   }))
@@ -1161,8 +1170,9 @@ export default function ScriptwriterPanel({
   // Re-save the whole session under the same id at the CURRENT phase — used after
   // a frame image, a cast portrait, or a reference edit lands between phases. Pass
   // the just-computed framePrompts / refImages arrays to sidestep state-update lag.
-  const persistState = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride) => {
-    if (!onSaveHistory || !script) return
+  const persistState = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride) => {
+    const scr = scriptOverride || script
+    if (!onSaveHistory || !scr) return
     // Always store every artifact that exists, regardless of the current screen —
     // the record must carry the WHOLE path (script → cut → prompts) so a restore
     // can drop the user back on any step with the others intact. `phase` alone
@@ -1170,7 +1180,7 @@ export default function ScriptwriterPanel({
     const fp = promptsOverride !== undefined ? promptsOverride : finalPrompts
     commitHistory({
       ...basePayload(phaseOverride || phase, refsOverride || refImages),
-      script,
+      script: scr,
       directorsCut: cutOverride || directorsCut || null,
       finalPrompts: (fp && fp.length)
         ? fp.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
@@ -1731,6 +1741,23 @@ export default function ScriptwriterPanel({
       {/* Phase 2 — script review + cast/location bible */}
       {['script', 'directing'].includes(phase) && script && (
         <div>
+          {script.format_note && script.format_note.trim() && (
+            <div style={{
+              marginBottom: 16, padding: '11px 14px', display: 'flex', gap: 10, alignItems: 'flex-start',
+              background: 'var(--pe-warn-bg)', border: '1px solid var(--pe-warn-line)',
+              borderRadius: 8, fontSize: 12.5, lineHeight: 1.55, color: 'var(--pe-warn)',
+            }}>
+              <span style={{ flexShrink: 0 }}>⚠</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <strong>The idea is bigger than a very short film.</strong> {script.format_note.trim()}
+                {' '}This script is a narrowed-down slice of it — if you meant the whole story, it needs a longer format.
+              </div>
+              <button onClick={dismissFormatNote} title="Dismiss"
+                style={{ flexShrink: 0, background: 'none', border: 'none', color: 'inherit', fontSize: 14, cursor: 'pointer', padding: 0, lineHeight: 1 }}>
+                ✕
+              </button>
+            </div>
+          )}
           <div style={{ marginBottom: 12 }}>
             <label style={lbl}>Film Title</label>
             <input value={script.title || ''} onChange={e => updateFilmField('title', e.target.value)}
