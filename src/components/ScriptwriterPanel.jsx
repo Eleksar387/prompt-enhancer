@@ -174,6 +174,20 @@ const rehydrateRefImage = (d) => ({
 // on a clip (shot.refs).
 const refKey = (im) => im.hash || (im.caption || '').trim() || im.fileName || ''
 
+// The H3 Director's per-clip `reference_images` — 1-based numbers into the
+// numbered "Reference images" block (= the captioned refs in array order) —
+// resolved to refKey[]. Returns null when the field is absent (clip stays on
+// the auto default), or [] when the Director explicitly wants no reference.
+const resolveRefSelection = (indices, captioned) => {
+  if (!Array.isArray(indices)) return null
+  const keys = []
+  for (const n of indices) {
+    const im = captioned[Number(n) - 1]
+    if (im) { const k = refKey(im); if (!keys.includes(k)) keys.push(k) }
+  }
+  return keys
+}
+
 // Name of the bible entry a reference points at, for the folded-in text block.
 const refEntityName = (im, script) => {
   if (im.linkType === 'character') return (script?.characters || []).find(c => c.id === im.linkId)?.name || ''
@@ -649,7 +663,14 @@ export default function ScriptwriterPanel({
     setFinalPrompts([])
     setPhase('directing')
     const isH3 = promptTarget === 'minimax_h3'
-    const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR, script)
+    // Describe any linked-but-undescribed references first (like runPhase1 /
+    // runPhase3) so the Director sees the full numbered reference list and can
+    // pick per clip.
+    let refs = refImages
+    if (isH3 && refImages.some(im => im.base64 && !im.caption?.trim())) {
+      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+    }
+    const refBlock = assembleRefBlock(refs, REF_HEADING_DIRECTOR, script)
     const lookLine = isH3 && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3 && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
     const pacingLine = isH3 ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
@@ -657,7 +678,21 @@ export default function ScriptwriterPanel({
     try {
       const { text } = await callOllama(writerModel, userMsg, isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
       const data = normalizeDirectorsCut(parseJSON(text), script)
-      data.shots = data.shots.map(s => ({ ...s, duration: s.duration || (isH3 ? 7 : 4) }))
+      // The Director's per-clip reference_images → the shot.refs pin the chips
+      // and Phase 3 already consume. Same list + order as assembleRefBlock.
+      const capd = (refs || []).filter(im => im.caption && im.caption.trim())
+      data.shots = data.shots.map(s => {
+        const { reference_images, ...rest } = s
+        const picked = isH3 ? resolveRefSelection(reference_images, capd) : null
+        return {
+          ...rest,
+          duration: s.duration || (isH3 ? 7 : 4),
+          ...(picked ? { refs: picked } : {}),
+        }
+      })
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        window.__peLastDirectorRefs = data.shots.map(s => ({ shot: s.shot_number, refs: s.refs }))
+      }
       const freshFrames = data.shots.map(() => emptyFrameEntry())
       setDirectorsCut(data)
       setFramePrompts(freshFrames)
@@ -903,13 +938,18 @@ export default function ScriptwriterPanel({
       const arr = Array.isArray(raw?.shots) ? raw.shots : raw?.shot ? [raw.shot] : Array.isArray(raw) ? raw : []
       const fresh = (normalizeDirectorsCut({ shots: arr }, script).shots || [])[0]
       if (!fresh) throw new Error(`The model did not return a ${noun}.`)
+      // A returned reference_images re-picks this clip (the beat may have
+      // changed — e.g. the face is now visible); otherwise keep the existing pin.
+      const capd = (refImages || []).filter(im => im.caption && im.caption.trim())
+      const picked = isH3now ? resolveRefSelection(fresh.reference_images, capd) : null
+      const { reference_images, ...freshRest } = fresh
       const merged = {
-        ...fresh,
+        ...freshRest,
         shot_number: shot.shot_number,
         scene_id: shot.scene_id,
         scene_title: shot.scene_title,
         duration: fresh.duration || shot.duration || (isH3now ? 7 : 4),
-        ...(Array.isArray(shot.refs) ? { refs: shot.refs } : {}),  // keep a pinned reference set across a rewrite
+        ...(picked ? { refs: picked } : (Array.isArray(shot.refs) ? { refs: shot.refs } : {})),
       }
       const nextCut = { ...cut, shots: cut.shots.map((s, i) => i === si ? merged : s) }
       setDirectorsCut(nextCut)
@@ -2169,8 +2209,8 @@ export default function ScriptwriterPanel({
                         </div>
                         <div style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
                           {pinned
-                            ? 'Pinned — only the ticked references go into this clip’s prompt.'
-                            : 'Auto — every described reference for this clip’s characters. Click a chip to pin an exact set (e.g. drop a wardrobe reference the character is not wearing yet).'}
+                            ? 'Pinned set — only the ticked references go into this clip. The Director pre-selects these (dropping e.g. a face reference where the face is hidden); click a chip to change it, or “reset to auto”.'
+                            : 'Auto — every described reference for this clip’s characters. Click a chip to pin an exact set.'}
                         </div>
                       </>
                     ) : active.size ? (

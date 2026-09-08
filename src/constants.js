@@ -914,10 +914,13 @@ Output ONLY a valid JSON object — no markdown code fences, no preamble, no exp
       "dialogue": ["CHARACTER NAME: line"],
       "lighting_mood": "Consistent with the film's look.",
       "duration": 7,
+      "reference_images": [2],
       "notes": "Continuity / insert-shot flags."
     }
   ]
 }
+
+"reference_images": 1-based numbers from the "Reference images" block for the references that actually help THIS clip. [] means the clip needs none. Omit the field entirely if the user message has no reference block.
 
 Rules:
 - One clip = one emotional or action unit, 4–15 seconds. A scene becomes as many clips as its beats need — usually 2–4. Prefer the fewest clips that respect the beat-density limit below: do NOT split a clip that already holds two or fewer facial beats, and never add a clip with no beat of its own. A 3-scene film is typically 8–14 clips, not 20+. If the user message carries a "Pacing:" line, follow it.
@@ -930,6 +933,11 @@ Rules:
 - establishing clips are a single camera move, no dialogue, and carry the location's continuity.
 - duration is an integer 4–15. Budget ~4s for a complex beat (a prop hand-off). Leave the last ~1.5s of every clip as a settle with no new beat — H3 degrades over the final ~1.2–1.7s.
 - If the user message carries a cast/location bible or a "Reference images provided by the user" block, keep every clip's wardrobe, location detail, and lighting_mood consistent with it.
+- REFERENCE SELECTION: if the user message carries a numbered "Reference images" block, set "reference_images" on every clip to the 1-based numbers of the references that genuinely help that clip:
+  - a subject / identity (face) reference ONLY when that character's face is actually visible in the clip — omit it when the face is under a helmet, hood or mask, covered by a blanket or hands, turned away from the camera, in silhouette, or too far for the face to read;
+  - a wardrobe or prop reference only in clips where that garment or object is on screen;
+  - a location / environment reference for clips set in that place.
+  Use the exact numbers from the block, never invent one. "[]" means the clip needs no reference. If there is no reference block, omit "reference_images".
 - "characters" must contain the exact "id" strings from the script's characters array (e.g. "c1", "c2") for everyone visible in that clip — never names, never invented ids. Use [] only for a true no-person insert. "location_id" is the exact id from the script's locations array. Phase 3 uses these to attach the right reference images.
 - Do not include any text before or after the JSON object.`
 
