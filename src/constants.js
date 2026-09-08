@@ -1191,12 +1191,12 @@ GENERAL RULES
 14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
    decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
    plan, or ending condition.
-15. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences.
+15. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences. KEEP THE FIELD LABELS: the output must start with a literal field label — "integrated_multimodal_description:" for T2VA / I2VA / L2VA / FL2VA, or "subject_definitions:" for Ref2VA. Never begin the output with a bare "[Shot 1]" or with description prose — a missing first label is malformed and breaks the parser. Every field below (overall_soundscape:, non_diegetic_music:, and the Ref2VA sections) keeps its label too.
 
 MODE-SPECIFIC OUTPUT
 
 T2VA (no reference image):
-Output exactly, in order:
+Output exactly, in order — the first line MUST begin with the literal token "integrated_multimodal_description:":
 integrated_multimodal_description: [Shot 1] …
 
 overall_soundscape: …

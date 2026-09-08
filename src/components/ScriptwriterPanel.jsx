@@ -174,6 +174,26 @@ const rehydrateRefImage = (d) => ({
 // on a clip (shot.refs).
 const refKey = (im) => im.hash || (im.caption || '').trim() || im.fileName || ''
 
+// Tidy one finished H3 clip prompt. The writer model regularly (a) wraps the
+// output in a ```lang fence and (b) drops the leading field label, emitting a
+// bare "[Shot 1] …" instead of "integrated_multimodal_description: [Shot 1] …"
+// (T2VA) / "subject_definitions: …" (Ref2VA). H3 needs that first label, so
+// re-attach it deterministically.
+const normalizeH3Prompt = (raw, isRef) => {
+  let t = (raw || '').trim()
+    .replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim()
+  const label = isRef ? 'subject_definitions:' : 'integrated_multimodal_description:'
+  const has = isRef
+    ? /^\s*subject_definitions\s*:/i.test(t)
+    : /^\s*integrated_multimodal_description\s*:/i.test(t)
+  // Only prepend when the body clearly starts with the description itself (a
+  // shot marker or ordinary opening prose) — never in front of some other field.
+  if (!has && /^\s*(\[Shot\s*\d+\]|<Picture\b|<Subject\b|In\b|At\b|The\b|From\b|A\b|An\b|On\b)/i.test(t)) {
+    t = `${label} ${t}`
+  }
+  return t
+}
+
 // The H3 Director's per-clip `reference_images` — 1-based numbers into the
 // numbered "Reference images" block (= the captioned refs in array order) —
 // resolved to refKey[]. Returns null when the field is absent (clip stays on
@@ -360,9 +380,14 @@ export default function ScriptwriterPanel({
     initialState?.directorsCut && initialState?.script
       ? normalizeDirectorsCut(initialState.directorsCut, normalizeScript(initialState.script))
       : (initialState?.directorsCut || null))
-  const [finalPrompts, setFinalPrompts] = useState(
-    initialState?.finalPrompts?.map(p => ({ ...p, loading: false, error: '' })) || []
-  )
+  const [finalPrompts, setFinalPrompts] = useState(() => {
+    const h3 = (initialState?.promptTarget || DEFAULT_PROMPT_TARGET) === 'minimax_h3'
+    // Re-attach a dropped first field label on older / model-broken entries.
+    return (initialState?.finalPrompts || []).map(p => ({
+      ...p, loading: false, error: '',
+      text: h3 && p.text ? normalizeH3Prompt(p.text, /<Subject\s*\d/.test(p.text)) : p.text,
+    }))
+  })
   const [framePrompts, setFramePrompts] = useState(() => {
     if (initialState?.framePrompts?.length) return initialState.framePrompts.map(rehydrateFrameEntry)
     if (initialState?.directorsCut?.shots?.length) return initialState.directorsCut.shots.map(() => emptyFrameEntry())
@@ -882,8 +907,10 @@ export default function ScriptwriterPanel({
     }
     const proms = shots.map((shot, i) => {
       const userMsg = userMsgs[i]
+      const isRefShot = /^MODE:\s*Ref2VA/.test(userMsg)
       return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
-        .then(({ text, usage }) => {
+        .then(({ text: raw, usage }) => {
+          const text = isH3 ? normalizeH3Prompt(raw, isRefShot) : raw
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text }
         })
@@ -1039,7 +1066,9 @@ export default function ScriptwriterPanel({
     const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
     const systemPrompt = isH3now ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
     try {
-      const { text, usage } = await callOllama(writerModel, buildShotPromptMsg(shot, refs, ratio), systemPrompt, cfg, 0.85)
+      const userMsg = buildShotPromptMsg(shot, refs, ratio)
+      const { text: raw, usage } = await callOllama(writerModel, userMsg, systemPrompt, cfg, 0.85)
+      const text = isH3now ? normalizeH3Prompt(raw, /^MODE:\s*Ref2VA/.test(userMsg)) : raw
       let saved = null
       setFinalPrompts(prev => {
         const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
