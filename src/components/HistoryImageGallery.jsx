@@ -53,8 +53,9 @@ function collectImages(history) {
       render: isRender ? (im.upscaled ? '🎨 2K' : '🎨') : null,
       slot,
       // Description shown/edited in the info panel. Renders use the model's
-      // revised prompt (read-only); input images use the entry's vision caption.
-      caption: isRender ? (im.revisedPrompt || '') : (ctx.caption || ''),
+      // revised prompt (read-only); a per-image caption wins when stored (the
+      // Scriptwriter keeps one per reference), else the entry's vision caption.
+      caption: isRender ? (im.revisedPrompt || '') : (im.caption || ctx.caption || ''),
       captionScope: captionScope(ctx.frameMode, slot),
       entryId: ctx.entryId || null,
       ts,
@@ -216,7 +217,14 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
                 key={img.key}
                 draggable
                 onDragStart={(e) => onDragStart(e, img)}
-                onClick={onPick ? () => onPick({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash }) : undefined}
+                onClick={onPick ? () => onPick({
+                  base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash,
+                  // Only a per-reference caption/role carries meaning to another
+                  // reference slot; a frame/render description does not.
+                  caption: img.slot === 'ref' ? img.caption : '',
+                  role: img.slot === 'ref' ? img.role : null,
+                  note: img.slot === 'ref' ? img.note : '',
+                }) : undefined}
                 title={`${img.fileName}${img.render ? ' · Grok render' : ''}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
                 style={{
                   position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',

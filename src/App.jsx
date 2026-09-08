@@ -1313,6 +1313,7 @@ export default function App() {
           visionModel={effectiveVision}
           initialState={scriptwriterInitial}
           onSaveHistory={saveScriptHistory}
+          history={history}
           comfyCfg={comfyCfg}
           setComfyCfg={setComfyCfg}
         />

@@ -13,6 +13,7 @@ import { btn, shrinkToJpeg, imageHash } from '../utils'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
+import HistoryImageGallery from './HistoryImageGallery'
 
 const GENRE_OPTIONS = [
   { id: 'auto',     label: 'Auto' },
@@ -316,6 +317,7 @@ const STEPS = ['Script', "Director's Cut", 'Video Prompts']
 
 export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
+  history = [],
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
 }) {
   const sessionId = useRef(initialState?.id || generateId())
@@ -435,6 +437,29 @@ export default function ScriptwriterPanel({
     const added = []
     for (const f of files) { try { const r = await fileToRef(f); added.push({ ...r, ...(guessRefLink(r) || {}) }) } catch { /* skip bad file */ } }
     if (added.length) setRefImages(prev => [...prev, ...added])
+  }
+
+  // Reuse an image picked from the "Reuse image from history" gallery — added as
+  // a new reference image, fuzzy-linked to the bible by note/filename. A caption
+  // carried over from a past reference is kept as-is; otherwise it is described
+  // on the spot (best-effort, like the on-card uploads).
+  const addRefFromHistory = (d) => {
+    if (!d?.base64 || refImages.length >= MAX_REF_IMAGES) return
+    const dupe = refImages.some(im =>
+      (im.hash && d.hash && im.hash === d.hash) || (im.base64 && im.base64 === d.base64))
+    if (dupe) return
+    const hash = d.hash || imageHash(d.base64)
+    const base = {
+      id: generateId(), base64: d.base64, mediaType: d.mediaType || 'image/jpeg',
+      previewUrl: `data:${d.mediaType || 'image/jpeg'};base64,${d.base64}`,
+      fileName: d.fileName || 'reference.jpg', note: d.note || '', caption: d.caption || '',
+      linkType: '', linkId: '', role: d.role || '', preserve: 'strong', generated: false, hash,
+    }
+    const withLink = { ...base, ...(guessRefLink(base) || {}) }
+    const next = [...refImages, withLink]
+    setRefImages(next)
+    if (withLink.caption) persistState(undefined, next)
+    else captionRefImages({ imgs: next }).then(c => persistState(undefined, c)).catch(() => {})
   }
 
   const removeRefImage   = (id) => setRefImages(prev => prev.filter(im => im.id !== id))
@@ -1617,6 +1642,16 @@ export default function ScriptwriterPanel({
           )
         })}
       </div>
+
+      {/* Reuse an image from a past generation as a reference (same block as the
+          other targets; picking adds it to the reference images below) */}
+      {!['prompting', 'done'].includes(phase) && (
+        <HistoryImageGallery
+          history={history}
+          onPick={addRefFromHistory}
+          pickHint="adds it as a reference image (link it to a character, wardrobe, location, style or prop below)"
+        />
+      )}
 
       {/* Error */}
       {error && (
