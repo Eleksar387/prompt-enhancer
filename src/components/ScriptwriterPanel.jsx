@@ -1698,7 +1698,7 @@ export default function ScriptwriterPanel({
               style={{ ...field({ resize: 'vertical' }) }}
               onFocus={focusBorder} onBlur={blurBorder} />
           </div>
-          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
             <div>
               <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1718,6 +1718,10 @@ export default function ScriptwriterPanel({
               </div>
             </div>
           </div>
+          <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
+            This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
+            1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
+          </p>
           <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
             {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
           </button>
