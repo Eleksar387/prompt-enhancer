@@ -33,6 +33,50 @@ const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   nudge: VARIANT_NUDGES[i] || '',
 }))
 
+// The vision description stored on a history entry — read it, and (when `onSave`
+// is given) edit it in place. `onSave(text)` should persist + refresh.
+function HistoryCaptionEditor({ value, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const [flash, setFlash] = useState(false)
+  useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
+
+  const save = async () => {
+    await onSave(draft)
+    setEditing(false)
+    setFlash(true)
+    setTimeout(() => setFlash(false), 1800)
+  }
+
+  if (editing) {
+    return (
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 4 }}>👁 vision description</div>
+        <textarea value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false}
+          rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
+          style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.55, color: 'var(--pe-ink-2)', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '6px 8px', fontFamily: 'inherit', resize: 'vertical' }} />
+        <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+          <button onClick={save} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 10px', cursor: 'pointer' }}>Save</button>
+          <button onClick={() => { setDraft(value); setEditing(false) }} style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <details style={{ marginBottom: 6 }}>
+      <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--pe-ink-3)' }}>
+        👁 vision description{flash ? ' · ✓ saved' : ''}
+      </summary>
+      <div style={{ fontSize: 13, color: 'var(--pe-ink-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', marginTop: 4 }}>{value}</div>
+      {onSave && (
+        <button onClick={() => { setDraft(value); setEditing(true) }}
+          style={{ marginTop: 4, fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>✎ Edit</button>
+      )}
+    </details>
+  )
+}
+
 // History-filter helpers — pure, work on any saved entry shape (old or new).
 const entryTargetId = (h) => (h.type === 'scriptwriter' ? 'scriptwriter' : h.target)
 const entryTargetLabel = (id) => (id === 'scriptwriter' ? 'Scriptwriter' : TARGETS[id]?.label || id)
@@ -47,7 +91,9 @@ const entryHasImages = (h) => !!(
 const entrySearchText = (h) => {
   const parts = [h.project, h.model, entryTargetLabel(entryTargetId(h))]
   if (h.type === 'scriptwriter') {
-    parts.push(h.idea, h.script?.title)
+    parts.push(h.idea, h.script?.title, h.script?.logline, h.script?.look)
+    for (const c of h.script?.characters || []) parts.push(c.name, c.appearance, c.wardrobe)
+    for (const l of h.script?.locations || []) parts.push(l.name, l.description)
     parts.push(JSON.stringify(h.script?.scenes || ''), JSON.stringify(h.directorsCut?.shots || ''))
     for (const p of h.finalPrompts || []) parts.push(p.text, p.sceneTitle)
     for (const im of h.refImages || []) parts.push(im.note, im.caption)
@@ -137,6 +183,7 @@ export default function App() {
   const [flashId, setFlashId]         = useState(null)
   const [results, setResults]         = useState([])
   const [caption, setCaption]         = useState('')
+  const [savedCaption, setSavedCaption] = useState('')  // caption as generated/restored — for hand-edit detection
   const [visionStats, setVisionStats] = useState(null)  // { fromCache, fresh } for the last vision run
   const [adaptSourceOverride, setAdaptSourceOverride] = useState(null)  // set by a history card's "⇄ Adapt"
   const [visionBusy, setVisionBusy]   = useState(false)
@@ -649,7 +696,7 @@ export default function App() {
       : [])
     // A 🎨 Render right after a restore should patch this same entry.
     lastSavedEntryIdRef.current = h.id || null
-    setCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
+    setCaption(h.caption || ''); setSavedCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
     setSoundscape(h.soundscape || ''); setMusic(h.music || '')
     const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
     setH3RatioId(ratioPreset?.id || '')
@@ -729,7 +776,7 @@ export default function App() {
     setSoundscape(''); setMusic('')
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
     setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
-    setFrameMode(nextMode); setResults([]); setCaption(''); setVisionStats(null); setAdaptSourceOverride(null)
+    setFrameMode(nextMode); setResults([]); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null)
   }
 
   // Every vision-model call funnels through here: content-addressed cache
@@ -879,7 +926,7 @@ export default function App() {
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
     abortAllVideos()
-    setGlobalError(''); setCopied(null); setCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
+    setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
 
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
@@ -894,6 +941,7 @@ export default function App() {
         const { text, stats } = await captionImages()
         frameDescription = text
         setCaption(text)
+        setSavedCaption(text)
         setVisionStats(stats)
       } catch (e) {
         setVisionBusy(false)
@@ -1043,17 +1091,33 @@ export default function App() {
     : frameMode === 'ref' ? refImages.length > 0
     : !!firstImg
 
-  // A result's text has been hand-edited away from what was generated/restored
-  // (`r.saved`) — offer to persist it as a new history entry.
+  // The result text or the vision description has been hand-edited away from what
+  // was generated/restored — offer to persist it as a new history entry.
   const resultsEdited = !writing && results.some(r => r.text && !r.error && r.text !== r.saved)
+  const captionEdited = !writing && !!caption.trim() && caption !== savedCaption && results.some(r => r.text && !r.error)
 
   const saveResultsEdit = () => {
     const outs = results.filter(r => r.text && !r.error).map(r => ({ label: r.label, text: r.text, ...(r.images?.length ? { images: r.images } : {}), ...(r.video ? { video: r.video } : {}) }))
     if (!outs.length) return
     saveHistory(buildSnapshot(caption || null, hasImgNow, outs.length), outs)
     setResults(prev => prev.map(r => ({ ...r, saved: r.text })))
+    setSavedCaption(caption)
     setSavedEditFlash(true)
     setTimeout(() => setSavedEditFlash(false), 1800)
+  }
+
+  // Re-run only the writer from the current (possibly hand-edited) vision
+  // description — skips a fresh vision pass so an edit to the description sticks.
+  const rerunFromCaption = async () => {
+    if (!caption.trim() || writing) return
+    abortAllVideos()
+    setGlobalError(''); setCopied(null); setAdaptSourceOverride(null)
+    const stylePart = buildStylePart({
+      style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
+    })
+    const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
+    setSavedCaption(caption)
+    await runWriter(caption, stylePart, lengthPart, hasImgNow)
   }
   const canGenerate = t.type === 'image'
     ? (!!scene.trim() || !!firstImg)
@@ -1446,7 +1510,8 @@ export default function App() {
 
       {/* Image panels */}
       {showImage && (
-        <HistoryImageGallery history={history} onPick={pickHistoryImage} pickHint={galleryPickHint} />
+        <HistoryImageGallery history={history} onPick={pickHistoryImage} pickHint={galleryPickHint}
+          onSaveCaption={(entryId, text) => updateHistoryEntry(entryId, { caption: text }).then(refreshHistory).catch(() => {})} />
       )}
       {showImage && (t.type === 'image' || frameMode === 'single' ? (
         <>
@@ -1569,16 +1634,36 @@ export default function App() {
         </div>
       )}
 
-      {/* Vision caption */}
+      {/* Vision caption — editable; stored on the history entry */}
       {caption && (
         <details style={{ marginTop: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px' }}>
           <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            👁 vision description (read-only) · {effectiveVision}
+            👁 vision description{effectiveVision ? ` · ${effectiveVision}` : ''}
             {visionStats && (visionStats.fromCache + visionStats.fresh > 0) && (
               <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.fromCache} cached, {visionStats.fresh} described</span>
             )}
+            {caption !== savedCaption && (
+              <span style={{ color: 'var(--pe-accent-ink)', textTransform: 'none', letterSpacing: 0 }}> · edited</span>
+            )}
           </summary>
-          <div style={{ marginTop: 8, fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{caption}</div>
+          <textarea
+            value={caption}
+            onChange={e => setCaption(e.target.value)}
+            spellCheck={false}
+            rows={Math.min(16, Math.max(4, caption.split('\n').length + 1))}
+            style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '8px 10px', fontFamily: 'inherit', resize: 'vertical' }}
+          />
+          <div style={{ marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--pe-ink-3)', lineHeight: 1.5 }}>
+              The writer built the prompt from this. Edit it and re-run the writer to steer the result; the text is saved with the history entry.
+            </span>
+            {caption.trim() && caption !== savedCaption && !writing && (
+              <button onClick={rerunFromCaption}
+                style={{ flexShrink: 0, fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>
+                ↻ Re-run writer with this description
+              </button>
+            )}
+          </div>
         </details>
       )}
 
@@ -1665,7 +1750,7 @@ export default function App() {
           )}
           {results.some(r => r.text) && (
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              {(resultsEdited || savedEditFlash) && (
+              {(resultsEdited || captionEdited || savedEditFlash) && (
                 <button onClick={saveResultsEdit} disabled={savedEditFlash}
                   style={{ fontSize: 13, color: savedEditFlash ? 'var(--pe-ok)' : 'var(--pe-accent-ink)', background: 'none', border: `1px solid ${savedEditFlash ? 'var(--pe-ok-bg)' : 'var(--pe-accent-line)'}`, borderRadius: 6, padding: '5px 12px', cursor: savedEditFlash ? 'default' : 'pointer' }}>
                   {savedEditFlash ? '✓ Saved to history' : '💾 Save edited prompt to history'}
@@ -1920,10 +2005,16 @@ export default function App() {
                     <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 4 }}>
                       Scriptwriter · {h.model} · {phaseLabel}
                       {h.script ? ` · ${h.script.scenes?.length ?? 0} scenes` : ''}
-                      {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} shots` : ''}
+                      {h.script?.characters?.length ? ` · ${h.script.characters.length} cast` : ''}
+                      {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} ${h.promptTarget === 'minimax_h3' ? 'clips' : 'shots'}` : ''}
                       {h.finalPrompts ? ` · ${h.finalPrompts.filter(p => p.text).length} ${h.promptTarget === 'minimax_h3' ? 'H3' : 'LTX'} prompts` : ''}
                     </div>
                     {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
+                    {h.script?.characters?.length > 0 && (
+                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginBottom: 4 }}>
+                        Cast: {h.script.characters.map(c => c.name).join(', ')}
+                      </div>
+                    )}
                     {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
                     {h.refImages?.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
@@ -2021,6 +2112,12 @@ export default function App() {
                           : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{im}</span>
                       )}
                     </div>
+                  )}
+                  {h.caption && (
+                    <HistoryCaptionEditor
+                      value={h.caption}
+                      onSave={h.id ? (text => updateHistoryEntry(h.id, { caption: text }).then(refreshHistory).catch(() => {})) : null}
+                    />
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                     {(h.outputs || []).map((o, oi) => (

@@ -26,12 +26,20 @@ const describeBtn = (disabled) => ({
   fontSize: 13, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
 })
 
+const sel = {
+  background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6,
+  padding: '5px 7px', color: 'var(--pe-ink)', fontSize: 12.5, outline: 'none', fontFamily: 'inherit',
+}
+
 export default function ScriptwriterRefImages({
   images, editable, status, busy, max,
   onAddFiles, onRemove, onNote, onCaption, onDescribe,
+  linkTypes = [], characters = [], locations = [], roles = [], preserves = [],
+  onLinkType, onField,
 }) {
   const fileInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
+  const [advId, setAdvId] = useState(null)   // which row has role/preservation expanded
 
   if (!editable && images.length === 0) return null
 
@@ -55,9 +63,15 @@ export default function ScriptwriterRefImages({
                 </span>
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
-                {im.note && im.note.trim() && (
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--pe-ink-2)', marginBottom: 2 }}>{im.note.trim()}</div>
-                )}
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--pe-ink-2)', marginBottom: 2 }}>
+                  {im.note?.trim() || im.fileName}
+                  {im.linkType && (
+                    <span style={{ fontWeight: 400, color: 'var(--pe-ink-3)' }}>
+                      {' · '}{(linkTypes.find(t => t.id === im.linkType)?.label) || im.linkType}
+                      {im.generated ? ' (generated)' : ''}
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
                   {im.caption?.trim() || 'Not described.'}
                 </div>
@@ -104,6 +118,45 @@ export default function ScriptwriterRefImages({
                 onChange={e => onNote(im.id, e.target.value)}
                 placeholder={'How to use this reference — e.g. "the protagonist", "the farmhouse at dusk"'} />
             </div>
+
+            {onLinkType && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>This is a</span>
+                <select style={sel} value={im.linkType || ''} disabled={busy} onChange={e => onLinkType(im.id, e.target.value)}>
+                  <option value="">— pick —</option>
+                  {linkTypes.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+                {(im.linkType === 'character' || im.linkType === 'wardrobe') && characters.length > 0 && (
+                  <select style={sel} value={im.linkId || ''} disabled={busy} onChange={e => onField(im.id, { linkId: e.target.value })}>
+                    <option value="">— which character —</option>
+                    {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+                {im.linkType === 'location' && locations.length > 0 && (
+                  <select style={sel} value={im.linkId || ''} disabled={busy} onChange={e => onField(im.id, { linkId: e.target.value })}>
+                    <option value="">— which location —</option>
+                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                )}
+                {im.linkType && (
+                  <button onClick={() => setAdvId(advId === im.id ? null : im.id)}
+                    style={{ fontSize: 12, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 7px', cursor: 'pointer' }}>
+                    {advId === im.id ? 'hide' : 'role / strength'}
+                  </button>
+                )}
+              </div>
+            )}
+            {onLinkType && advId === im.id && im.linkType && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                <select style={sel} value={im.role || ''} disabled={busy} onChange={e => onField(im.id, { role: e.target.value })}>
+                  {roles.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                </select>
+                <select style={sel} value={im.preserve || 'strong'} disabled={busy} onChange={e => onField(im.id, { preserve: e.target.value })}>
+                  {preserves.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </div>
+            )}
+
             <div>
               <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>Description</label>
               {im.caption && im.caption.trim() ? (

@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
+import JSZip from 'jszip'
 import { callOllama } from '../api'
 import {
-  SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, buildLtxGuideSystemPrompt,
+  SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
+  buildLtxGuideSystemPrompt,
   SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
-  SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER,
+  SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
   SYSTEM_PROMPT_MINIMAX_H3, MINIMAX_H3_RESOLUTIONS,
+  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash } from '../utils'
 import { generateId } from '../db'
@@ -65,13 +68,32 @@ const FRAME_SYSTEM = {
 }
 const SHOT_SYSTEM_PROMPT = buildLtxGuideSystemPrompt('single')
 
-// Phase 3 output model — one global choice for the whole run.
+// Phase 3 output model — one global choice for the whole run. Chosen on the
+// script-review screen so the Director (phase 2) can specialise for it.
 const PROMPT_TARGETS = [
-  { id: 'ltx',        label: 'LTX-2.3'    },
   { id: 'minimax_h3', label: 'MiniMax H3' },
+  { id: 'ltx',        label: 'LTX-2.3'    },
 ]
 const PROMPT_TARGET_LABEL = { ltx: 'LTX-2.3', minimax_h3: 'MiniMax H3' }
+const DEFAULT_PROMPT_TARGET = 'minimax_h3'
 const H3_DEFAULT_RATIO = 'land169'   // 16:9 landscape — film default
+
+// Reference-image link types → a sensible default H3 role. The user can override
+// the role per image; the link (which character / location it is) drives which
+// shots the reference is attached to in the Ref2VA phase-3 output.
+const REF_LINK_TYPES = [
+  { id: 'character', label: 'Character', role: 'subject_identity', preserve: 'exact'       },  // lock the face
+  { id: 'wardrobe',  label: 'Wardrobe',  role: 'wardrobe',         preserve: 'strong'      },
+  { id: 'location',  label: 'Location',  role: 'environment',      preserve: 'guide'       },  // transfer the room, don't pixel-lock
+  { id: 'style',     label: 'Style',     role: 'style',            preserve: 'inspiration' },
+  { id: 'prop',      label: 'Prop',      role: 'product_object',   preserve: 'strong'      },
+]
+const linkTypeDef  = (id) => REF_LINK_TYPES.find(t => t.id === id) || null
+const roleDef      = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id) || MINIMAX_H3_REF_ROLES[0]
+const preserveDef  = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id) || MINIMAX_H3_PRESERVE_OPTIONS[1]
+const roleLabel     = (id) => roleDef(id).label
+const preserveLabel = (id) => preserveDef(id).label
+const preserveMarker = (id) => preserveDef(id).marker
 
 const FRAME_KEYS = ['first', 'mid', 'last']
 const FRAME_LABELS = { first: 'First frame', mid: 'Mid frame', last: 'Last frame' }
@@ -112,13 +134,21 @@ const MAX_REF_IMAGES = 6
 const REF_MAX_DIM = 1536
 
 // Persisted shape — no id/previewUrl; bytes under `base64` (matches the
-// standard-entry / refImages convention elsewhere in the app).
+// standard-entry / refImages convention elsewhere in the app). `linkType`/`linkId`
+// tie a reference to a named character or location in the script bible; `role`/
+// `preserve` are the H3 Ref2VA role + preservation marker. `generated` marks a
+// portrait the tool rendered (vs. a photo the user uploaded).
 const serializeRefImages = (imgs) => (imgs || []).map(im => ({
   base64: im.base64 || null,
   mediaType: im.mediaType || 'image/jpeg',
   fileName: im.fileName || 'reference.jpg',
   note: im.note || '',
   caption: im.caption || '',
+  linkType: im.linkType || '',
+  linkId: im.linkId || '',
+  role: im.role || '',
+  preserve: im.preserve || 'strong',
+  generated: !!im.generated,
   hash: im.hash || (im.base64 ? imageHash(im.base64) : ''),
 }))
 
@@ -130,28 +160,152 @@ const rehydrateRefImage = (d) => ({
   fileName: d.fileName || 'reference.jpg',
   note: d.note || '',
   caption: d.caption || '',
+  linkType: d.linkType || '',
+  linkId: d.linkId || '',
+  role: d.role || '',
+  preserve: d.preserve || 'strong',
+  generated: !!d.generated,
   hash: d.hash || (d.base64 ? imageHash(d.base64) : ''),
 })
 
+// Name of the bible entry a reference points at, for the folded-in text block.
+const refEntityName = (im, script) => {
+  if (im.linkType === 'character') return (script?.characters || []).find(c => c.id === im.linkId)?.name || ''
+  if (im.linkType === 'location')  return (script?.locations  || []).find(l => l.id === im.linkId)?.name || ''
+  return ''
+}
+
 // The text block folded into a phase's user message — captioned images only.
-const assembleRefBlock = (refImages, heading) => {
+const assembleRefBlock = (refImages, heading, script = null) => {
   const done = (refImages || []).filter(im => im.caption && im.caption.trim())
   if (!done.length) return ''
   const lines = done.map((im, i) => {
-    const tag = im.note && im.note.trim() ? ` (note: ${im.note.trim()})` : ''
+    const bits = []
+    if (im.linkType) bits.push(linkTypeDef(im.linkType)?.label || im.linkType)
+    const name = refEntityName(im, script)
+    if (name) bits.push(`"${name}"`)
+    if (im.note && im.note.trim()) bits.push(`note: ${im.note.trim()}`)
+    const tag = bits.length ? ` (${bits.join(' — ')})` : ''
     return `Image ${i + 1}${tag}: ${im.caption.trim()}`
   })
   return `\n\n${heading}\n${lines.join('\n')}`
 }
 
 const REF_HEADING_CANON =
-  'Reference images provided by the user (treat these as canon for how the people, places, and props in this film look — cast and set-dress around them):'
+  'Reference images provided by the user (treat these as canon for how the people, places, and props in this film look — fold each one into the matching character or location in the bible):'
 const REF_HEADING_DIRECTOR =
   'Reference images provided by the user (keep every shot visually consistent with these — same faces, wardrobe, and locations):'
 const REF_HEADING_SHOT =
   'Reference images provided by the user (keep this shot visually consistent with these — same faces, wardrobe, and location):'
 const REF_HEADING_LITE =
   'Continuity references — keep the character(s), wardrobe, and location consistent with these descriptions; do NOT add them as new elements and do NOT describe them verbatim:'
+
+// --- id normalisation ----------------------------------------------------
+// LLMs do not keep the c1/l1 ids stable (or emit them at all), and put names in
+// scenes[].characters / shots[].characters. Everything downstream — the cast-card
+// link dropdown, refImages[].linkId, shotRefs() — needs canonical ids, so we
+// assign them ourselves and resolve names against them.
+const slug = (s) => String(s ?? '').trim().toLowerCase()
+
+// Assign c1..cN / l1..lN, then rewrite every scene's characters[]/location_id to
+// those ids (resolving whatever the model wrote — id, name, or nothing).
+const normalizeScript = (data) => {
+  if (!data || typeof data !== 'object') return data
+  const characters = Array.isArray(data.characters) ? data.characters : []
+  const locations = Array.isArray(data.locations) ? data.locations : []
+  const cIdByAny = new Map()
+  const chars = characters.map((c, i) => {
+    const id = `c${i + 1}`
+    if (c?.id) cIdByAny.set(slug(c.id), id)
+    if (c?.name) cIdByAny.set(slug(c.name), id)
+    cIdByAny.set(slug(id), id)
+    return { ...c, id }
+  })
+  const lIdByAny = new Map()
+  const locs = locations.map((l, i) => {
+    const id = `l${i + 1}`
+    if (l?.id) lIdByAny.set(slug(l.id), id)
+    if (l?.name) lIdByAny.set(slug(l.name), id)
+    lIdByAny.set(slug(id), id)
+    return { ...l, id }
+  })
+  const resolveChar = (v) => cIdByAny.get(slug(v)) || null
+  const resolveLoc = (v) => lIdByAny.get(slug(v)) || null
+  const scenes = (Array.isArray(data.scenes) ? data.scenes : []).map((s, i) => {
+    const raw = Array.isArray(s?.characters) ? s.characters
+      : (Array.isArray(s?.dialogues) ? s.dialogues.map(d => String(d).split(':')[0]) : [])
+    const ids = [...new Set(raw.map(resolveChar).filter(Boolean))]
+    return {
+      ...s,
+      id: s?.id ?? i + 1,
+      characters: ids,
+      location_id: resolveLoc(s?.location_id) || locs[0]?.id || '',
+    }
+  })
+  return { ...data, characters: chars, locations: locs, scenes }
+}
+
+// Rewrite each shot's characters[]/location_id/scene_id against a normalized script.
+const normalizeDirectorsCut = (data, script) => {
+  if (!data || !Array.isArray(data.shots)) return data
+  const cIdByAny = new Map()
+  for (const c of script?.characters || []) { cIdByAny.set(slug(c.id), c.id); if (c.name) cIdByAny.set(slug(c.name), c.id) }
+  const lIdByAny = new Map()
+  for (const l of script?.locations || []) { lIdByAny.set(slug(l.id), l.id); if (l.name) lIdByAny.set(slug(l.name), l.id) }
+  const scenes = script?.scenes || []
+  const resolveScene = (v, idx) => {
+    const hit = scenes.find(s => String(s.id) === String(v))
+    if (hit) return hit.id
+    const byTitle = scenes.find(s => slug(s.title) && slug(s.title) === slug(v))
+    if (byTitle) return byTitle.id
+    return scenes[Math.min(idx, Math.max(0, scenes.length - 1))]?.id ?? v
+  }
+  const shots = data.shots.map((sh, i) => {
+    const raw = Array.isArray(sh?.characters) ? sh.characters : []
+    return {
+      ...sh,
+      scene_id: resolveScene(sh?.scene_id, i),
+      characters: [...new Set(raw.map(v => cIdByAny.get(slug(v))).filter(Boolean))],
+      location_id: lIdByAny.get(slug(sh?.location_id)) || sh?.location_id || '',
+    }
+  })
+  return { ...data, shots }
+}
+
+// Re-sequence shot_number 1..N after an insert / remove.
+const renumberShots = (shots) => (shots || []).map((s, i) => ({ ...s, shot_number: i + 1 }))
+
+// A fresh, mostly-empty clip that inherits its context from an adjacent clip
+// (scene, location, cast, look) so it slots in cleanly. shot_number is set by
+// renumberShots; the AI ✦ Rewrite fills the beat / camera fields.
+const blankShot = (neighbor, isH3now, script) => {
+  const scene0 = script?.scenes?.[0] || null
+  return {
+    shot_number: 0,
+    scene_id: neighbor?.scene_id ?? scene0?.id ?? 1,
+    scene_title: neighbor?.scene_title ?? scene0?.title ?? '',
+    shot_type: isH3now ? 'performance' : undefined,
+    characters: Array.isArray(neighbor?.characters) ? [...neighbor.characters] : [],
+    location_id: neighbor?.location_id ?? scene0?.location_id ?? '',
+    camera_framing: '', camera_movement: '', eyeline: '',
+    primary_beat: '', visual_action: '',
+    dialogue: [],
+    lighting_mood: neighbor?.lighting_mood ?? script?.look ?? '',
+    duration: isH3now ? 7 : 4,
+    notes: 'inserted clip — needs a beat',
+  }
+}
+
+const PACING_OPTIONS = [
+  { id: 'tight',    label: 'Tight'    },
+  { id: 'standard', label: 'Standard' },
+  { id: 'loose',    label: 'Loose'    },
+]
+const PACING_LINE = {
+  tight:    'Pacing: TIGHT — use the fewest clips that respect the two-beat limit. Aim for ~2 clips per scene; split only when a clip truly exceeds two facial beats.',
+  standard: 'Pacing: STANDARD — about 3 clips per scene.',
+  loose:    'Pacing: LOOSE — extra coverage is welcome; more reaction and insert clips are fine.',
+}
 
 const STEPS = ['Script', "Director's Cut", 'Video Prompts']
 
@@ -175,8 +329,13 @@ export default function ScriptwriterPanel({
   const [idea, setIdea] = useState(initialState?.idea || '')
   const [genre, setGenre] = useState(initialState?.genre || 'auto')
   const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 3)
-  const [script, setScript] = useState(initialState?.script || null)
-  const [directorsCut, setDirectorsCut] = useState(initialState?.directorsCut || null)
+  // Normalise on load so restored / older / model-broken entries self-repair
+  // (the c1/l1 ids the whole ref-attachment path depends on).
+  const [script, setScript] = useState(() => initialState?.script ? normalizeScript(initialState.script) : null)
+  const [directorsCut, setDirectorsCut] = useState(() =>
+    initialState?.directorsCut && initialState?.script
+      ? normalizeDirectorsCut(initialState.directorsCut, normalizeScript(initialState.script))
+      : (initialState?.directorsCut || null))
   const [finalPrompts, setFinalPrompts] = useState(
     initialState?.finalPrompts?.map(p => ({ ...p, loading: false, error: '' })) || []
   )
@@ -186,13 +345,24 @@ export default function ScriptwriterPanel({
     return []
   })
   // Phase 3 output model + (H3-only) aspect ratio.
-  const [promptTarget, setPromptTarget] = useState(initialState?.promptTarget || 'ltx')
+  const [promptTarget, setPromptTarget] = useState(initialState?.promptTarget || DEFAULT_PROMPT_TARGET)
   const [h3Ratio, setH3Ratio]           = useState(initialState?.h3Ratio || H3_DEFAULT_RATIO)
+  const [pacing, setPacing]             = useState(initialState?.pacing || 'standard')
+  // Transient per-entity portrait/still generator state (the resulting image is
+  // persisted as a refImages entry, not here). Key: "c1" | "l1".
+  const [portraitDraft, setPortraitDraft] = useState({})
   const [error, setError] = useState('')
   const [rawFallback, setRawFallback] = useState('')
   const [copied, setCopied] = useState(null)
   const [copiedAll, setCopiedAll] = useState(false)
   const [copiedFrame, setCopiedFrame] = useState(null)
+  const [exporting, setExporting] = useState(false)
+  // Per-item AI re-write: index of the scene being rewritten on the script
+  // screen / the clip being rewritten by the Director (dircut screen) /
+  // re-prompted by phase 3 (video-prompts screen).
+  const [sceneBusy, setSceneBusy] = useState(null)
+  const [shotBusy, setShotBusy] = useState(null)
+  const [promptBusy, setPromptBusy] = useState(null)
   // ComfyUI output picker: { key: "<shotIdx>-<frameKey>" | null, loading, error, items: [] }
   const [picker, setPicker] = useState({ key: null, loading: false, error: '', items: [] })
   // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
@@ -207,8 +377,9 @@ export default function ScriptwriterPanel({
     sessionId.current = generateId()
     setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(3)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
-    setPromptTarget('ltx'); setH3Ratio(H3_DEFAULT_RATIO)
+    setPromptTarget(DEFAULT_PROMPT_TARGET); setH3Ratio(H3_DEFAULT_RATIO); setPacing('standard'); setPortraitDraft({})
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
+    setSceneBusy(null); setShotBusy(null); setPromptBusy(null)
     setComfyFrame({ key: null, state: 'idle', error: '' })
     setPicker({ key: null, loading: false, error: '', items: [] })
     setAttach({ key: null, state: 'idle', error: '' })
@@ -235,29 +406,85 @@ export default function ScriptwriterPanel({
         id: generateId(), base64, mediaType,
         previewUrl: `data:${mediaType};base64,${base64}`,
         fileName: file.name || 'reference.jpg', note: '', caption: '',
+        linkType: '', linkId: '', role: '', preserve: 'strong', generated: false,
         hash: imageHash(base64),
       }))
       .catch(reject)
     reader.readAsDataURL(file)
   })
 
+  // Guess which bible entry an untyped reference belongs to, from its note/filename.
+  const guessRefLink = (im) => {
+    if (im.linkType || !script) return null
+    const hay = `${im.note || ''} ${im.fileName || ''}`.toLowerCase()
+    const c = (script.characters || []).find(x => x.name && hay.includes(x.name.toLowerCase()))
+    if (c) { const d = linkTypeDef('character'); return { linkType: 'character', linkId: c.id, role: d.role, preserve: d.preserve } }
+    const l = (script.locations || []).find(x => x.name && hay.includes(x.name.toLowerCase()))
+    if (l) { const d = linkTypeDef('location'); return { linkType: 'location', linkId: l.id, role: d.role, preserve: d.preserve } }
+    return null
+  }
+
   const addRefFiles = async (fileList) => {
     const room = MAX_REF_IMAGES - refImages.length
     const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/')).slice(0, room)
     const added = []
-    for (const f of files) { try { added.push(await fileToRef(f)) } catch { /* skip bad file */ } }
+    for (const f of files) { try { const r = await fileToRef(f); added.push({ ...r, ...(guessRefLink(r) || {}) }) } catch { /* skip bad file */ } }
     if (added.length) setRefImages(prev => [...prev, ...added])
   }
 
   const removeRefImage   = (id) => setRefImages(prev => prev.filter(im => im.id !== id))
-  const updateRefNote    = (id, note)    => setRefImages(prev => prev.map(im => im.id === id ? { ...im, note } : im))
+  const updateRefNote    = (id, note) => setRefImages(prev => prev.map(im => {
+    if (im.id !== id) return im
+    const g = guessRefLink({ ...im, note })
+    return { ...im, note, ...(g || {}) }
+  }))
   const updateRefCaption = (id, caption) => setRefImages(prev => prev.map(im => im.id === id ? { ...im, caption } : im))
+  const updateRefField   = (id, patch)   => setRefImages(prev => prev.map(im => im.id === id ? { ...im, ...patch } : im))
 
-  // Describe every image lacking a caption (or all, with force). Returns the
-  // updated array so runPhase1 can use it without waiting on setState.
-  const captionRefImages = async ({ force = false } = {}) => {
-    const targets = refImages.filter(im => im.base64 && (force || !im.caption?.trim()))
-    if (!targets.length) return refImages
+  // Backfill a link TARGET for any reference that has a link type but no target —
+  // by name match (note/caption) or, failing that, the sole entry of that kind.
+  // Runs whenever the bible changes so restored / half-linked refs self-heal.
+  useEffect(() => {
+    if (!script) return
+    setRefImages(prev => {
+      let changed = false
+      const cs = script.characters || [], ls = script.locations || []
+      const next = prev.map(im => {
+        if (im.linkId || !im.linkType) return im
+        const isChar = im.linkType === 'character' || im.linkType === 'wardrobe'
+        const list = isChar ? cs : im.linkType === 'location' ? ls : []
+        if (!list.length) return im
+        const hay = `${im.note || ''} ${im.caption || ''}`.toLowerCase()
+        const byName = list.find(e => e.name && hay.includes(e.name.toLowerCase()))
+        const linkId = byName?.id || (list.length === 1 ? list[0].id : '')
+        if (!linkId) return im
+        changed = true
+        return { ...im, linkId }
+      })
+      return changed ? next : prev
+    })
+  }, [script])
+  // Set a reference's link type + default H3 role/preservation, and auto-select
+  // the link target when the bible has exactly one candidate of that kind.
+  const setRefLinkType   = (id, linkType) => setRefImages(prev => prev.map(im => {
+    if (im.id !== id) return im
+    const d = linkTypeDef(linkType)
+    const cs = script?.characters || [], ls = script?.locations || []
+    const linkId =
+      ((linkType === 'character' || linkType === 'wardrobe') && cs.length === 1) ? cs[0].id
+      : (linkType === 'location' && ls.length === 1) ? ls[0].id
+      : ''
+    return { ...im, linkType, linkId, role: d?.role || im.role, preserve: d?.preserve || im.preserve }
+  })
+  )
+
+  // Describe every image lacking a caption (or all, with force). `imgs` overrides
+  // the live refImages state (for a just-appended image not yet flushed). Returns
+  // the updated array so callers can use it without waiting on setState.
+  const captionRefImages = async ({ force = false, imgs = null } = {}) => {
+    const source = imgs || refImages
+    const targets = source.filter(im => im.base64 && (force || !im.caption?.trim()))
+    if (!targets.length) return source
     if (!visModel) {
       setRefCaptionStatus({ state: 'error', done: 0, total: targets.length,
         error: 'No vision model available — pick or type one in the left rail.' })
@@ -266,20 +493,27 @@ export default function ScriptwriterPanel({
     setRefCaptionStatus({ state: 'reading', done: 0, total: targets.length, error: '' })
     let done = 0
     const settled = await Promise.allSettled(targets.map(async (im) => {
+      // Once a reference is typed (character / location / style / …), describe it
+      // through the H3 role-focused vision prompt so a wardrobe ref covers only the
+      // garment, a style ref only palette/light, etc. Untyped refs (pre-bible) use
+      // the general scriptwriter vision prompt.
+      const focus = im.role ? (roleDef(im.role).visionFocus || '') : ''
+      const sys = im.role ? VISION_PROMPT_MINIMAX_H3_REF : VISION_PROMPT_SCRIPTWRITER
+      const noteBit = im.note && im.note.trim()
+        ? ` The user's note on how it will be used: "${im.note.trim()}".`
+        : ''
       const content = [
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-        { type: 'text', text: im.note && im.note.trim()
-          ? `Describe this reference image as instructed. The user's note on how it will be used: "${im.note.trim()}".`
-          : 'Describe this reference image as instructed.' },
+        { type: 'text', text: `Describe this reference image as instructed.${focus ? ' ' + focus : ''}${noteBit}`.trim() },
       ]
-      const { text } = await callOllama(visModel, content, VISION_PROMPT_SCRIPTWRITER, cfg, 0.3)
+      const { text } = await callOllama(visModel, content, sys, cfg, 0.3)
       done++; setRefCaptionStatus(s => ({ ...s, done }))
       return { id: im.id, caption: (text || '').trim() }
     }))
     const byId = new Map()
     settled.forEach(r => { if (r.status === 'fulfilled') byId.set(r.value.id, r.value.caption) })
     const failed = settled.filter(r => r.status === 'rejected')
-    const updated = refImages.map(im => byId.has(im.id) ? { ...im, caption: byId.get(im.id) } : im)
+    const updated = source.map(im => byId.has(im.id) ? { ...im, caption: byId.get(im.id) } : im)
     setRefImages(updated)
     setRefCaptionStatus(failed.length
       ? { state: 'error', done, total: targets.length,
@@ -296,7 +530,7 @@ export default function ScriptwriterPanel({
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, sceneCount, phase: phaseName,
-      promptTarget, h3Ratio,
+      promptTarget, h3Ratio, pacing,
       refImages: serializeRefImages(refs),
     }
   }
@@ -328,7 +562,7 @@ export default function ScriptwriterPanel({
     const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
-      const data = parseJSON(text)
+      const data = normalizeScript(parseJSON(text))
       setScript(data)
       setPhase('script')
       commitHistory({ ...basePayload('script', refs), script: data, directorsCut: null, finalPrompts: null })
@@ -338,15 +572,52 @@ export default function ScriptwriterPanel({
     }
   }
 
+  // Ask the Scriptwriter for a fresh version of ONE scene, in place. Keeps the
+  // scene id and the cast/location bible; the rest of the scene is rewritten and
+  // re-resolved against the bible via normalizeScript.
+  const regenerateScene = async (si) => {
+    if (sceneBusy !== null || !script?.scenes?.[si]) return
+    const scene = script.scenes[si]
+    setSceneBusy(si); setError(''); setRawFallback('')
+    const genreHint = genre === 'auto' ? 'Infer the genre from the story.' : `Genre: ${genre}`
+    const refBlock = assembleRefBlock(refImages, REF_HEADING_CANON, script)
+    const userMsg =
+      `Story idea: ${idea.trim()}\n${genreHint}\n\n`
+      + `You already wrote this script (title, bible and all scenes):\n${JSON.stringify(script, null, 2)}${refBlock}\n\n`
+      + `Rewrite ONLY scene ${scene.id}${scene.title ? ` ("${scene.title}")` : ''}. `
+      + `Give a fresh version of the same story beat — you may change the action, blocking or dialogue — but keep it consistent with the surrounding scenes, reuse the existing characters and locations by their exact names, and keep the same scene "id". `
+      + `Output only valid JSON: {"scenes":[ <the one rewritten scene object, exactly the same fields as before> ]}.`
+    try {
+      const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.85, { format: 'json' })
+      const raw = parseJSON(text)
+      const arr = Array.isArray(raw?.scenes) ? raw.scenes : raw?.scene ? [raw.scene] : (raw && raw.title == null && raw.id != null ? [raw] : [])
+      const fresh = arr[0]
+      if (!fresh || typeof fresh !== 'object') throw new Error('The model did not return a rewritten scene.')
+      const merged = { ...scene, ...fresh, id: scene.id }
+      const nextScript = normalizeScript({ ...script, scenes: script.scenes.map((s, i) => i === si ? merged : s) })
+      setScript(nextScript)
+      setRawFallback('')
+      commitHistory({ ...basePayload('script'), script: nextScript, directorsCut: directorsCut || null, finalPrompts: null })
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSceneBusy(null)
+    }
+  }
+
   const runPhase2 = async () => {
     setError(''); setRawFallback('')
     setPhase('directing')
-    const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR)
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${refBlock}\n\nOutput only valid JSON.`
+    const isH3 = promptTarget === 'minimax_h3'
+    const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR, script)
+    const lookLine = isH3 && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
+    const langLine = isH3 && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
+    const pacingLine = isH3 ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${refBlock}\n\nOutput only valid JSON.`
     try {
-      const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
-      const data = parseJSON(text)
-      data.shots = data.shots.map(s => ({ ...s, duration: s.duration || 4 }))
+      const { text } = await callOllama(writerModel, userMsg, isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
+      const data = normalizeDirectorsCut(parseJSON(text), script)
+      data.shots = data.shots.map(s => ({ ...s, duration: s.duration || (isH3 ? 7 : 4) }))
       const freshFrames = data.shots.map(() => emptyFrameEntry())
       setDirectorsCut(data)
       setFramePrompts(freshFrames)
@@ -362,30 +633,117 @@ export default function ScriptwriterPanel({
     }
   }
 
-  // A T2VA user message for one shot — mirrors the minimax_h3 branch of
-  // runWriter() in App.jsx (same section labels so the H3 compiler prompt parses
-  // it the same way). Scriptwriter shots are always text-only → T2VA.
-  const buildH3ShotMessage = (shot, ratio, refBlock) => {
+  // Captioned references in scope for one clip. Default: every described reference
+  // is attached to every clip (the main-app Ref2VA model — works for a single-lead
+  // film). Only when the film has 2+ identity references do we narrow the
+  // face/wardrobe refs to the characters present in that clip (id OR name).
+  const shotRefs = (shot, scene, refsList = refImages) => {
+    const captioned = (refsList || []).filter(im => im.caption && im.caption.trim())
+    if (!captioned.length) return []
+    const faces = captioned.filter(im => im.role === 'subject_identity' || im.linkType === 'character')
+    if (faces.length <= 1) return captioned
+    const present = new Set()
+    const chars = (Array.isArray(shot.characters) && shot.characters.length ? shot.characters : scene?.characters) || []
+    for (const cid of chars) {
+      present.add(cid)
+      const c = (script?.characters || []).find(x => x.id === cid)
+      if (c?.name) present.add(c.name.toLowerCase())
+    }
+    return captioned.filter(im => {
+      if (im.linkType !== 'character' && im.linkType !== 'wardrobe') return true  // env / style / prop stay global
+      if (!im.linkId) return true                                                 // unlinked face ref — can't narrow it
+      const c = (script?.characters || []).find(x => x.id === im.linkId)
+      return present.has(im.linkId) || (c?.name && present.has(c.name.toLowerCase()))
+    })
+  }
+
+  // One H3 user message per shot. Emits MODE: Ref2VA (with a role-tagged reference
+  // block byte-compatible with App.jsx's ref-mode captions, which SYSTEM_PROMPT_
+  // MINIMAX_H3's Ref2VA parser reads) when the shot has captioned references;
+  // otherwise MODE: T2VA with the bible's appearance text inlined so the look
+  // still carries. Section labels match the minimax_h3 branch of runWriter().
+  const buildH3ShotMessage = (shot, ratio, refsList = refImages) => {
     const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
-    const dialogues = Array.isArray(scene?.dialogues)
-      ? scene.dialogues.filter(d => d && d.trim())
-      : []
+    const refs = shotRefs(shot, scene, refsList)
+    const isRef = refs.length > 0
+
+    const dialogues = Array.isArray(shot.dialogue) && shot.dialogue.length
+      ? shot.dialogue.filter(d => d && d.trim())
+      : (Array.isArray(scene?.dialogues) ? scene.dialogues.filter(d => d && d.trim()) : [])
     const dialogueBlock = dialogues.length
-      ? `\n\nThis scene's dialogue lines (use only the line(s) that fit THIS shot's action; omit the rest — other shots of the scene carry the others):\n${dialogues.join('\n')}`
+      ? `\n\nSpoken dialogue (verbatim — this clip carries only this delivery):\n${dialogues.join('\n')}`
       : ''
-    return `MODE: T2VA\n\n`
-      + `Aspect ratio: ${ratio.label} (${ratio.note})\n`
-      + `Target duration: ${shot.duration || 4} seconds\n\n`
-      + `Scene / action:\n${shot.visual_action}\n\n`
-      + `Requested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\n`
-      + `Style / mood: ${shot.lighting_mood}${refBlock}${dialogueBlock}`
-      + `\n\nAmbient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.`
-      + `\n\nAudience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.`
+
+    const action = (shot.primary_beat || shot.visual_action || '').trim()
+    const eyeLine = shot.eyeline?.trim() ? `\nEyeline: ${shot.eyeline.trim()}` : ''
+    const langLine = script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
+    const lookLine = script?.look?.trim() ? `\nFilm look: ${script.look.trim()}` : ''
+
+    let head, block = ''
+    if (isRef) {
+      head = 'MODE: Ref2VA'
+      const lines = refs.map((im, i) => {
+        let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${im.caption.trim()}`
+        const name = refEntityName(im, script)
+        const use = name
+          ? (im.linkType === 'location' ? `the "${name}" environment` : im.linkType === 'wardrobe' ? `the wardrobe worn by ${name}` : `plays ${name}`)
+          : (im.note && im.note.trim() ? im.note.trim() : linkTypeDef(im.linkType)?.label || 'reference')
+        line += `\n   Requested use of this reference: ${use}`
+        return line
+      })
+      block = `Reference images:\n${lines.join('\n\n')}\n\n`
+    } else {
+      head = 'MODE: T2VA'
+      const chars = Array.isArray(shot.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
+      const bibleChars = (script?.characters || []).filter(c => chars.includes(c.id))
+      const loc = (script?.locations || []).find(l => l.id === (shot.location_id || scene?.location_id))
+      const cLines = bibleChars.map(c => `- ${c.name}: ${(c.appearance || '').trim()}${c.wardrobe ? ` Wardrobe: ${c.wardrobe.trim()}` : ''}`)
+      block = [
+        cLines.length ? `Characters in this shot (hold their look consistent; never restate it as on-screen text):\n${cLines.join('\n')}` : '',
+        loc ? `Location — ${loc.name}: ${(loc.description || '').trim()}` : '',
+      ].filter(Boolean).join('\n')
+      if (block) block += '\n\n'
+    }
+
+    const soundscape = scene?.sound_mood?.trim() || script?.soundscape?.trim()
+      || 'not specified — invent restrained ambience that fits the scene.'
+    const musicRaw = script?.music?.trim()
+    const music = musicRaw && /^(none|n\/a|silence|no music)$/i.test(musicRaw) ? 'N/A'
+      : (scene?.sound_mood?.trim() && /music|score|song|track/i.test(scene.sound_mood) ? scene.sound_mood.trim()
+      : musicRaw || 'not specified — decide whether music serves this scene; if not, use N/A.')
+
+    return `${head}\n\n`
+      + `${block}`
+      + `Aspect ratio: ${ratio.label} (${ratio.note})${langLine}${lookLine}\n`
+      + `Target duration: ${shot.duration || 7} seconds\n\n`
+      + `Scene / action:\n${action}\n\n`
+      + `Requested camera moves (incorporate these):\n- ${shot.camera_movement || 'Static — the frame never moves'}\n- ${shot.camera_framing || 'Medium shot'}${eyeLine}\n\n`
+      + `Style / mood: ${shot.lighting_mood || script?.look || 'natural'}${dialogueBlock}`
+      + `\n\nAmbient / diegetic sound (overall_soundscape): ${soundscape}`
+      + `\n\nAudience-only music (non_diegetic_music): ${music}`
+  }
+
+  // The phase-3 user message for one shot — H3 (Ref2VA/T2VA) or LTX. Shared by
+  // the full run and the per-clip "Rewrite" button on the video-prompts screen.
+  const buildShotPromptMsg = (shot, refs, ratio) => {
+    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs)
+    const action = shot.visual_action || shot.primary_beat || ''
+    const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
+    return `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}`
   }
 
   const runPhase3 = async () => {
     setError('')
     const shots = directorsCut.shots
+    const isH3 = promptTarget === 'minimax_h3'
+
+    // A linked-but-not-yet-described reference would silently drop its clip to
+    // T2VA — caption any outstanding ones first (like runPhase1 does).
+    let refs = refImages
+    if (isH3 && refImages.some(im => im.base64 && !im.caption?.trim())) {
+      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+    }
+
     const initial = shots.map(s => ({
       shotNumber: s.shot_number, sceneTitle: s.scene_title,
       text: '', usage: null, loading: true, error: '',
@@ -393,15 +751,17 @@ export default function ScriptwriterPanel({
     setFinalPrompts(initial)
     setPhase('prompting')
 
-    const refBlock = assembleRefBlock(refImages, REF_HEADING_SHOT)
-    const isH3 = promptTarget === 'minimax_h3'
     const systemPrompt = isH3 ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
     const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
     const results = new Array(shots.length)
+    const userMsgs = shots.map((shot) => buildShotPromptMsg(shot, refs, ratio))
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      window.__peLastH3Messages = shots.map((s, i) => ({
+        shot: s.shot_number, mode: (/^MODE:\s*(\w+)/.exec(userMsgs[i]) || [])[1] || null, msg: userMsgs[i],
+      }))
+    }
     const proms = shots.map((shot, i) => {
-      const userMsg = isH3
-        ? buildH3ShotMessage(shot, ratio, refBlock)
-        : `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${shot.visual_action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${refBlock}`
+      const userMsg = userMsgs[i]
       return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
         .then(({ text, usage }) => {
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
@@ -415,11 +775,185 @@ export default function ScriptwriterPanel({
     await Promise.all(proms)
     setPhase('done')
     commitHistory({
-      ...basePayload('done'),
+      ...basePayload('done', refs),
       script, directorsCut, finalPrompts: results,
       framePrompts: serializeFramePrompts(framePrompts),
     })
   }
+
+  // Ask the Director for a fresh take on ONE clip/shot, in place. Keeps the
+  // shot_number / scene_id / scene_title and the parallel framePrompts slot; the
+  // rest of the breakdown is rewritten. `opts.cut` overrides the (possibly
+  // not-yet-flushed) directorsCut state — used by insertShot. `opts.bridge` (or
+  // an empty beat) switches the wording to "write a NEW clip between the
+  // neighbours" rather than "rewrite this one".
+  const regenerateShot = async (si, opts = {}) => {
+    if (shotBusy !== null || promptBusy !== null) return
+    const cut = opts.cut || directorsCut
+    if (!cut?.shots?.[si]) return
+    const shot = cut.shots[si]
+    const isH3now = promptTarget === 'minimax_h3'
+    const noun = isH3now ? 'clip' : 'shot'
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const isNew = opts.bridge || !(shot.primary_beat || shot.visual_action || '').trim()
+    const prev = cut.shots[si - 1], next = cut.shots[si + 1]
+    setShotBusy(si); setError(''); setRawFallback('')
+    const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR, script)
+    const lookLine = isH3now && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
+    const langLine = isH3now && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
+    const pacingLine = isH3now ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
+    const task = isNew
+      ? `Write a NEW ${noun} to sit between ${noun} ${prev?.shot_number ?? '(start of the film)'} and ${noun} ${next?.shot_number ?? '(end of the film)'}`
+        + `${scene?.title ? ` in scene "${scene.title}"` : ''}. Add a beat that improves the pacing or coverage between them — a reaction, an insert cutaway, or a connective action — and keep it continuous with both neighbours. Keep the same "scene_id".`
+      : `Rewrite ONLY ${noun} number ${shot.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''}. `
+        + `Give a fresh interpretation of the same story moment — a different framing, camera move, or beat is fine — but keep it continuous with the ${noun}s immediately before and after it, and keep the same "shot_number" and "scene_id".`
+    const userMsg =
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${refBlock}\n\n`
+      + `You already broke this script into the following ${noun}s:\n${JSON.stringify(cut.shots, null, 2)}\n\n`
+      + `${task} `
+      + `Output only valid JSON: {"shots":[ <the one ${noun} object, exactly the same fields as the others> ]}.`
+    try {
+      const { text } = await callOllama(writerModel, userMsg, isH3now ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.85, { format: 'json' })
+      const raw = parseJSON(text)
+      const arr = Array.isArray(raw?.shots) ? raw.shots : raw?.shot ? [raw.shot] : Array.isArray(raw) ? raw : []
+      const fresh = (normalizeDirectorsCut({ shots: arr }, script).shots || [])[0]
+      if (!fresh) throw new Error(`The model did not return a ${noun}.`)
+      const merged = {
+        ...fresh,
+        shot_number: shot.shot_number,
+        scene_id: shot.scene_id,
+        scene_title: shot.scene_title,
+        duration: fresh.duration || shot.duration || (isH3now ? 7 : 4),
+      }
+      const nextCut = { ...cut, shots: cut.shots.map((s, i) => i === si ? merged : s) }
+      setDirectorsCut(nextCut)
+      setRawFallback('')
+      persistState(undefined, undefined, nextCut)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setShotBusy(null)
+    }
+  }
+
+  // Insert / remove a clip on the Director's-Cut screen. framePrompts is a
+  // strictly index-parallel array, so it moves in lockstep; shot_number is
+  // re-sequenced; the index-keyed transient pickers are reset.
+  const clearShotTransients = () => {
+    setPicker({ key: null, loading: false, error: '', items: [] })
+    setComfyFrame({ key: null, state: 'idle', error: '' })
+    setAttach({ key: null, state: 'idle', error: '' })
+  }
+  const insertShot = (atIndex) => {
+    if (phase !== 'dircut' || shotBusy !== null || promptBusy !== null || !directorsCut) return
+    const isH3now = promptTarget === 'minimax_h3'
+    const neighbor = directorsCut.shots[atIndex - 1] || directorsCut.shots[atIndex] || null
+    const nextShots = renumberShots([
+      ...directorsCut.shots.slice(0, atIndex),
+      blankShot(neighbor, isH3now, script),
+      ...directorsCut.shots.slice(atIndex),
+    ])
+    const nextCut = { ...directorsCut, shots: nextShots }
+    const nextFrames = [
+      ...framePrompts.slice(0, atIndex), emptyFrameEntry(), ...framePrompts.slice(atIndex),
+    ]
+    setDirectorsCut(nextCut)
+    setFramePrompts(nextFrames)
+    clearShotTransients()
+    persistState(nextFrames, undefined, nextCut)
+    regenerateShot(atIndex, { cut: nextCut, bridge: true })
+  }
+  const removeShot = (si) => {
+    if (phase !== 'dircut' || shotBusy !== null || promptBusy !== null || !directorsCut || directorsCut.shots.length <= 1) return
+    const nextCut = { ...directorsCut, shots: renumberShots(directorsCut.shots.filter((_, i) => i !== si)) }
+    const nextFrames = framePrompts.filter((_, i) => i !== si)
+    setDirectorsCut(nextCut)
+    setFramePrompts(nextFrames)
+    clearShotTransients()
+    persistState(nextFrames, undefined, nextCut)
+  }
+  // Slim dashed "insert a clip here" bar shown between / around clip cards.
+  const insertBar = (idx) => (
+    <button key={`ins-${idx}`} onClick={() => insertShot(idx)}
+      disabled={shotBusy !== null || promptBusy !== null}
+      title="Insert a blank clip here — the AI writes a beat that bridges the neighbours"
+      style={{
+        width: '100%', border: '1px dashed var(--pe-accent-line)', background: 'transparent',
+        color: 'var(--pe-accent-ink)', borderRadius: 8, padding: '5px 0', margin: '0 0 10px',
+        fontSize: 12.5, cursor: (shotBusy !== null || promptBusy !== null) ? 'wait' : 'pointer',
+      }}>
+      + Insert clip{shotBusy !== null || promptBusy !== null ? '' : ' (AI writes it)'}
+    </button>
+  )
+
+  // Re-run phase 3 for ONE clip only — a fresh prompt in place, higher
+  // temperature. Used on the Video-Prompts screen.
+  const regeneratePrompt = async (idx) => {
+    if (promptBusy !== null || shotBusy !== null || !directorsCut?.shots?.[idx]) return
+    const shot = directorsCut.shots[idx]
+    const isH3now = promptTarget === 'minimax_h3'
+    setPromptBusy(idx); setError('')
+    setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: true, error: '' } : p))
+    let refs = refImages
+    if (isH3now && refImages.some(im => im.base64 && !im.caption?.trim())) {
+      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+    }
+    const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
+    const systemPrompt = isH3now ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
+    try {
+      const { text, usage } = await callOllama(writerModel, buildShotPromptMsg(shot, refs, ratio), systemPrompt, cfg, 0.85)
+      let saved = null
+      setFinalPrompts(prev => {
+        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
+        saved = next
+        return next
+      })
+      if (saved) commitHistory({
+        ...basePayload('done', refs),
+        script, directorsCut,
+        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null })),
+        framePrompts: serializeFramePrompts(framePrompts),
+      })
+    } catch (e) {
+      setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: false, error: e.message } : p))
+    } finally {
+      setPromptBusy(null)
+    }
+  }
+
+  // --- bible editing helpers (film fields, cast, locations) ---------------
+  const genId = (prefix, list) => {
+    let n = (list?.length || 0) + 1
+    const taken = new Set((list || []).map(x => x.id))
+    while (taken.has(`${prefix}${n}`)) n++
+    return `${prefix}${n}`
+  }
+  const updateFilmField = (field_, val) => setScript(prev => ({ ...prev, [field_]: val }))
+  const updateCharacter = (ci, field_, val) => setScript(prev => ({
+    ...prev, characters: (prev.characters || []).map((c, i) => i === ci ? { ...c, [field_]: val } : c),
+  }))
+  const addCharacter = () => setScript(prev => ({
+    ...prev, characters: [...(prev.characters || []), { id: genId('c', prev.characters), name: 'NEW CHARACTER', role_in_story: 'supporting', appearance: '', wardrobe: '', voice: '' }],
+  }))
+  const removeCharacter = (ci) => setScript(prev => ({
+    ...prev, characters: (prev.characters || []).filter((_, i) => i !== ci),
+  }))
+  const updateLocation = (li, field_, val) => setScript(prev => ({
+    ...prev, locations: (prev.locations || []).map((l, i) => i === li ? { ...l, [field_]: val } : l),
+  }))
+  const addLocation = () => setScript(prev => ({
+    ...prev, locations: [...(prev.locations || []), { id: genId('l', prev.locations), name: 'New location', description: '' }],
+  }))
+  const removeLocation = (li) => setScript(prev => ({
+    ...prev, locations: (prev.locations || []).filter((_, i) => i !== li),
+  }))
+  const toggleSceneCharacter = (si, cid) => setScript(prev => ({
+    ...prev, scenes: prev.scenes.map((s, i) => {
+      if (i !== si) return s
+      const cur = Array.isArray(s.characters) ? s.characters : []
+      return { ...s, characters: cur.includes(cid) ? cur.filter(x => x !== cid) : [...cur, cid] }
+    }),
+  }))
 
   // Scene editing helpers
   const updateScene = (si, field_, val) => setScript(prev => ({
@@ -448,8 +982,9 @@ export default function ScriptwriterPanel({
     const target = framePrompts[shotIdx].frames[frameKey].target
     const framePos = frameKey === 'first' ? 'start (first)' : frameKey === 'mid' ? 'middle' : 'end (last)'
     // SDXL's writer is tag-based — a prose continuity block confuses it, so skip it there.
-    const refBlock = target === 'sdxl' ? '' : assembleRefBlock(refImages, REF_HEADING_LITE)
-    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${shot.visual_action}\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
+    const refBlock = target === 'sdxl' ? '' : assembleRefBlock(refImages, REF_HEADING_LITE, script)
+    const action = shot.visual_action || shot.primary_beat || ''
+    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${action}\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
 
     setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
       ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], loading: true, error: '' } }
@@ -529,13 +1064,14 @@ export default function ScriptwriterPanel({
   }
 
   // Re-save the whole session under the same id at the CURRENT phase — used after
-  // a frame image is attached or removed between phases. Pass the just-computed
-  // framePrompts array to sidestep the state-update lag.
-  const persistState = (framePromptsOverride) => {
-    if (!onSaveHistory || !directorsCut) return
+  // a frame image, a cast portrait, or a reference edit lands between phases. Pass
+  // the just-computed framePrompts / refImages arrays to sidestep state-update lag.
+  const persistState = (framePromptsOverride, refsOverride, cutOverride) => {
+    if (!onSaveHistory || !script) return
     commitHistory({
-      ...basePayload(phase),
-      script, directorsCut,
+      ...basePayload(phase, refsOverride || refImages),
+      script,
+      directorsCut: cutOverride || directorsCut || null,
       finalPrompts: (phase === 'done' || phase === 'prompting') && finalPrompts.length
         ? finalPrompts.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
         : null,
@@ -554,11 +1090,11 @@ export default function ScriptwriterPanel({
     }
   }
 
-  const openPicker = (shotIdx, frameKey) => {
-    const key = `${shotIdx}-${frameKey}`
+  const openPickerKey = (key) => {
     if (picker.key === key) { setPicker({ key: null, loading: false, error: '', items: [] }); return }
     loadPickerItems(key)
   }
+  const openPicker = (shotIdx, frameKey) => openPickerKey(`${shotIdx}-${frameKey}`)
 
   const attachImage = async (shotIdx, frameKey, item) => {
     const key = `${shotIdx}-${frameKey}`
@@ -591,11 +1127,256 @@ export default function ScriptwriterPanel({
     persistState(next)
   }
 
+  // --- cast / location portrait references --------------------------------
+  // Generate a still-image prompt for a bible entry, render it in ComfyUI, and
+  // attach the render back as that entry's H3 identity / environment reference.
+  const entityByKey = (key) => {
+    const c = (script?.characters || []).find(x => x.id === key)
+    if (c) return { kind: 'character', ent: c }
+    const l = (script?.locations || []).find(x => x.id === key)
+    if (l) return { kind: 'location', ent: l }
+    return null
+  }
+  // A typed reference "belongs to" a bible entry if its linkId points there, or —
+  // when it has no linkId — if it is the only entry of that kind, or its
+  // note/caption names the entry. Keeps the cast card in sync with the panel
+  // even when the user set a link type but not an explicit target.
+  const refBelongsTo = (im, key, kind) => {
+    if (im.linkId === key) return true
+    if (im.linkId) return false
+    const list = kind === 'character' ? (script?.characters || []) : (script?.locations || [])
+    const ent = list.find(x => x.id === key)
+    if (!ent) return false
+    if (list.length === 1) return true
+    const hay = `${im.note || ''} ${im.caption || ''}`.toLowerCase()
+    return !!ent.name && hay.includes(ent.name.toLowerCase())
+  }
+  const refForEntity = (key) => {
+    const isChar = (script?.characters || []).some(c => c.id === key)
+    const types = isChar ? ['character', 'wardrobe'] : ['location']
+    return (refImages || []).find(im => types.includes(im.linkType) && refBelongsTo(im, key, isChar ? 'character' : 'location'))
+  }
+  const patchPortrait = (key, patch) => setPortraitDraft(prev => ({ ...prev, [key]: { target: 'zimage', text: '', loading: false, error: '', ...prev[key], ...patch } }))
+  const startPortrait = (key) => patchPortrait(key, {})
+
+  const generatePortraitPrompt = async (key) => {
+    const found = entityByKey(key)
+    if (!found) return
+    const { kind, ent } = found
+    const target = portraitDraft[key]?.target || 'zimage'
+    const look = script?.look?.trim() ? `\nFilm look (match palette and lighting): ${script.look.trim()}` : ''
+    const userMsg = kind === 'character'
+      ? `Generate a CHARACTER REFERENCE PORTRAIT for a film — a clean identity plate, not a dramatic shot. Front view, eye level, neutral relaxed expression, direct to camera, plain mid-grey seamless background, soft even key light, framed head to waist. No text, no props, no hard shadows, no motion blur.\n\nCharacter: ${ent.name}\nAppearance: ${(ent.appearance || '').trim()}\nWardrobe: ${(ent.wardrobe || '').trim()}${look}`
+      : `Generate an ESTABLISHING STILL of a film location — eye-level, natural lens, no people, no text. It will be used as an environment reference.\n\nLocation: ${ent.name}\n${(ent.description || '').trim()}${look}`
+    patchPortrait(key, { loading: true, error: '' })
+    try {
+      const { text } = await callOllama(writerModel, userMsg, FRAME_SYSTEM[target] || FRAME_SYSTEM.zimage, cfg, 0.6)
+      patchPortrait(key, { text, loading: false })
+    } catch (e) {
+      patchPortrait(key, { loading: false, error: e.message })
+    }
+  }
+
+  const sendPortraitToComfy = async (key) => {
+    const d = portraitDraft[key]
+    const found = entityByKey(key)
+    if (!d?.text || !found) return
+    const ck = `portrait:${key}`
+    setComfyFrame({ key: ck, state: 'sending', error: '' })
+    try {
+      await sendShot({
+        positive: d.text, negative: '', target: d.target || 'zimage',
+        duration: 4, frameMode: 'single',
+        shot: 0, scene: `${found.kind} ${found.ent.name}`, frame: 'portrait',
+        images: { first: '', mid: '', last: '', ref: [] },
+      }, comfyCfg.url, comfyCfg.slot)
+      setComfyFrame({ key: ck, state: 'done', error: '' })
+      setTimeout(() => setComfyFrame(prev => prev.key === ck && prev.state === 'done' ? { key: null, state: 'idle', error: '' } : prev), 2500)
+    } catch (e) {
+      setComfyFrame({ key: ck, state: 'error', error: e.message })
+    }
+  }
+
+  const attachPortraitImage = async (key, item) => {
+    const found = entityByKey(key)
+    if (!found) return
+    const pk = `portrait:${key}`
+    setAttach({ key: pk, state: 'fetching', error: '' })
+    try {
+      const blob = await fetchComfyImageBlob(item.viewUrl)
+      const { base64, mediaType } = await shrinkToJpeg(blob, REF_MAX_DIM, 0.85)
+      const isChar = found.kind === 'character'
+      const newRef = {
+        id: generateId(), base64, mediaType,
+        previewUrl: `data:${mediaType};base64,${base64}`,
+        fileName: `${found.ent.name}-${isChar ? 'portrait' : 'location'}.jpg`,
+        note: found.ent.name,
+        caption: '',
+        linkType: isChar ? 'character' : 'location',
+        linkId: key,
+        role: isChar ? 'subject_identity' : 'environment',
+        preserve: isChar ? 'exact' : 'guide',
+        generated: true,
+        hash: imageHash(base64),
+      }
+      const existing = refForEntity(key)
+      const next = existing
+        ? refImages.map(im => im.id === existing.id ? newRef : im)
+        : [...refImages, newRef]
+      setRefImages(next)
+      setAttach({ key: null, state: 'idle', error: '' })
+      setPicker({ key: null, loading: false, error: '', items: [] })
+      // caption the new portrait through the role-focused H3 vision prompt
+      if (visModel) {
+        try {
+          const focus = roleDef(newRef.role).visionFocus || ''
+          const { text } = await callOllama(visModel, [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Describe this reference image as instructed. ${focus}`.trim() },
+          ], VISION_PROMPT_MINIMAX_H3_REF, cfg, 0.3)
+          const captioned = next.map(im => im.id === newRef.id ? { ...im, caption: (text || '').trim() } : im)
+          setRefImages(captioned)
+          persistState(undefined, captioned)
+        } catch { persistState(undefined, next) }
+      } else {
+        persistState(undefined, next)
+      }
+    } catch (e) {
+      setAttach({ key: pk, state: 'error', error: e.message })
+    }
+  }
+
+  const removeEntityRef = (key) => {
+    const ex = refForEntity(key)
+    if (!ex) return
+    const next = refImages.filter(im => im.id !== ex.id)
+    setRefImages(next)
+    persistState(undefined, next)
+  }
+
+  // Upload a photo straight into a cast/location card — sets link + role and
+  // captions it, so the user never touches the separate reference panel.
+  const uploadPortrait = async (key, fileList) => {
+    const found = entityByKey(key)
+    const file = Array.from(fileList || []).find(f => f.type.startsWith('image/'))
+    if (!found || !file) return
+    let base
+    try { base = await fileToRef(file) } catch { return }
+    const isChar = found.kind === 'character'
+    const ref = { ...base, note: found.ent.name,
+      linkType: isChar ? 'character' : 'location', linkId: key,
+      role: isChar ? 'subject_identity' : 'environment', preserve: isChar ? 'exact' : 'guide' }
+    const existing = refForEntity(key)
+    const next = existing ? refImages.map(im => im.id === existing.id ? ref : im) : [...refImages, ref]
+    setRefImages(next)
+    persistState(undefined, next)
+    try { const c = await captionRefImages({ imgs: next }); persistState(undefined, c) } catch { /* leave uncaptioned */ }
+  }
+
+  const describeEntityRef = (key) => {
+    const ex = refForEntity(key)
+    if (!ex) return
+    // Blank this one's caption so the non-force pass targets only it.
+    const list = refImages.map(im => im.id === ex.id ? { ...im, caption: '' } : im)
+    captionRefImages({ imgs: list }).then(c => persistState(undefined, c)).catch(() => {})
+  }
+
+  // One clip's header line(s): number, scene, duration, mode, and which
+  // reference images to load. `refs` = shotRefs() for that clip.
+  const clipHeader = (p, shot, refs) => {
+    const isH3now = promptTarget === 'minimax_h3'
+    if (!isH3now || !shot) return `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot?.duration || 4}s`
+    return [
+      `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot.duration || 7}s · ${refs.length ? 'Ref2VA' : 'T2VA'}`,
+      refs.length
+        ? `  Load references: ${refs.map(im => `${refEntityName(im, script) || im.note || roleLabel(im.role)} (${roleLabel(im.role)}, ${preserveLabel(im.preserve)})`).join('; ')}`
+        : '  No references — text-to-video',
+    ].join('\n')
+  }
+  const clipRefsFor = (i) => {
+    const shot = (directorsCut?.shots || [])[i]
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot?.scene_id))
+    return shot ? shotRefs(shot, scene) : []
+  }
+
   const copyAll = () => {
-    const text = finalPrompts.filter(p => p.text).map(p => p.text).join('\n\n---\n\n')
-    navigator.clipboard.writeText(text)
+    const shots = directorsCut?.shots || []
+    const blocks = finalPrompts.filter(p => p.text).map((p, i) =>
+      `${clipHeader(p, shots[i], clipRefsFor(i))}\n\n${p.text}`)
+    navigator.clipboard.writeText(blocks.join('\n\n═══\n\n'))
     setCopiedAll(true)
     setTimeout(() => setCopiedAll(false), 2000)
+  }
+
+  // Export the whole cut: every clip prompt, the reference-image pack (portraits +
+  // uploads, named by the character/location they belong to), any attached LTX
+  // frame images, and script/director JSON — as one ZIP.
+  const fileSafe = (s) => String(s || '').trim().replace(/[^\w\- ]+/g, '').replace(/\s+/g, '-').slice(0, 60) || 'untitled'
+  const imgExt = (mt) => ((mt || 'image/jpeg').split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+  const exportBundle = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const zip = new JSZip()
+      const isH3now = promptTarget === 'minimax_h3'
+      const shots = directorsCut?.shots || []
+      const done = finalPrompts.filter(p => p.text)
+
+      // per-clip prompt files + combined markdown
+      const pad = (n) => String(n).padStart(2, '0')
+      const allMd = []
+      done.forEach((p, i) => {
+        const header = clipHeader(p, shots[i], clipRefsFor(i))
+        zip.file(`prompts/clip-${pad(p.shotNumber || i + 1)}.txt`, `${header}\n\n${p.text}\n`)
+        allMd.push(`## Clip ${p.shotNumber} — ${p.sceneTitle}\n\n${header}\n\n\`\`\`\n${p.text}\n\`\`\``)
+      })
+      zip.file('prompts.md', `# ${script?.title || 'Untitled'} — ${isH3now ? 'MiniMax H3' : 'LTX'} prompts\n\n${allMd.join('\n\n---\n\n')}\n`)
+
+      // reference image pack
+      const refMd = ['# Reference images\n']
+      ;(refImages || []).forEach((im, i) => {
+        const name = refEntityName(im, script) || im.note || im.fileName || `ref-${i + 1}`
+        const base = `${im.linkId ? im.linkId + '-' : ''}${fileSafe(name)}`
+        if (im.base64) zip.file(`references/${base || 'ref-' + (i + 1)}.${imgExt(im.mediaType)}`, im.base64, { base64: true })
+        refMd.push(`## ${name}${im.linkType ? ` — ${linkTypeDef(im.linkType)?.label || im.linkType}` : ''}`)
+        refMd.push(`role: ${roleLabel(im.role || '—')} · preservation: ${preserveLabel(im.preserve || 'strong')}${im.generated ? ' · generated' : ''}`)
+        refMd.push(`\n${im.caption?.trim() || '(not described)'}\n`)
+      })
+      if ((refImages || []).length) zip.file('references.md', refMd.join('\n'))
+
+      // LTX attached frame images
+      ;(framePrompts || []).forEach((fp, si) => FRAME_KEYS.forEach(k => {
+        const img = fp?.frames?.[k]?.image
+        if (img?.b64) zip.file(`frames/shot-${pad((shots[si]?.shot_number) || si + 1)}-${k}.${imgExt(img.mediaType)}`, img.b64, { base64: true })
+      }))
+
+      // machine-readable + a human README
+      zip.file('script.json', JSON.stringify(script, null, 2))
+      if (directorsCut) zip.file('directors-cut.json', JSON.stringify(directorsCut, null, 2))
+      const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio)
+      zip.file('README.md', [
+        `# ${script?.title || 'Untitled'}`,
+        script?.logline ? `\n_${script.logline}_\n` : '',
+        `- Output: ${isH3now ? 'MiniMax H3' : 'LTX-2.3'}${isH3now && ratio ? ` · ${ratio.label}` : ''}`,
+        script?.look ? `- Look: ${script.look}` : '',
+        script?.language ? `- Language: ${script.language}` : '',
+        script?.soundscape ? `- Soundscape: ${script.soundscape}` : '',
+        script?.music ? `- Music: ${script.music}` : '',
+        `- ${done.length} clip${done.length === 1 ? '' : 's'}, ${(refImages || []).filter(im => im.base64).length} reference image${(refImages || []).filter(im => im.base64).length === 1 ? '' : 's'}`,
+        `\n## Cast\n${(script?.characters || []).map(c => `- **${c.name}** — ${c.appearance || ''}${c.wardrobe ? ` · wardrobe: ${c.wardrobe}` : ''}`).join('\n')}`,
+        `\n## Locations\n${(script?.locations || []).map(l => `- **${l.name}** — ${l.description || ''}`).join('\n')}`,
+      ].filter(Boolean).join('\n'))
+
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${fileSafe(script?.title || 'scriptwriter')}-${isH3now ? 'h3' : 'ltx'}-${new Date().toISOString().slice(0, 10)}.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+    }
   }
   const copyOne = (idx) => {
     navigator.clipboard.writeText(finalPrompts[idx].text)
@@ -604,11 +1385,105 @@ export default function ScriptwriterPanel({
   }
   const editPrompt = (idx, val) => setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, text: val } : p))
 
+  // Portrait / establishing-still generator embedded in a cast or location card.
+  const renderPortrait = (key) => {
+    const ref = refForEntity(key)
+    const d = portraitDraft[key]
+    const found = entityByKey(key)
+    const isChar = found?.kind === 'character'
+    const ck = `portrait:${key}`
+    const cs = comfyFrame.key === ck ? comfyFrame.state : 'idle'
+    return (
+      <div style={{ marginTop: 8, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ ...lbl, margin: 0 }}>{isChar ? 'Identity reference' : 'Location reference'}</span>
+          {ref?.previewUrl && (
+            <img src={ref.previewUrl} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 5, border: '1px solid var(--pe-line)' }} />
+          )}
+          <span style={{ fontSize: 12.5, color: ref ? (ref.caption?.trim() ? 'var(--pe-ok)' : 'var(--pe-danger)') : 'var(--pe-ink-3)' }}>
+            {ref ? (ref.generated ? '✓ generated' : '✓ uploaded') + (ref.caption?.trim() ? ' · described' : ' · ⚠ not described') : 'none — Upload a photo or Generate one'}
+          </span>
+          {ref && !ref.caption?.trim() && (
+            <button onClick={() => describeEntityRef(key)} disabled={captioning}
+              style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)' }}>
+              {captioning ? 'Describing…' : '👁 Describe'}
+            </button>
+          )}
+          <label style={{ ...ghostBtn, display: 'inline-block' }}>
+            {ref ? 'Replace' : 'Upload'}
+            <input type="file" accept="image/*" hidden onChange={e => { uploadPortrait(key, e.target.files); e.target.value = '' }} />
+          </label>
+          {ref && <button onClick={() => removeEntityRef(key)} style={ghostBtn}>Remove</button>}
+          {!d && <button onClick={() => startPortrait(key)} style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)' }}>
+            {ref ? 'Regenerate' : 'Generate ' + (isChar ? 'portrait' : 'still')}
+          </button>}
+        </div>
+        {d && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+              {FRAME_TARGETS.map(t => (
+                <button key={t.id} onClick={() => patchPortrait(key, { target: t.id })} style={btn((d.target || 'zimage') === t.id)}>{t.label}</button>
+              ))}
+              <button onClick={() => generatePortraitPrompt(key)} disabled={d.loading}
+                style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)', background: 'var(--pe-accent-bg)' }}>
+                {d.loading ? 'Writing…' : d.text ? 'Rewrite prompt' : 'Write prompt'}
+              </button>
+              <button onClick={() => setPortraitDraft(prev => { const n = { ...prev }; delete n[key]; return n })} style={ghostBtn}>Close</button>
+            </div>
+            {d.error && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginBottom: 4 }}>{d.error}</div>}
+            {d.text && (
+              <>
+                <textarea value={d.text} onChange={e => patchPortrait(key, { text: e.target.value })} spellCheck={false}
+                  rows={Math.max(3, Math.ceil(d.text.length / 80))}
+                  style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '8px 10px', fontSize: 13, lineHeight: 1.6, color: 'var(--pe-accent-ink)', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none' }} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                  <button onClick={() => sendPortraitToComfy(key)} disabled={comfyFrame.state === 'sending'} style={ghostBtn}>
+                    {cs === 'sending' ? 'Sending…' : cs === 'done' ? '✓ Sent' : cs === 'error' ? '✕ Failed' : '→ ComfyUI'}
+                  </button>
+                  <button onClick={() => openPickerKey(ck)} style={{ ...ghostBtn, ...(picker.key === ck ? { color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)' } : {}) }}>
+                    ＋ Attach render
+                  </button>
+                </div>
+              </>
+            )}
+            {attach.key === ck && attach.state === 'fetching' && <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>Fetching image…</div>}
+            {attach.key === ck && attach.state === 'error' && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 6 }}>{attach.error}</div>}
+            {picker.key === ck && (
+              <div style={{ marginTop: 8, padding: 10, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                    {picker.loading ? 'Loading recent ComfyUI outputs…' : `${picker.items.length} recent output${picker.items.length === 1 ? '' : 's'} · newest first`}
+                  </span>
+                  <button onClick={() => loadPickerItems(ck)} disabled={picker.loading} style={ghostBtn}>Refresh</button>
+                  <button onClick={() => setPicker({ key: null, loading: false, error: '', items: [] })} style={{ ...ghostBtn, marginLeft: 'auto' }}>Close</button>
+                </div>
+                {picker.error && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginBottom: 6 }}>{picker.error}</div>}
+                {picker.items.length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+                    {picker.items.map((it, ii) => (
+                      <img key={ii} src={it.viewUrl} loading="lazy" alt={it.filename}
+                        onClick={() => attachPortraitImage(key, it)}
+                        style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 6, border: '1px solid var(--pe-line)', cursor: 'pointer', background: 'var(--pe-surface)' }} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const stepIdx = ['input', 'scripting'].includes(phase) ? 0
     : ['script', 'directing'].includes(phase) ? 1
     : 2
 
   const isLoading = ['scripting', 'directing', 'prompting'].includes(phase)
+  const isH3 = promptTarget === 'minimax_h3'
+  const H3_DURATIONS = [4, 5, 6, 7, 8, 10, 12, 15]
+  const LTX_DURATIONS = [4, 8, 12, 16, 20]
+  const characterNames = (ids) => (script?.characters || []).filter(c => (ids || []).includes(c.id)).map(c => c.name).join(', ')
 
   const focusBorder = (e) => { e.target.style.borderColor = 'var(--pe-accent)' }
   const blurBorder  = (e) => { e.target.style.borderColor = 'var(--pe-line)' }
@@ -654,10 +1529,10 @@ export default function ScriptwriterPanel({
         </div>
       )}
 
-      {/* Reference images — editable pre-script, read-only after */}
+      {/* Reference images — editable up to the video-prompt phase, read-only after */}
       <ScriptwriterRefImages
         images={refImages}
-        editable={['input', 'scripting'].includes(phase)}
+        editable={!['prompting', 'done'].includes(phase)}
         status={refCaptionStatus}
         busy={isLoading || captioning}
         max={MAX_REF_IMAGES}
@@ -666,6 +1541,13 @@ export default function ScriptwriterPanel({
         onNote={updateRefNote}
         onCaption={updateRefCaption}
         onDescribe={(force) => captionRefImages({ force }).catch(() => {})}
+        linkTypes={REF_LINK_TYPES}
+        characters={script?.characters || []}
+        locations={script?.locations || []}
+        roles={MINIMAX_H3_REF_ROLES}
+        preserves={MINIMAX_H3_PRESERVE_OPTIONS}
+        onLinkType={setRefLinkType}
+        onField={updateRefField}
       />
 
       {/* Phase 1 — input */}
@@ -704,15 +1586,144 @@ export default function ScriptwriterPanel({
         </div>
       )}
 
-      {/* Phase 2 — script review */}
+      {/* Phase 2 — script review + cast/location bible */}
       {['script', 'directing'].includes(phase) && script && (
         <div>
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 12 }}>
             <label style={lbl}>Film Title</label>
-            <input value={script.title} onChange={e => setScript(s => ({ ...s, title: e.target.value }))}
+            <input value={script.title || ''} onChange={e => updateFilmField('title', e.target.value)}
               style={{ ...field({ fontSize: 15, fontWeight: 600, color: 'var(--pe-ink)' }) }}
               onFocus={focusBorder} onBlur={blurBorder} />
           </div>
+          {'logline' in script && (
+            <div style={{ marginBottom: 10 }}>
+              <label style={lbl}>Logline</label>
+              <input value={script.logline || ''} onChange={e => updateFilmField('logline', e.target.value)}
+                style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 320px' }}>
+              <label style={lbl}>Look <span style={{ ...lbl, textTransform: 'none', letterSpacing: 0, display: 'inline' }}>(applied to every shot)</span></label>
+              <textarea value={script.look || ''} onChange={e => updateFilmField('look', e.target.value)} rows={2}
+                style={{ ...field({ resize: 'vertical' }) }} onFocus={focusBorder} onBlur={blurBorder} />
+            </div>
+            <div style={{ width: 160 }}>
+              <label style={lbl}>Language</label>
+              <input value={script.language || ''} onChange={e => updateFilmField('language', e.target.value)}
+                style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 260px' }}>
+              <label style={lbl}>Soundscape <span style={{ textTransform: 'none', letterSpacing: 0 }}>(ambient / diegetic — every clip)</span></label>
+              <input value={script.soundscape || ''} onChange={e => updateFilmField('soundscape', e.target.value)}
+                placeholder="e.g. faint cassette hiss, burning incense, wooden floorboards"
+                style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+            </div>
+            <div style={{ flex: '1 1 260px' }}>
+              <label style={lbl}>Music <span style={{ textTransform: 'none', letterSpacing: 0 }}>(score approach, or “none”)</span></label>
+              <input value={script.music || ''} onChange={e => updateFilmField('music', e.target.value)}
+                placeholder="e.g. 1980s dark-wave synth, reverb guitar, slow swell"
+                style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+            </div>
+          </div>
+
+          {/* Output model — chosen here so the Director specialises for it */}
+          <div style={{ ...card, marginBottom: 16 }}>
+            <label style={lbl}>Output Model</label>
+            {phase === 'script' ? (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {PROMPT_TARGETS.map(pt => (
+                  <button key={pt.id} onClick={() => setPromptTarget(pt.id)} style={btn(promptTarget === pt.id)}>{pt.label}</button>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PROMPT_TARGET_LABEL[promptTarget] || promptTarget}</div>
+            )}
+            {promptTarget === 'minimax_h3' && (
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl}>Aspect Ratio</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {MINIMAX_H3_RESOLUTIONS.map(r => (
+                    <button key={r.id} onClick={() => phase === 'script' && setH3Ratio(r.id)} title={r.note}
+                      disabled={phase !== 'script'} style={btn(h3Ratio === r.id)}>{r.label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 8 }}>
+                  The Director breaks each scene into H3 clips (one emotional/action unit each) and phase 3 attaches
+                  each clip's character &amp; location references. 16:9 for cinema, 9:16 for short-drama.
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <label style={lbl}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
+                  {phase === 'script' ? (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {PACING_OPTIONS.map(p => (
+                        <button key={p.id} onClick={() => setPacing(p.id)} style={btn(pacing === p.id)}>{p.label}</button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PACING_OPTIONS.find(p => p.id === pacing)?.label || 'Standard'}</div>
+                  )}
+                  <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                    Tight = fewest clips that still respect H3's two-beat limit. Loose = more reaction &amp; insert clips.
+                    You can still insert or remove clips on the next screen.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Cast bible */}
+          {Array.isArray(script.characters) && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={lbl}>Cast</label>
+              {script.characters.map((c, ci) => (
+                <div key={c.id || ci} style={card}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input value={c.name} onChange={e => updateCharacter(ci, 'name', e.target.value)}
+                      style={{ ...field({ flex: 1, fontWeight: 600 }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                    <input value={c.role_in_story || ''} onChange={e => updateCharacter(ci, 'role_in_story', e.target.value)}
+                      style={{ ...field({ width: 130, fontSize: 12.5 }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                    <button onClick={() => removeCharacter(ci)} style={{ ...ghostBtn, color: 'var(--pe-danger)', borderColor: 'var(--pe-danger-line)' }}>✕</button>
+                  </div>
+                  <label style={lbl}>Appearance</label>
+                  <textarea value={c.appearance || ''} onChange={e => updateCharacter(ci, 'appearance', e.target.value)} rows={2}
+                    style={{ ...field({ resize: 'vertical', marginBottom: 6 }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                  <label style={lbl}>Wardrobe</label>
+                  <input value={c.wardrobe || ''} onChange={e => updateCharacter(ci, 'wardrobe', e.target.value)}
+                    style={{ ...field({ marginBottom: 6 }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                  <label style={lbl}>Voice</label>
+                  <input value={c.voice || ''} onChange={e => updateCharacter(ci, 'voice', e.target.value)}
+                    style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+                  {renderPortrait(c.id)}
+                </div>
+              ))}
+              <button onClick={addCharacter} style={{ fontSize: 13, color: 'var(--pe-accent)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>+ Add character</button>
+            </div>
+          )}
+
+          {/* Location bible */}
+          {Array.isArray(script.locations) && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={lbl}>Locations</label>
+              {script.locations.map((l, li) => (
+                <div key={l.id || li} style={card}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input value={l.name} onChange={e => updateLocation(li, 'name', e.target.value)}
+                      style={{ ...field({ flex: 1, fontWeight: 600 }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                    <button onClick={() => removeLocation(li)} style={{ ...ghostBtn, color: 'var(--pe-danger)', borderColor: 'var(--pe-danger-line)' }}>✕</button>
+                  </div>
+                  <textarea value={l.description || ''} onChange={e => updateLocation(li, 'description', e.target.value)} rows={2}
+                    style={{ ...field({ resize: 'vertical' }) }} onFocus={focusBorder} onBlur={blurBorder} />
+                  {renderPortrait(l.id)}
+                </div>
+              ))}
+              <button onClick={addLocation} style={{ fontSize: 13, color: 'var(--pe-accent)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>+ Add location</button>
+            </div>
+          )}
+
+          <label style={lbl}>Scenes</label>
           {script.scenes.map((scene, si) => (
             <div key={si} style={card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -722,19 +1733,66 @@ export default function ScriptwriterPanel({
                 <input value={scene.title} onChange={e => updateScene(si, 'title', e.target.value)}
                   style={{ ...field({ flex: 1, fontWeight: 600 }) }}
                   onFocus={focusBorder} onBlur={blurBorder} />
+                {phase === 'script' && (
+                  <button onClick={() => regenerateScene(si)} disabled={sceneBusy !== null}
+                    title="Have the AI write a fresh version of this scene"
+                    style={{ ...ghostBtn, flexShrink: 0, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)',
+                      background: 'var(--pe-accent-bg)', cursor: sceneBusy !== null ? 'wait' : 'pointer' }}>
+                    {sceneBusy === si ? '✦ Rewriting…' : '✦ Rewrite'}
+                  </button>
+                )}
               </div>
-              <div style={{ marginBottom: 10 }}>
-                <label style={lbl}>Setting</label>
-                <input value={scene.setting} onChange={e => updateScene(si, 'setting', e.target.value)}
-                  style={{ ...field({ fontFamily: 'monospace', fontSize: 13.5 }) }}
-                  onFocus={focusBorder} onBlur={blurBorder} />
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                <div style={{ flex: '1 1 220px' }}>
+                  <label style={lbl}>Setting</label>
+                  <input value={scene.setting} onChange={e => updateScene(si, 'setting', e.target.value)}
+                    style={{ ...field({ fontFamily: 'monospace', fontSize: 13.5 }) }}
+                    onFocus={focusBorder} onBlur={blurBorder} />
+                </div>
+                {Array.isArray(script.locations) && script.locations.length > 0 && (
+                  <div style={{ width: 170 }}>
+                    <label style={lbl}>Location</label>
+                    <select value={scene.location_id || ''} onChange={e => updateScene(si, 'location_id', e.target.value)}
+                      style={{ ...field({ fontSize: 12.5 }) }}>
+                      <option value="">—</option>
+                      {script.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
+              {Array.isArray(script.characters) && script.characters.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <label style={lbl}>Characters present</label>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {script.characters.map(c => (
+                      <button key={c.id} onClick={() => toggleSceneCharacter(si, c.id)}
+                        style={btn(Array.isArray(scene.characters) && scene.characters.includes(c.id))}>
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={{ marginBottom: 10 }}>
                 <label style={lbl}>Description</label>
                 <textarea value={scene.description} onChange={e => updateScene(si, 'description', e.target.value)} rows={3}
                   style={{ ...field({ resize: 'vertical' }) }}
                   onFocus={focusBorder} onBlur={blurBorder} />
               </div>
+              {'emotional_turn' in scene && (
+                <div style={{ marginBottom: 10 }}>
+                  <label style={lbl}>Emotional turn <span style={{ textTransform: 'none', letterSpacing: 0 }}>(observable change, or leave empty)</span></label>
+                  <input value={scene.emotional_turn || ''} onChange={e => updateScene(si, 'emotional_turn', e.target.value || null)}
+                    style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+                </div>
+              )}
+              {isH3 && (
+                <div style={{ marginBottom: 10 }}>
+                  <label style={lbl}>Sound / music for this scene <span style={{ textTransform: 'none', letterSpacing: 0 }}>(optional — overrides the film default)</span></label>
+                  <input value={scene.sound_mood || ''} onChange={e => updateScene(si, 'sound_mood', e.target.value || null)}
+                    style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+                </div>
+              )}
               <div>
                 <label style={lbl}>Dialogue</label>
                 {scene.dialogues.map((line, di) => (
@@ -755,8 +1813,8 @@ export default function ScriptwriterPanel({
               </div>
             </div>
           ))}
-          <button onClick={runPhase2} disabled={phase === 'directing'} style={{ ...genBtn(phase === 'directing'), marginTop: 6 }}>
-            {phase === 'directing' ? "✦ Writing director's cut…" : "→ Director's Cut"}
+          <button onClick={runPhase2} disabled={phase === 'directing' || sceneBusy !== null} style={{ ...genBtn(phase === 'directing' || sceneBusy !== null), marginTop: 6 }}>
+            {phase === 'directing' ? "✦ Writing director's cut…" : sceneBusy !== null ? '✦ Rewriting a scene…' : "→ Director's Cut"}
           </button>
         </div>
       )}
@@ -787,34 +1845,88 @@ export default function ScriptwriterPanel({
               {historyNote}
             </div>
           )}
+
+          {/* Reference status — tells the user whether clips will be Ref2VA or T2VA */}
+          {isH3 && (() => {
+            const capt = (refImages || []).filter(im => im.caption && im.caption.trim()).length
+            const sceneOf = (s) => script?.scenes?.find(x => String(x.id) === String(s.scene_id))
+            const ref2 = directorsCut.shots.filter(s => shotRefs(s, sceneOf(s)).length > 0).length
+            const total = directorsCut.shots.length
+            const tone = capt === 0 ? 'danger' : ref2 < total ? 'ink-3' : 'ok'
+            const msg = capt === 0
+              ? '⚠ No described references — every clip generates as text-to-video (T2VA), so faces and locations will drift between clips. Add a described reference per character and location on the Script screen (upload a photo or Generate a portrait, then Describe).'
+              : ref2 < total
+              ? `${ref2} of ${total} clips will generate with references (Ref2VA); the other ${total - ref2} run as T2VA.`
+              : `✓ All ${total} clips generate as Ref2VA from ${capt} described reference${capt === 1 ? '' : 's'}.`
+            return (
+              <div style={{ ...card, fontSize: 12.5, lineHeight: 1.5,
+                color: tone === 'danger' ? 'var(--pe-danger)' : tone === 'ok' ? 'var(--pe-ok)' : 'var(--pe-ink-3)',
+                background: tone === 'danger' ? 'var(--pe-danger-bg)' : tone === 'ok' ? 'var(--pe-ok-bg)' : 'var(--pe-rail)',
+                borderColor: tone === 'danger' ? 'var(--pe-danger-line)' : tone === 'ok' ? 'var(--pe-ok-bg)' : 'var(--pe-line)' }}>
+                {msg}
+              </div>
+            )
+          })()}
+
           {directorsCut.shots.map((shot, si) => (
-            <div key={si} style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <div key={si}>
+              {phase === 'dircut' && insertBar(si)}
+              <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
-                  Shot {shot.shot_number}
+                  {isH3 ? 'Clip' : 'Shot'} {shot.shot_number}
                 </span>
                 <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{shot.scene_title}</span>
+                {isH3 && shot.shot_type && (
+                  <span style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '1px 6px' }}>{shot.shot_type}</span>
+                )}
+                {phase === 'dircut' && (
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                    <button onClick={() => regenerateShot(si)} disabled={shotBusy !== null || promptBusy !== null}
+                      title={`Have the AI write a fresh version of this ${isH3 ? 'clip' : 'shot'}`}
+                      style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)',
+                        background: 'var(--pe-accent-bg)', cursor: (shotBusy !== null || promptBusy !== null) ? 'wait' : 'pointer' }}>
+                      {shotBusy === si ? '✦ Rewriting…' : '✦ Rewrite'}
+                    </button>
+                    <button onClick={() => removeShot(si)}
+                      disabled={directorsCut.shots.length <= 1 || shotBusy !== null || promptBusy !== null}
+                      title={directorsCut.shots.length <= 1 ? 'A film needs at least one clip' : `Remove this ${isH3 ? 'clip' : 'shot'}`}
+                      style={{ ...ghostBtn, color: 'var(--pe-danger)', borderColor: 'var(--pe-danger-line)',
+                        cursor: (directorsCut.shots.length <= 1 || shotBusy !== null || promptBusy !== null) ? 'not-allowed' : 'pointer' }}>
+                      ✕
+                    </button>
+                  </div>
+                )}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={lbl}>Camera Framing</label>
-                  <input value={shot.camera_framing} onChange={e => updateShot(si, 'camera_framing', e.target.value)}
+                  <input value={shot.camera_framing || ''} onChange={e => updateShot(si, 'camera_framing', e.target.value)}
                     style={field()} onFocus={focusBorder} onBlur={blurBorder} />
                 </div>
                 <div>
                   <label style={lbl}>Camera Movement</label>
-                  <input value={shot.camera_movement} onChange={e => updateShot(si, 'camera_movement', e.target.value)}
+                  <input value={shot.camera_movement || ''} onChange={e => updateShot(si, 'camera_movement', e.target.value)}
                     style={field()} onFocus={focusBorder} onBlur={blurBorder} />
                 </div>
               </div>
+              {isH3 && (
+                <div style={{ marginBottom: 10 }}>
+                  <label style={lbl}>Eyeline <span style={{ textTransform: 'none', letterSpacing: 0 }}>(what they look at + whether it is in frame)</span></label>
+                  <input value={shot.eyeline || ''} onChange={e => updateShot(si, 'eyeline', e.target.value)}
+                    style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+                </div>
+              )}
               <div style={{ marginBottom: 10 }}>
                 <label style={lbl}>Lighting / Mood</label>
-                <input value={shot.lighting_mood} onChange={e => updateShot(si, 'lighting_mood', e.target.value)}
+                <input value={shot.lighting_mood || ''} onChange={e => updateShot(si, 'lighting_mood', e.target.value)}
                   style={field()} onFocus={focusBorder} onBlur={blurBorder} />
               </div>
               <div style={{ marginBottom: 10 }}>
-                <label style={lbl}>Visual Action</label>
-                <textarea value={shot.visual_action} onChange={e => updateShot(si, 'visual_action', e.target.value)} rows={2}
+                <label style={lbl}>{isH3 ? 'Primary beat' : 'Visual Action'}</label>
+                <textarea
+                  value={isH3 ? (shot.primary_beat || '') : (shot.visual_action || '')}
+                  onChange={e => updateShot(si, isH3 ? 'primary_beat' : 'visual_action', e.target.value)} rows={2}
                   style={{ ...field({ resize: 'vertical' }) }} onFocus={focusBorder} onBlur={blurBorder} />
               </div>
 
@@ -822,17 +1934,42 @@ export default function ScriptwriterPanel({
               <div style={{ marginBottom: 10 }}>
                 <label style={lbl}>Duration</label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {[4, 8, 12, 16, 20].map(s => (
+                  {(isH3 ? H3_DURATIONS : LTX_DURATIONS).map(s => (
                     <button key={s} onClick={() => updateShot(si, 'duration', s)}
-                      style={btn(shot.duration === s || (!shot.duration && s === 4))}>
+                      style={btn(shot.duration === s || (!shot.duration && s === (isH3 ? 7 : 4)))}>
                       {s}s
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Frame image prompts */}
-              {framePrompts[si] && (
+              {/* H3: which references phase 3 will attach to this clip */}
+              {isH3 && (() => {
+                const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+                const refs = shotRefs(shot, scene)
+                return (
+                  <div style={{ marginBottom: 10, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 10 }}>
+                    <label style={lbl}>References attached to this clip</label>
+                    {refs.length ? (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {refs.map((im, ri) => (
+                          <span key={ri} style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '2px 7px' }}>
+                            {refEntityName(im, script) || im.note || roleLabel(im.role)} · {roleLabel(im.role)}
+                          </span>
+                        ))}
+                        <span style={{ fontSize: 12, color: 'var(--pe-ok)' }}>→ MODE: Ref2VA</span>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                        None — describe &amp; link a reference for {characterNames(shot.characters) || 'this clip’s characters'} above, or this clip runs as MODE: T2VA from the bible text.
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Frame image prompts — LTX interpolation frames only */}
+              {!isH3 && framePrompts[si] && (
                 <div style={{ marginTop: 4, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 12 }}>
                   <label style={lbl}>Frame Image Prompts</label>
                   {FRAME_KEYS.map(fk => {
@@ -972,42 +2109,16 @@ export default function ScriptwriterPanel({
                   })}
                 </div>
               )}
+              </div>
             </div>
           ))}
+          {phase === 'dircut' && insertBar(directorsCut.shots.length)}
 
-          {/* Output model — one global choice for the whole Phase 3 run */}
-          <div style={{ ...card, marginTop: 6 }}>
-            <label style={lbl}>Output Model</label>
-            {phase === 'dircut' ? (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {PROMPT_TARGETS.map(pt => (
-                  <button key={pt.id} onClick={() => setPromptTarget(pt.id)} style={btn(promptTarget === pt.id)}>
-                    {pt.label}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>
-                {PROMPT_TARGET_LABEL[promptTarget] || promptTarget}
-              </div>
-            )}
-
-            {promptTarget === 'minimax_h3' && phase === 'dircut' && (
-              <div style={{ marginTop: 12 }}>
-                <label style={lbl}>Aspect Ratio</label>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {MINIMAX_H3_RESOLUTIONS.map(r => (
-                    <button key={r.id} onClick={() => setH3Ratio(r.id)} title={r.note} style={btn(h3Ratio === r.id)}>
-                      {r.label}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 8 }}>
-                  H3 adds native synchronized audio and speaks each scene's dialogue lines. Shots longer
-                  than ~15s may be re-paced by H3's shot budget.
-                </div>
-              </div>
-            )}
+          {/* Output model was chosen on the script screen */}
+          <div style={{ ...card, marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)' }}>
+            Output: <span style={{ color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PROMPT_TARGET_LABEL[promptTarget] || promptTarget}</span>
+            {isH3 && <> · {(MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || {}).label}</>}
+            {isH3 && <> · Ref2VA where a clip has linked references, T2VA otherwise</>}
           </div>
 
           {phase === 'dircut' && (
@@ -1022,10 +2133,16 @@ export default function ScriptwriterPanel({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                 <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts</label>
                 {phase === 'done' && (
-                  <button onClick={copyAll}
-                    style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
-                    {copiedAll ? '✓ Copied all' : 'Copy all'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={copyAll}
+                      style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
+                      {copiedAll ? '✓ Copied all' : 'Copy all'}
+                    </button>
+                    <button onClick={exportBundle} disabled={exporting}
+                      style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, cursor: exporting ? 'wait' : 'pointer' }}>
+                      {exporting ? 'Zipping…' : '⬇ Export ZIP'}
+                    </button>
+                  </div>
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -1038,6 +2155,13 @@ export default function ScriptwriterPanel({
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {p.usage && <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>in {p.usage.input_tokens} · out {p.usage.output_tokens} tokens</span>}
+                        {phase === 'done' && !p.loading && directorsCut?.shots?.[i] && (
+                          <button onClick={() => regeneratePrompt(i)} disabled={promptBusy !== null || shotBusy !== null}
+                            title="Have the AI write a fresh prompt for this clip"
+                            style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, cursor: (promptBusy !== null || shotBusy !== null) ? 'wait' : 'pointer' }}>
+                            {promptBusy === i ? '✦ Rewriting…' : '✦ Rewrite'}
+                          </button>
+                        )}
                         {p.text && !p.loading && (
                           <button onClick={() => copyOne(i)}
                             style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copied === i ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copied === i ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
