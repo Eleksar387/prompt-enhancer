@@ -611,7 +611,14 @@ export default function ScriptwriterPanel({
   }
 
   const runPhase2 = async () => {
+    // Re-running replaces the existing clip breakdown (and any prompts built from
+    // it). Stepping forward via the dots keeps them; make the destructive path
+    // explicit.
+    if (directorsCut && typeof window !== 'undefined' && !window.confirm(
+      `Re-run the Director's Cut? This replaces the current clip breakdown${finalPrompts.length ? ' and the generated prompts' : ''}.\n\nTo keep them, use the steps at the top to move forward instead.`
+    )) return
     setError(''); setRawFallback('')
+    setFinalPrompts([])
     setPhase('directing')
     const isH3 = promptTarget === 'minimax_h3'
     const refBlock = assembleRefBlock(refImages, REF_HEADING_DIRECTOR, script)
@@ -779,6 +786,10 @@ export default function ScriptwriterPanel({
   }
 
   const runPhase3 = async () => {
+    const hadPrompts = finalPrompts.some(p => p.text && p.text.trim())
+    if (hadPrompts && typeof window !== 'undefined' && !window.confirm(
+      'Re-generate every prompt? This replaces the ones you have.\n\nTo tweak just one, use its ✦ Rewrite button on the Video Prompts screen.'
+    )) return
     setError('')
     const shots = directorsCut.shots
     const isH3 = promptTarget === 'minimax_h3'
@@ -883,9 +894,15 @@ export default function ScriptwriterPanel({
     }
   }
 
-  // Insert / remove a clip on the Director's-Cut screen. framePrompts is a
-  // strictly index-parallel array, so it moves in lockstep; shot_number is
-  // re-sequenced; the index-keyed transient pickers are reset.
+  // Insert / remove a clip on the Director's-Cut screen. framePrompts AND
+  // finalPrompts (populated once the user has been to the Video-Prompts screen
+  // and stepped back) are strictly index-parallel, so they move in lockstep;
+  // shot_number is re-sequenced; the index-keyed transient pickers are reset.
+  const emptyPromptEntry = (shot) => ({
+    shotNumber: shot?.shot_number || 0, sceneTitle: shot?.scene_title || '',
+    text: '', usage: null, loading: false, error: '',
+  })
+  const renumberPrompts = (prompts) => (prompts || []).map((p, i) => ({ ...p, shotNumber: i + 1 }))
   const clearShotTransients = () => {
     setPicker({ key: null, loading: false, error: '', items: [] })
     setComfyFrame({ key: null, state: 'idle', error: '' })
@@ -904,20 +921,26 @@ export default function ScriptwriterPanel({
     const nextFrames = [
       ...framePrompts.slice(0, atIndex), emptyFrameEntry(), ...framePrompts.slice(atIndex),
     ]
+    const nextPrompts = finalPrompts.length
+      ? renumberPrompts([...finalPrompts.slice(0, atIndex), emptyPromptEntry(nextShots[atIndex]), ...finalPrompts.slice(atIndex)])
+      : finalPrompts
     setDirectorsCut(nextCut)
     setFramePrompts(nextFrames)
+    if (finalPrompts.length) setFinalPrompts(nextPrompts)
     clearShotTransients()
-    persistState(nextFrames, undefined, nextCut)
+    persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
     regenerateShot(atIndex, { cut: nextCut, bridge: true })
   }
   const removeShot = (si) => {
     if (phase !== 'dircut' || shotBusy !== null || promptBusy !== null || !directorsCut || directorsCut.shots.length <= 1) return
     const nextCut = { ...directorsCut, shots: renumberShots(directorsCut.shots.filter((_, i) => i !== si)) }
     const nextFrames = framePrompts.filter((_, i) => i !== si)
+    const nextPrompts = finalPrompts.length ? renumberPrompts(finalPrompts.filter((_, i) => i !== si)) : finalPrompts
     setDirectorsCut(nextCut)
     setFramePrompts(nextFrames)
+    if (finalPrompts.length) setFinalPrompts(nextPrompts)
     clearShotTransients()
-    persistState(nextFrames, undefined, nextCut)
+    persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
   }
   // Slim dashed "insert a clip here" bar shown between / around clip cards.
   const insertBar = (idx) => (
@@ -1113,17 +1136,40 @@ export default function ScriptwriterPanel({
   // Re-save the whole session under the same id at the CURRENT phase — used after
   // a frame image, a cast portrait, or a reference edit lands between phases. Pass
   // the just-computed framePrompts / refImages arrays to sidestep state-update lag.
-  const persistState = (framePromptsOverride, refsOverride, cutOverride) => {
+  const persistState = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride) => {
     if (!onSaveHistory || !script) return
+    // Always store every artifact that exists, regardless of the current screen —
+    // the record must carry the WHOLE path (script → cut → prompts) so a restore
+    // can drop the user back on any step with the others intact. `phase` alone
+    // says which screen they were last on.
+    const fp = promptsOverride !== undefined ? promptsOverride : finalPrompts
     commitHistory({
-      ...basePayload(phase, refsOverride || refImages),
+      ...basePayload(phaseOverride || phase, refsOverride || refImages),
       script,
       directorsCut: cutOverride || directorsCut || null,
-      finalPrompts: (phase === 'done' || phase === 'prompting') && finalPrompts.length
-        ? finalPrompts.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
+      finalPrompts: (fp && fp.length)
+        ? fp.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
         : null,
       framePrompts: serializeFramePrompts(framePromptsOverride || framePrompts),
     })
+  }
+
+  // The user can jump between finished steps at will (the stepper dots and the
+  // "← Back to …" buttons) — pure navigation, never re-runs the LLM. Each jump is
+  // written to history so a restore lands on the same screen.
+  const stepReachable = (target) => {
+    if (target === 'script') return !!script
+    if (target === 'dircut') return !!directorsCut
+    if (target === 'done')   return finalPrompts.length > 0
+    return false
+  }
+  const navBusy = () => ['scripting', 'directing', 'prompting'].includes(phase)
+    || sceneBusy !== null || shotBusy !== null || promptBusy !== null
+  const navigateTo = (target) => {
+    if (navBusy() || phase === target || !stepReachable(target)) return
+    setPhase(target)
+    setError(''); setRawFallback('')
+    persistState(undefined, undefined, undefined, target)
   }
 
   // --- pull a rendered image back from ComfyUI --------------------------------
@@ -1522,9 +1568,10 @@ export default function ScriptwriterPanel({
     )
   }
 
-  const stepIdx = ['input', 'scripting'].includes(phase) ? 0
-    : ['script', 'directing'].includes(phase) ? 1
+  const stepIdx = ['input', 'scripting', 'script', 'directing'].includes(phase) ? 0
+    : phase === 'dircut' ? 1
     : 2
+  const STEP_PHASE = ['script', 'dircut', 'done']
 
   const isLoading = ['scripting', 'directing', 'prompting'].includes(phase)
   const isH3 = promptTarget === 'minimax_h3'
@@ -1534,24 +1581,32 @@ export default function ScriptwriterPanel({
 
   const focusBorder = (e) => { e.target.style.borderColor = 'var(--pe-accent)' }
   const blurBorder  = (e) => { e.target.style.borderColor = 'var(--pe-line)' }
+  const navBtn = { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }
 
   return (
     <div>
-      {/* Phase stepper */}
+      {/* Phase stepper — dots for finished steps are clickable (jump back or
+          forward without re-running the AI) */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24 }}>
-        {STEPS.map((step, i) => (
+        {STEPS.map((step, i) => {
+          const target = STEP_PHASE[i]
+          const canJump = phase !== target && !navBusy() && stepReachable(target)
+          return (
           <div key={step} style={{ display: 'flex', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div
+              onClick={canJump ? () => navigateTo(target) : undefined}
+              title={canJump ? `Go to ${step}` : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: canJump ? 'pointer' : 'default' }}>
               <div style={{
                 width: 22, height: 22, borderRadius: '50%', border: '2px solid',
-                borderColor: i <= stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)',
+                borderColor: i <= stepIdx ? 'var(--pe-accent)' : canJump ? 'var(--pe-accent-line)' : 'var(--pe-line)',
                 background: i < stepIdx ? 'var(--pe-accent)' : i === stepIdx ? 'var(--pe-accent-bg)' : 'transparent',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13.5, color: i <= stepIdx ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: 700, flexShrink: 0,
+                fontSize: 13.5, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: 700, flexShrink: 0,
               }}>
                 {i < stepIdx ? '✓' : i + 1}
               </div>
-              <span style={{ fontSize: 13, color: i <= stepIdx ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: i === stepIdx ? 600 : 400 }}>
+              <span style={{ fontSize: 13, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: i === stepIdx ? 600 : 400, textDecoration: canJump ? 'underline' : 'none', textUnderlineOffset: 3 }}>
                 {step}
               </span>
             </div>
@@ -1559,7 +1614,8 @@ export default function ScriptwriterPanel({
               <div style={{ width: 32, height: 1, background: i < stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)', margin: '0 8px' }} />
             )}
           </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* Error */}
@@ -1861,8 +1917,18 @@ export default function ScriptwriterPanel({
             </div>
           ))}
           <button onClick={runPhase2} disabled={phase === 'directing' || sceneBusy !== null} style={{ ...genBtn(phase === 'directing' || sceneBusy !== null), marginTop: 6 }}>
-            {phase === 'directing' ? "✦ Writing director's cut…" : sceneBusy !== null ? '✦ Rewriting a scene…' : "→ Director's Cut"}
+            {phase === 'directing' ? "✦ Writing director's cut…"
+              : sceneBusy !== null ? '✦ Rewriting a scene…'
+              : directorsCut ? "↻ Re-run Director's Cut" : "→ Director's Cut"}
           </button>
+          {directorsCut && phase === 'script' && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+              <button onClick={() => navigateTo('dircut')} disabled={navBusy()} style={navBtn}>→ Director's Cut (keep current)</button>
+              {finalPrompts.length > 0 && (
+                <button onClick={() => navigateTo('done')} disabled={navBusy()} style={navBtn}>→ Video Prompts (keep current)</button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -2216,9 +2282,19 @@ export default function ScriptwriterPanel({
           </div>
 
           {phase === 'dircut' && (
-            <button onClick={runPhase3} style={{ ...genBtn(false), marginTop: 6 }}>
-              → Generate {PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts
-            </button>
+            <>
+              <button onClick={runPhase3} style={{ ...genBtn(false), marginTop: 6 }}>
+                {finalPrompts.some(p => p.text && p.text.trim())
+                  ? `↻ Re-generate all ${PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts`
+                  : `→ Generate ${PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts`}
+              </button>
+              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                <button onClick={() => navigateTo('script')} disabled={navBusy()} style={navBtn}>← Back to Script</button>
+                {finalPrompts.length > 0 && (
+                  <button onClick={() => navigateTo('done')} disabled={navBusy()} style={navBtn}>→ Video Prompts (keep current)</button>
+                )}
+              </div>
+            </>
           )}
 
           {/* Final LTX prompts */}
@@ -2280,10 +2356,11 @@ export default function ScriptwriterPanel({
                 ))}
               </div>
               {phase === 'done' && (
-                <button onClick={reset}
-                  style={{ marginTop: 20, padding: '8px 18px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
-                  ← Start over
-                </button>
+                <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
+                  <button onClick={() => navigateTo('script')} disabled={navBusy()} style={navBtn}>← Back to Script</button>
+                  <button onClick={() => navigateTo('dircut')} disabled={navBusy()} style={navBtn}>← Back to Director's Cut</button>
+                  <button onClick={reset} style={{ ...navBtn, padding: '8px 18px' }}>← Start over</button>
+                </div>
               )}
             </div>
           )}
