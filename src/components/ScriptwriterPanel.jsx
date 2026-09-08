@@ -168,6 +168,11 @@ const rehydrateRefImage = (d) => ({
   hash: d.hash || (d.base64 ? imageHash(d.base64) : ''),
 })
 
+// Stable identifier for a reference image across serialize / rehydrate (the
+// in-memory `id` is regenerated on load). Used to pin an explicit reference set
+// on a clip (shot.refs).
+const refKey = (im) => im.hash || (im.caption || '').trim() || im.fileName || ''
+
 // Name of the bible entry a reference points at, for the folded-in text block.
 const refEntityName = (im, script) => {
   if (im.linkType === 'character') return (script?.characters || []).find(c => c.id === im.linkId)?.name || ''
@@ -633,11 +638,11 @@ export default function ScriptwriterPanel({
     }
   }
 
-  // Captioned references in scope for one clip. Default: every described reference
-  // is attached to every clip (the main-app Ref2VA model — works for a single-lead
+  // The AUTO default set of captioned references for one clip: every described
+  // reference on every clip (the main-app Ref2VA model — works for a single-lead
   // film). Only when the film has 2+ identity references do we narrow the
   // face/wardrobe refs to the characters present in that clip (id OR name).
-  const shotRefs = (shot, scene, refsList = refImages) => {
+  const autoShotRefs = (shot, scene, refsList = refImages) => {
     const captioned = (refsList || []).filter(im => im.caption && im.caption.trim())
     if (!captioned.length) return []
     const faces = captioned.filter(im => im.role === 'subject_identity' || im.linkType === 'character')
@@ -655,6 +660,47 @@ export default function ScriptwriterPanel({
       const c = (script?.characters || []).find(x => x.id === im.linkId)
       return present.has(im.linkId) || (c?.name && present.has(c.name.toLowerCase()))
     })
+  }
+
+  // Captioned references phase 3 actually attaches to one clip. If the user has
+  // pinned an explicit set on the clip (shot.refs — an array of reference keys,
+  // possibly empty), honour it exactly; otherwise use the auto default. Pinning
+  // is how you keep a wardrobe / prop reference out of the clips where it is not
+  // yet on screen (e.g. the shirt worn under a still-closed coat).
+  const shotRefs = (shot, scene, refsList = refImages) => {
+    const captioned = (refsList || []).filter(im => im.caption && im.caption.trim())
+    if (!captioned.length) return []
+    if (Array.isArray(shot?.refs)) {
+      const want = new Set(shot.refs)
+      return captioned.filter(im => want.has(refKey(im)))
+    }
+    return autoShotRefs(shot, scene, refsList)
+  }
+
+  // Toggle one reference on/off for a clip. First edit seeds the pinned set from
+  // whatever is currently effective (the auto set), then adds/removes the ref.
+  const toggleShotRef = (si, im) => {
+    const shot = directorsCut?.shots?.[si]
+    if (!shot || shotBusy !== null || promptBusy !== null) return
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const base = Array.isArray(shot.refs) ? shot.refs : shotRefs(shot, scene).map(refKey)
+    const k = refKey(im)
+    const next = base.includes(k) ? base.filter(x => x !== k) : [...base, k]
+    const nextCut = { ...directorsCut, shots: directorsCut.shots.map((s, i) => i === si ? { ...s, refs: next } : s) }
+    setDirectorsCut(nextCut)
+    persistState(undefined, undefined, nextCut)
+  }
+
+  // Drop the pinned set — back to the auto default.
+  const resetShotRefs = (si) => {
+    if (shotBusy !== null || promptBusy !== null) return
+    const nextCut = { ...directorsCut, shots: directorsCut.shots.map((s, i) => {
+      if (i !== si || !Array.isArray(s.refs)) return s
+      const { refs, ...rest } = s
+      return rest
+    }) }
+    setDirectorsCut(nextCut)
+    persistState(undefined, undefined, nextCut)
   }
 
   // One H3 user message per shot. Emits MODE: Ref2VA (with a role-tagged reference
@@ -824,6 +870,7 @@ export default function ScriptwriterPanel({
         scene_id: shot.scene_id,
         scene_title: shot.scene_title,
         duration: fresh.duration || shot.duration || (isH3now ? 7 : 4),
+        ...(Array.isArray(shot.refs) ? { refs: shot.refs } : {}),  // keep a pinned reference set across a rewrite
       }
       const nextCut = { ...cut, shots: cut.shots.map((s, i) => i === si ? merged : s) }
       setDirectorsCut(nextCut)
@@ -1946,22 +1993,69 @@ export default function ScriptwriterPanel({
               {/* H3: which references phase 3 will attach to this clip */}
               {isH3 && (() => {
                 const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
-                const refs = shotRefs(shot, scene)
+                const captioned = (refImages || []).filter(im => im.caption && im.caption.trim())
+                const active = new Set(shotRefs(shot, scene).map(refKey))
+                const pinned = Array.isArray(shot.refs)
+                const editable = phase === 'dircut' && shotBusy === null && promptBusy === null
                 return (
                   <div style={{ marginBottom: 10, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 10 }}>
-                    <label style={lbl}>References attached to this clip</label>
-                    {refs.length ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                      <label style={{ ...lbl, marginBottom: 0 }}>References attached to this clip</label>
+                      {phase === 'dircut' && pinned && (
+                        <button onClick={() => resetShotRefs(si)} disabled={!editable}
+                          style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 7px', cursor: editable ? 'pointer' : 'not-allowed' }}>
+                          reset to auto
+                        </button>
+                      )}
+                      <span style={{ fontSize: 12, marginLeft: 'auto', color: active.size ? 'var(--pe-ok)' : 'var(--pe-ink-3)' }}>
+                        → MODE: {active.size ? 'Ref2VA' : 'T2VA'}
+                      </span>
+                    </div>
+                    {captioned.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                        No described references yet — describe &amp; link one for {characterNames(shot.characters) || 'this clip’s characters'} on the Script screen, or this clip runs as MODE: T2VA from the bible text.
+                      </div>
+                    ) : editable ? (
+                      <>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {captioned.map((im, ri) => {
+                            const on = active.has(refKey(im))
+                            return (
+                              <button key={ri} onClick={() => toggleShotRef(si, im)}
+                                title={on ? 'Attached to this clip — click to drop it' : 'Not attached — click to add it to this clip'}
+                                style={{
+                                  fontSize: 12, borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+                                  border: `1px solid ${on ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+                                  background: on ? 'var(--pe-accent-bg)' : 'transparent',
+                                  color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
+                                  textDecoration: on ? 'none' : 'line-through',
+                                }}>
+                                {on ? '✓ ' : ''}{refEntityName(im, script) || im.note || im.fileName || roleLabel(im.role)} · {roleLabel(im.role)}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                          {pinned
+                            ? 'Pinned — only the ticked references go into this clip’s prompt.'
+                            : 'Auto — every described reference for this clip’s characters. Click a chip to pin an exact set (e.g. drop a wardrobe reference the character is not wearing yet).'}
+                        </div>
+                      </>
+                    ) : active.size ? (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {refs.map((im, ri) => (
-                          <span key={ri} style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '2px 7px' }}>
-                            {refEntityName(im, script) || im.note || roleLabel(im.role)} · {roleLabel(im.role)}
-                          </span>
-                        ))}
-                        <span style={{ fontSize: 12, color: 'var(--pe-ok)' }}>→ MODE: Ref2VA</span>
+                        {[...active].map((k, ri) => {
+                          const im = captioned.find(x => refKey(x) === k)
+                          if (!im) return null
+                          return (
+                            <span key={ri} style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '2px 7px' }}>
+                              {refEntityName(im, script) || im.note || roleLabel(im.role)} · {roleLabel(im.role)}
+                            </span>
+                          )
+                        })}
                       </div>
                     ) : (
                       <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
-                        None — describe &amp; link a reference for {characterNames(shot.characters) || 'this clip’s characters'} above, or this clip runs as MODE: T2VA from the bible text.
+                        None — this clip runs as MODE: T2VA from the bible text.
                       </div>
                     )}
                   </div>
