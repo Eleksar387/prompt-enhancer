@@ -36,6 +36,31 @@ const buildAutoIdea = (hint) => (hint && hint.trim())
   ? `${AUTO_IDEA_BASE}\n\nStory hint from the user (incorporate this): ${hint.trim()}`
   : AUTO_IDEA_BASE
 
+// A writer-model response that declines the request outright reads as prose,
+// not JSON — parseJSON already fails it, but as an indistinguishable "invalid
+// JSON" error, which several call sites (the automatic merge pass, Full
+// Auto's per-clip Phase 3) treat as a transient hiccup to skip past and keep
+// going. A real content refusal is not transient — matching one of these
+// openers marks the error `isRefusal: true` so those call sites stop the
+// whole script instead of quietly continuing to the next call.
+const REFUSAL_PATTERNS = [
+  /\bI can'?t help with this request\b/i,
+  /\bI can'?t (?:create|produce|generate|write|assist with|help (?:you )?with)\b/i,
+  /\bI'?m not able to (?:create|produce|generate|help|assist)\b/i,
+  /\bI won'?t (?:create|produce|generate|write)\b/i,
+  /\bI cannot (?:create|produce|generate|write|assist|help)\b/i,
+  /\bI(?:'?m| am) unable to (?:create|produce|generate|help|assist)\b/i,
+  /\bI do not feel comfortable\b/i,
+  /\bnon-consensual sexual\b/i,
+  /\bsexual(?:ized|ly explicit)? (?:deepfake|content)\b.*\bwon'?t produce\b/i,
+  /\bdepicting (?:that|an?) (?:identifiable )?person\b.*\b(?:nude|sexualiz)/i,
+]
+const looksLikeRefusal = (text) => {
+  const t = (text || '').trim()
+  if (!t || t.length > 2000) return false // a refusal is a short prose reply, not a JSON payload
+  return REFUSAL_PATTERNS.some(re => re.test(t))
+}
+
 const field = (extra = {}) => ({
   width: '100%', boxSizing: 'border-box',
   background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6,
@@ -476,6 +501,12 @@ export default function ScriptwriterPanel({
     try { return JSON.parse(clean) }
     catch {
       setRawFallback(text)
+      if (looksLikeRefusal(text)) {
+        throw Object.assign(
+          new Error(`The model refused this request: "${text.trim()}"`),
+          { isRefusal: true }
+        )
+      }
       throw new Error('LLM returned invalid JSON. Try a stronger model or click Retry.')
     }
   }
@@ -781,7 +812,15 @@ export default function ScriptwriterPanel({
         while (i < data.shots.length - 1) {
           if (isMergeEligible(data.shots[i], data.shots[i + 1])) {
             try { data.shots = await mergeShotPair(data.shots, i, refs) }
-            catch { i++ } // leave this pair split rather than aborting the job
+            catch (e) {
+              // A refusal means this script's content is the problem, not this
+              // one merge call — retrying the next pair would likely just hit
+              // the same refusal again. Stop the whole job here; the outer
+              // catch below reports it as a failed run instead of a "finished"
+              // one with a quietly skipped clip.
+              if (e?.isRefusal) throw e
+              i++ // otherwise leave this pair split rather than aborting the job
+            }
           } else {
             i++
           }
@@ -981,21 +1020,39 @@ export default function ScriptwriterPanel({
         shot: s.shot_number, mode: (/^MODE:\s*(\w+)/.exec(userMsgs[i]) || [])[1] || null, msg: userMsgs[i],
       }))
     }
+    // Clip calls fire in parallel (below) — once sent, a refusal on one clip
+    // can't un-send another's already-in-flight request. What we CAN stop is
+    // treating the result as a normal finished film: a refusal means this
+    // script's own content is the problem, not a one-off model hiccup, so it
+    // should never quietly land on the 'done' screen reporting ok.
+    let refusal = null
     const proms = shots.map((shot, i) => {
       const userMsg = userMsgs[i]
       const isRefShot = /^MODE:\s*Ref2VA/.test(userMsg)
       return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
         .then(({ text: raw, usage }) => {
+          if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
           const text = isH3 ? normalizeH3Prompt(raw, isRefShot) : raw
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text }
         })
         .catch(e => {
+          if (e?.isRefusal && !refusal) refusal = { shotNumber: shot.shot_number, message: e.message }
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, loading: false, error: e.message } : p))
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text: '' }
         })
     })
     await Promise.all(proms)
+    if (refusal) {
+      // Stop here instead of advancing to 'done' — land back on the
+      // Director's-Cut screen (where clips can be inspected/removed/rewritten)
+      // with the refusal surfaced as the run's error, same as any other
+      // phase failure. The already-generated clip prompts are NOT saved.
+      setError(`Clip ${refusal.shotNumber} was refused by the model: "${refusal.message}" — stopped. Remove or replace the reference image(s)/hint responsible, then retry.`)
+      setFinalPrompts([])
+      setPhase('dircut')
+      return
+    }
     setPhase('done')
     commitHistory({
       ...basePayload('done', refs),
@@ -1039,10 +1096,10 @@ export default function ScriptwriterPanel({
   // this from re-firing after a phase's own catch block reverts `phase`
   // backward (runPhase1 -> 'input', runPhase2 -> 'script') on failure — those
   // are reported back as a failed job instead of retried automatically.
-  // runPhase3 has no top-level catch (per-clip errors only) and always
-  // reaches 'done', so a job with some failed clip prompts still reports ok:
-  // the result is saved to history like any run, individual clips are
-  // fixable there via ✦ Rewrite.
+  // A clip refusal in runPhase3 (or the automatic merge pass inside
+  // runPhase2, on Pacing: TIGHT) reverts phase to 'dircut'/'script' with
+  // `error` set the same way, for the same reason: a refusal means the
+  // job's content is the problem, so it must NOT be reported ok.
   useEffect(() => {
     if (!autoActive || autoDoneRef.current) return
     if (phase === 'script' && script && !error) { phase2Ref.current() }
@@ -1050,7 +1107,7 @@ export default function ScriptwriterPanel({
     else if (phase === 'done') {
       autoDoneRef.current = true; setAutoActive(false)
       onAutoJobDone?.({ ok: true })
-    } else if (phase === 'input' && error) {
+    } else if (error && (phase === 'input' || phase === 'script' || phase === 'dircut')) {
       autoDoneRef.current = true; setAutoActive(false)
       onAutoJobDone?.({ ok: false, error })
     }
