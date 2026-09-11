@@ -57,8 +57,11 @@ const REFUSAL_PATTERNS = [
 ]
 const looksLikeRefusal = (text) => {
   const t = (text || '').trim()
-  if (!t || t.length > 2000) return false // a refusal is a short prose reply, not a JSON payload
-  return REFUSAL_PATTERNS.some(re => re.test(t))
+  if (!t) return false
+  // Test only the opening — a refusal states itself up front, and this keeps
+  // a long legitimate clip prompt (thousands of chars) cheap to check without
+  // risking a false match buried somewhere in its body.
+  return REFUSAL_PATTERNS.some(re => re.test(t.slice(0, 2000)))
 }
 
 const field = (extra = {}) => ({
@@ -648,6 +651,13 @@ export default function ScriptwriterPanel({
       ]
       try {
         const { text } = await callOllama(visModel, content, sys, cfg, 0.3)
+        // A vision-model refusal resolves normally (no thrown error) — without
+        // this check its refusal prose would be stored as the caption, then
+        // folded into every downstream Phase 1/2/3 message by assembleRefBlock,
+        // silently poisoning the rest of the run.
+        if (looksLikeRefusal(text)) {
+          return { id: im.id, error: Object.assign(new Error(text.trim()), { isRefusal: true }) }
+        }
         done++; setRefCaptionStatus(s => ({ ...s, done }))
         return { id: im.id, caption: (text || '').trim() }
       } catch (e) {
@@ -663,6 +673,16 @@ export default function ScriptwriterPanel({
       ? { state: 'error', done, total: targets.length,
           error: `${failed.length} image${failed.length === 1 ? '' : 's'} couldn't be described: ${failed[0].error?.message || 'unknown error'}` }
       : { state: 'idle', done, total: targets.length, error: '' })
+    // A refusal on any reference image means this image is the problem — stop
+    // the whole script here rather than returning `updated` and letting the
+    // caller fold the (missing) caption into the next call anyway.
+    const refusal = failed.find(f => f.error?.isRefusal)
+    if (refusal) {
+      throw Object.assign(
+        new Error(`The vision model refused to describe a reference image: "${refusal.error.message}"`),
+        { isRefusal: true }
+      )
+    }
     return updated
   }
 
@@ -700,8 +720,10 @@ export default function ScriptwriterPanel({
     let refs = refImages
     if (refImages.some(im => im.base64 && !im.caption?.trim())) {
       try { refs = await captionRefImages() }
-      catch {
-        setError('Could not read the reference images (see the note above). Fix the vision model or remove the images to continue.')
+      catch (e) {
+        setError(e?.isRefusal
+          ? e.message
+          : 'Could not read the reference images (see the note above). Fix the vision model or remove the images to continue.')
         return
       }
     }
@@ -778,7 +800,13 @@ export default function ScriptwriterPanel({
     // pick per clip.
     let refs = refImages
     if (isH3 && refImages.some(im => im.base64 && !im.caption?.trim())) {
-      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+      try { refs = await captionRefImages() }
+      catch (e) {
+        // A refusal means a reference image is the problem — stop here rather
+        // than folding a missing caption into the Director call anyway. Any
+        // other captioning failure keeps the pre-existing best-effort behavior.
+        if (e?.isRefusal) { setError(e.message); setPhase('script'); return }
+      }
     }
     const refBlock = assembleRefBlock(refs, REF_HEADING_DIRECTOR, script)
     const lookLine = isH3 && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
@@ -1001,7 +1029,13 @@ export default function ScriptwriterPanel({
     // T2VA — caption any outstanding ones first (like runPhase1 does).
     let refs = refImages
     if (isH3 && refImages.some(im => im.base64 && !im.caption?.trim())) {
-      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+      try { refs = await captionRefImages() }
+      catch (e) {
+        // A refusal means a reference image is the problem — stop before
+        // spending a single clip-prompt call on it. Any other captioning
+        // failure keeps the pre-existing best-effort behavior.
+        if (e?.isRefusal) { setError(e.message); return }
+      }
     }
 
     const initial = shots.map(s => ({
@@ -1046,10 +1080,12 @@ export default function ScriptwriterPanel({
     if (refusal) {
       // Stop here instead of advancing to 'done' — land back on the
       // Director's-Cut screen (where clips can be inspected/removed/rewritten)
-      // with the refusal surfaced as the run's error, same as any other
-      // phase failure. The already-generated clip prompts are NOT saved.
+      // with the refusal surfaced as the run's error, same as any other phase
+      // failure. finalPrompts is left as-is (each clip already carries its own
+      // text or error from the loop above) rather than cleared, so a Guided
+      // run where most clips succeeded doesn't lose that work — only the
+      // history commit below is skipped, so nothing is persisted yet.
       setError(`Clip ${refusal.shotNumber} was refused by the model: "${refusal.message}" — stopped. Remove or replace the reference image(s)/hint responsible, then retry.`)
-      setFinalPrompts([])
       setPhase('dircut')
       return
     }
@@ -1358,13 +1394,24 @@ export default function ScriptwriterPanel({
     setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: true, error: '' } : p))
     let refs = refImages
     if (isH3now && refImages.some(im => im.base64 && !im.caption?.trim())) {
-      try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
+      try { refs = await captionRefImages() }
+      catch (e) {
+        if (e?.isRefusal) {
+          setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: false, error: e.message } : p))
+          setPromptBusy(null)
+          return
+        }
+      }
     }
     const ratio = aspectRes(aspectRatio)
     const systemPrompt = isH3now ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
     try {
       const userMsg = buildShotPromptMsg(shot, refs, ratio)
       const { text: raw, usage } = await callOllama(writerModel, userMsg, systemPrompt, cfg, 0.85)
+      // Phase 3 output is plain text, not JSON — parseJSON's refusal check
+      // never runs on it. A refused clip must not be saved as if it were a
+      // real prompt (this used to happen silently here).
+      if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
       const text = isH3now ? normalizeH3Prompt(raw, /^MODE:\s*Ref2VA/.test(userMsg)) : raw
       let saved = null
       setFinalPrompts(prev => {
