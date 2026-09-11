@@ -995,7 +995,7 @@ export default function ScriptwriterPanel({
         setRefImages((autoJob.refImages || []).map(rehydrateRefImage))
         setGenre(autoJob.genre || 'auto')
         setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
-        setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing('standard')
+        setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing('tight')
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
       })
