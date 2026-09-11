@@ -949,7 +949,11 @@ export default function ScriptwriterPanel({
     const refs = shotRefs(shot, scene, refsList)
     const isRef = refs.length > 0
 
-    const dialogues = Array.isArray(shot.dialogue) && shot.dialogue.length
+    // An explicit [] means this clip is deliberately silent (every shot the
+    // Director writes carries this field, per its schema and blankShot()) —
+    // only a genuinely missing field (pre-dialogue-field legacy entries)
+    // falls back to the scene's dialogue.
+    const dialogues = Array.isArray(shot.dialogue)
       ? shot.dialogue.filter(d => d && d.trim())
       : (Array.isArray(scene?.dialogues) ? scene.dialogues.filter(d => d && d.trim()) : [])
     const dialogueBlock = dialogues.length

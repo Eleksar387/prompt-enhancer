@@ -853,6 +853,7 @@ Rules:
 
 THE FORMAT (these decide whether the film works at this length):
 - One premise, one turn, one ending. No three-act structure, no rising-action ladder. The film exists to land a single shift — a reveal, a reframe, a reversal — and then stop.
+- The turn needs a physical trigger, not just an arrived-at feeling. Something concrete and external happens in the moment — an object resists or gives way, a light or sound shifts, a device activates, a barrier appears or falls, something arrives or is found — that the character visibly reacts to. A turn that is only an internal realization ("she decides not to") gives the Director's Cut nothing to film but people standing still and talking; anchor it in something a camera can catch happening, even something small.
 - Start at the latest possible moment. No "normal life before", no arriving at the situation, no warm-up. The first scene opens already inside the event.
 - Show the consequence, not the process. Cut straight to the result of an action instead of walking through every step.
 - Prefer a SINGLE location. Reuse one location id across scenes when the action stays in one place. Add a second location only when the turn is impossible without it — never for variety.
