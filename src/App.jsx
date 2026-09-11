@@ -228,6 +228,11 @@ export default function App() {
   const enhanceRef = useRef(null)      // always the freshest enhance() closure — see runQueueItem
   const [scriptwriterKey, setScriptwriterKey] = useState(0)
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
+  // Full Auto (Scriptwriter): the job snapshot fed to the next ScriptwriterPanel
+  // mount, and the resolver for runScriptwriterQueueItem's pending promise —
+  // see that function and ScriptwriterPanel's `autoJob`/`onAutoJobDone` props.
+  const [scriptwriterAutoJob, setScriptwriterAutoJob] = useState(null)
+  const scriptwriterAutoResolveRef = useRef(null)
   const importInputRef = useRef(null)
   const projectsLoadedRef = useRef(false)   // don't PUT [] over the store before the load resolves
   const captionMemRef = useRef(new Map())  // L1 for the persistent caption cache; key = visionCacheKey(...)
@@ -846,6 +851,71 @@ export default function App() {
     refreshQueue()
   }
 
+  // Queues a Full Auto Scriptwriter job — { refImages, genre, hint } — from the
+  // Full Auto tab of ScriptwriterPanel. Reuses the same queue item shape as
+  // addToQueue, just tagged with `kind` so runAnyQueueItem/QueueCard can tell
+  // it apart from a main-pipeline item (whose snapshot has no `kind`).
+  const addScriptwriterAutoJob = (spec) => {
+    const item = { id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, kind: 'scriptwriter-auto', snapshot: spec }
+    addQueueItem(item).then(refreshQueue).catch(() => {})
+  }
+
+  // Runs one Full Auto Scriptwriter queue item. Unlike runQueueItem (which
+  // replays a snapshot into the already-mounted main workspace), this forces a
+  // fresh ScriptwriterPanel mount — via a bumped scriptwriterKey — carrying the
+  // job as its `autoJob` prop; the panel seeds its own state and chains
+  // Phase 1 → 2 → 3 with no review clicks, then calls `onAutoJobDone`, which
+  // resolves the promise below. Same success/failure bookkeeping as
+  // runQueueItem: success removes the item (its result is now a normal
+  // Scriptwriter history entry), failure keeps it queued with an error,
+  // retryable via ▶ Run.
+  //
+  // No flushSync here (unlike applyQueueItemToWorkspace/enhanceRef): this only
+  // needs to get `autoJob`/`scriptwriterKey` committed as *props* before the
+  // new ScriptwriterPanel instance mounts, which plain setState + the normal
+  // render already guarantees — there's no same-component stale-closure hop
+  // to bridge. ScriptwriterPanel's own mount effect does its own flushSync
+  // for that hop; nesting one flushSync inside another (this one would fire
+  // while React is still flushing this render's effects) is what React's
+  // "flushSync was called from inside a lifecycle method" warning is about.
+  const runScriptwriterQueueItem = async (id) => {
+    setQueueRunningId(id)
+    await updateQueueItem(id, { status: 'running' }).catch(() => {})
+    refreshQueue()
+    let outcome
+    try {
+      const full = await getQueueItem(id, { inline: true })
+      if (!full) throw new Error('queue item not found')
+      outcome = await new Promise((resolve) => {
+        scriptwriterAutoResolveRef.current = resolve
+        setTarget('scriptwriter')
+        setScriptwriterInitial(null)   // fresh session, not a restore
+        setScriptwriterAutoJob(full.snapshot)
+        setScriptwriterKey(k => k + 1) // force a real remount
+      })
+    } catch (e) {
+      outcome = { ok: false, error: e.message }
+    }
+    scriptwriterAutoResolveRef.current = null
+    setScriptwriterAutoJob(null)
+    if (outcome?.ok) {
+      await deleteQueueItem(id).catch(() => {})
+    } else {
+      const prevAttempts = queue.find(q => q.id === id)?.attempts || 0
+      await updateQueueItem(id, { status: 'error', error: outcome?.error || 'unknown error', attempts: prevAttempts + 1 }).catch(() => {})
+    }
+    setQueueRunningId(null)
+    refreshQueue()
+  }
+
+  // Dispatches a queue item to the right runner by kind — there is one shared
+  // queue, but a Full Auto Scriptwriter job needs the ScriptwriterPanel-mount
+  // path above instead of the main-workspace restore-then-enhance path.
+  const runAnyQueueItem = (id) => {
+    const item = queue.find(q => q.id === id)
+    return item?.kind === 'scriptwriter-auto' ? runScriptwriterQueueItem(id) : runQueueItem(id)
+  }
+
   // Re-reads the queue from the server on every iteration (rather than
   // iterating a captured array) so an item removed mid-run is simply skipped
   // on the next pass, instead of still being processed.
@@ -857,7 +927,7 @@ export default function App() {
       const fresh = await listQueue().catch(() => [])
       const next = fresh.find(q => q.status !== 'running')
       if (!next) break
-      await runQueueItem(next.id)
+      await runAnyQueueItem(next.id)
     }
     setQueueBusy(false)
   }
@@ -1514,6 +1584,16 @@ export default function App() {
           history={history}
           comfyCfg={comfyCfg}
           setComfyCfg={setComfyCfg}
+          autoJob={scriptwriterAutoJob}
+          onAutoJobDone={(res) => scriptwriterAutoResolveRef.current?.(res)}
+          onQueueAutoJob={addScriptwriterAutoJob}
+          queueProps={{
+            queue, busy: queueBusy, runningId: queueRunningId,
+            onRun: runAnyQueueItem,
+            onRemove: id => deleteQueueItem(id).then(refreshQueue),
+            onProcessAll: processAllQueue, onStop: stopProcessingQueue,
+            onClear: () => dbClearQueue().then(refreshQueue),
+          }}
         />
       ) : (<>
 
@@ -2360,7 +2440,10 @@ export default function App() {
         )}
       </div>
 
-      {/* Queue — scriptwriter has its own separate pipeline, no queue for it */}
+      {/* Queue — one shared queue for main-pipeline items and Full Auto
+          Scriptwriter jobs alike (QueueCard renders both). Hidden while the
+          Scriptwriter tab is open — it has its own filtered, embedded copy of
+          this same panel in its Full Auto view instead. */}
       {!scriptwriterMode && (
         <QueuePanel
           queue={queue}
@@ -2368,7 +2451,7 @@ export default function App() {
           onToggleOpen={() => setQueueOpen(v => !v)}
           busy={queueBusy}
           runningId={queueRunningId}
-          onRun={runQueueItem}
+          onRun={runAnyQueueItem}
           onRemove={id => deleteQueueItem(id).then(refreshQueue)}
           onProcessAll={processAllQueue}
           onStop={stopProcessingQueue}

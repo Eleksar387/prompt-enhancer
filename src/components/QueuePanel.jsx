@@ -14,23 +14,49 @@ const STATUS_LABEL = {
 }
 
 function QueueCard({ item, busy, runningId, onRun, onRemove }) {
+  const status = STATUS_LABEL[item.status] || STATUS_LABEL.queued
+  const disabled = busy || runningId === item.id
+
+  const header = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+      <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(item.createdAt).toLocaleString()}</span>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+        <button onClick={() => onRun(item.id)} disabled={disabled} style={{ ...pill('var(--pe-accent-ink)', '--pe-accent-line'), cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>▶ Run</button>
+        <button onClick={() => onRemove(item.id)} disabled={disabled} style={{ ...pill('var(--pe-danger)', '--pe-danger-line'), cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>✕</button>
+      </div>
+    </div>
+  )
+
+  // Full Auto Scriptwriter job — its snapshot is { refImages, genre, hint },
+  // nothing like the main-pipeline shape (no target/model/scene).
+  if (item.kind === 'scriptwriter-auto') {
+    const s = item.snapshot || {}
+    const genreLabel = !s.genre || s.genre === 'auto' ? 'genre: AI picks' : s.genre
+    const refCount = Array.isArray(s.refImages) ? s.refImages.length : 0
+    return (
+      <div style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
+        {header}
+        <div style={{ fontSize: 13.5, color: status.color, fontWeight: 600, marginBottom: 4 }}>{status.text}</div>
+        <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 4 }}>
+          🎬 Full Auto Film · {genreLabel} · {refCount} reference image{refCount === 1 ? '' : 's'}
+        </div>
+        {s.hint && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>“{s.hint}”</div>}
+        {item.status === 'error' && item.error && (
+          <div style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-danger)' }}>{item.error}</div>
+        )}
+      </div>
+    )
+  }
+
   const { snapshot: s } = item
   const tg = TARGETS[s.target]
-  const status = STATUS_LABEL[item.status] || STATUS_LABEL.queued
   const modelLabel = s.outputCount === 1 ? s.model : `${s.outputCount} variants`
   const sceneShort = s.scene && s.scene.length > 80 ? s.scene.slice(0, 80) + '…' : (s.scene || '')
   const hasImages = !!(s.firstImg || s.midImg || s.lastImg || (Array.isArray(s.refImages) && s.refImages.length > 0))
-  const disabled = busy || runningId === item.id
 
   return (
     <div style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-        <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(item.createdAt).toLocaleString()}</span>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          <button onClick={() => onRun(item.id)} disabled={disabled} style={{ ...pill('var(--pe-accent-ink)', '--pe-accent-line'), cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>▶ Run</button>
-          <button onClick={() => onRemove(item.id)} disabled={disabled} style={{ ...pill('var(--pe-danger)', '--pe-danger-line'), cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>✕</button>
-        </div>
-      </div>
+      {header}
       <div style={{ fontSize: 13.5, color: status.color, fontWeight: 600, marginBottom: 4 }}>{status.text}</div>
       <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 4 }}>
         {tg?.label || s.target} · {modelLabel}{hasImages ? ' · 📷 image input' : ''}

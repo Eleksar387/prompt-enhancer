@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { flushSync } from 'react-dom'
 import JSZip from 'jszip'
 import { callOllama, isCloud } from '../api'
 import {
@@ -15,6 +16,7 @@ import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
 import HistoryImageGallery from './HistoryImageGallery'
+import QueuePanel from './QueuePanel'
 
 const GENRE_OPTIONS = [
   { id: 'auto',     label: 'Auto' },
@@ -24,6 +26,15 @@ const GENRE_OPTIONS = [
   { id: 'comedy',   label: 'Comedy' },
   { id: 'horror',   label: 'Horror' },
 ]
+
+// Full Auto mode synthesizes this as the "Story idea" line instead of asking
+// the user to type one — the reference images (+ genre, + an optional
+// one-line hint) carry the whole premise. runPhase1 itself is untouched: it
+// just sees a normal idea string plus the usual reference-image block.
+const AUTO_IDEA_BASE = 'Invent a complete, concrete short-film premise, cast, and plot entirely from the attached reference images and the chosen genre. Make confident creative choices — do not ask for more input or leave anything vague.'
+const buildAutoIdea = (hint) => (hint && hint.trim())
+  ? `${AUTO_IDEA_BASE}\n\nStory hint from the user (incorporate this): ${hint.trim()}`
+  : AUTO_IDEA_BASE
 
 const field = (extra = {}) => ({
   width: '100%', boxSizing: 'border-box',
@@ -358,6 +369,13 @@ export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
   history = [],
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
+  // Full Auto: `autoJob` is a queued job spec ({ refImages, genre, hint }) to
+  // run headlessly on mount — see the mount effect below. `onAutoJobDone`
+  // reports { ok, error? } back to App.jsx once phase reaches 'done' (or a
+  // phase fails). `onQueueAutoJob` queues a new job from the Full Auto input
+  // screen. `queueProps` is the same prop shape App.jsx feeds QueuePanel,
+  // reused here (filtered) for the embedded Full Auto queue view.
+  autoJob = null, onAutoJobDone = null, onQueueAutoJob = null, queueProps = null,
 }) {
   const sessionId = useRef(initialState?.id || generateId())
   const visModel = visionModel || writerModel
@@ -422,6 +440,15 @@ export default function ScriptwriterPanel({
   // { state: 'idle' | 'reading' | 'error', done, total, error }
   const [refCaptionStatus, setRefCaptionStatus] = useState({ state: 'idle', done: 0, total: 0, error: '' })
   const captioning = refCaptionStatus.state === 'reading'
+
+  // Full Auto — Guided/Full-Auto toggle on the input screen (UI only), the
+  // optional one-line hint text, and the auto-chain machinery for a queued
+  // job (see the two useEffects after runPhase1/2/3 below).
+  const [autoMode, setAutoMode] = useState(false)
+  const [autoHint, setAutoHint] = useState('')
+  const [autoActive, setAutoActive] = useState(!!autoJob)
+  const [autoQueueOpen, setAutoQueueOpen] = useState(true)
+  const autoDoneRef = useRef(false)
 
   const reset = () => {
     sessionId.current = generateId()
@@ -651,6 +678,10 @@ export default function ScriptwriterPanel({
       setPhase('input')
     }
   }
+  // Reassigned every render (like enhanceRef in App.jsx) so the Full Auto
+  // mount effect below always calls the *current* closure — see runPhase1.
+  const phase1Ref = useRef(null)
+  phase1Ref.current = runPhase1
 
   // Ask the Scriptwriter for a fresh version of ONE scene, in place. Keeps the
   // scene id and the cast/location bible; the rest of the scene is rewritten and
@@ -744,6 +775,8 @@ export default function ScriptwriterPanel({
       setPhase('script')
     }
   }
+  const phase2Ref = useRef(null)
+  phase2Ref.current = runPhase2
 
   // The AUTO default set of captioned references for one clip: every described
   // reference on every clip (the main-app Ref2VA model — works for a single-lead
@@ -941,6 +974,58 @@ export default function ScriptwriterPanel({
       framePrompts: serializeFramePrompts(framePrompts),
     })
   }
+  const phase3Ref = useRef(null)
+  phase3Ref.current = runPhase3
+
+  // Full Auto — mount effect: seed a queued job's state and kick off Phase 1.
+  // Runs exactly once per fresh mount (App.jsx forces a real remount per queue
+  // run via a bumped `scriptwriterKey`). flushSync is required here: without
+  // it, phase1Ref.current() would run against the *previous* render's closure
+  // (empty idea/refImages) rather than the state just set above it — the same
+  // problem App.jsx's runQueueItem solves for enhance() via enhanceRef. The
+  // seed+kickoff is deferred one tick (setTimeout 0) so flushSync always runs
+  // in its own fresh task, never nested inside the mount commit this effect
+  // itself is part of — calling flushSync directly inside the effect body
+  // triggers React's "flushSync was called from inside a lifecycle method"
+  // warning on this particular mount-via-remount path.
+  useEffect(() => {
+    if (!autoJob) return
+    const t = setTimeout(() => {
+      flushSync(() => {
+        setRefImages((autoJob.refImages || []).map(rehydrateRefImage))
+        setGenre(autoJob.genre || 'auto')
+        setSceneCount(3); setAspectRatio(DEFAULT_ASPECT_RATIO)
+        setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing('standard')
+        setIdea(buildAutoIdea(autoJob.hint))
+        setAutoActive(true)
+      })
+      phase1Ref.current()
+    }, 0)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount only
+  }, [])
+
+  // Full Auto — phase-watcher: auto-advance to the next phase as soon as the
+  // previous one lands, with no manual review click. The `!error` guard stops
+  // this from re-firing after a phase's own catch block reverts `phase`
+  // backward (runPhase1 -> 'input', runPhase2 -> 'script') on failure — those
+  // are reported back as a failed job instead of retried automatically.
+  // runPhase3 has no top-level catch (per-clip errors only) and always
+  // reaches 'done', so a job with some failed clip prompts still reports ok:
+  // the result is saved to history like any run, individual clips are
+  // fixable there via ✦ Rewrite.
+  useEffect(() => {
+    if (!autoActive || autoDoneRef.current) return
+    if (phase === 'script' && script && !error) { phase2Ref.current() }
+    else if (phase === 'dircut' && directorsCut && !error) { phase3Ref.current() }
+    else if (phase === 'done') {
+      autoDoneRef.current = true; setAutoActive(false)
+      onAutoJobDone?.({ ok: true })
+    } else if (phase === 'input' && error) {
+      autoDoneRef.current = true; setAutoActive(false)
+      onAutoJobDone?.({ ok: false, error })
+    }
+  }, [phase, error])
 
   // Ask the Director for a fresh take on ONE clip/shot, in place. Keeps the
   // shot_number / scene_id / scene_title and the parallel framePrompts slot; the
@@ -1795,49 +1880,96 @@ export default function ScriptwriterPanel({
       {/* Phase 1 — input */}
       {['input', 'scripting'].includes(phase) && (
         <div>
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story Idea</label>
-            <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={4} disabled={isLoading}
-              placeholder="e.g. A retired deep-sea diver finds a mysterious package washed ashore — and recognizes the handwriting on it as her own."
-              style={{ ...field({ resize: 'vertical' }) }}
-              onFocus={focusBorder} onBlur={blurBorder} />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button onClick={() => setAutoMode(false)} disabled={isLoading} style={btn(!autoMode)}>Guided</button>
+            <button onClick={() => setAutoMode(true)} disabled={isLoading} style={btn(autoMode)}>Full Auto</button>
           </div>
-          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
-            <div>
-              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {GENRE_OPTIONS.map(g => (
-                  <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
-                ))}
+
+          {!autoMode ? (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story Idea</label>
+                <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={4} disabled={isLoading}
+                  placeholder="e.g. A retired deep-sea diver finds a mysterious package washed ashore — and recognizes the handwriting on it as her own."
+                  style={{ ...field({ resize: 'vertical' }) }}
+                  onFocus={focusBorder} onBlur={blurBorder} />
               </div>
-            </div>
-            <div>
-              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes</label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
-                  style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
-                <span style={{ fontSize: 15, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
-                <button onClick={() => setSceneCount(v => Math.min(5, v + 1))} disabled={isLoading || sceneCount >= 5}
-                  style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
+                <div>
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {GENRE_OPTIONS.map(g => (
+                      <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
+                      style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
+                    <span style={{ fontSize: 15, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
+                    <button onClick={() => setSceneCount(v => Math.min(5, v + 1))} disabled={isLoading || sceneCount >= 5}
+                      style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Aspect Ratio</label>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {MINIMAX_H3_RESOLUTIONS.map(r => (
+                      <button key={r.id} onClick={() => !isLoading && setAspectRatio(r.id)} title={r.note} disabled={isLoading}
+                        style={btn(aspectRatio === r.id)}>{aspectParts(r).token}</button>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
+              <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
+                This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
+                1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
+              </p>
+              <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
+                {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
+              </button>
+            </>
+          ) : (
             <div>
-              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Aspect Ratio</label>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {MINIMAX_H3_RESOLUTIONS.map(r => (
-                  <button key={r.id} onClick={() => !isLoading && setAspectRatio(r.id)} title={r.note} disabled={isLoading}
-                    style={btn(aspectRatio === r.id)}>{aspectParts(r).token}</button>
-                ))}
+              <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 14px', lineHeight: 1.5, maxWidth: 560 }}>
+                Full Auto writes the entire film — premise, cast, director's cut, and video prompts — on its own from
+                your reference images. Add at least one image above, pick a genre, then queue it; queued films run
+                one after another with no review clicks in between.
+              </p>
+              <div style={{ marginBottom: 14, maxWidth: 420 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story hint (optional)</label>
+                <input type="text" value={autoHint} onChange={e => setAutoHint(e.target.value)} disabled={isLoading}
+                  placeholder="e.g. a betrayal between old friends — leave empty to let the AI invent freely"
+                  style={field({})} onFocus={focusBorder} onBlur={blurBorder} />
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {GENRE_OPTIONS.map(g => (
+                    <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
+                  ))}
+                </div>
+              </div>
+              <button
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), genre, hint: autoHint.trim() })}
+                disabled={refImages.length === 0 || isLoading || captioning}
+                style={genBtn(refImages.length === 0 || isLoading || captioning)}>
+                + Add to Queue (Full Auto)
+              </button>
+              {queueProps && (
+                <div style={{ marginTop: 8 }}>
+                  <QueuePanel
+                    {...queueProps}
+                    queue={(queueProps.queue || []).filter(q => q.kind === 'scriptwriter-auto')}
+                    open={autoQueueOpen}
+                    onToggleOpen={() => setAutoQueueOpen(v => !v)}
+                  />
+                </div>
+              )}
             </div>
-          </div>
-          <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
-            This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
-            1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
-          </p>
-          <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
-            {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
-          </button>
+          )}
         </div>
       )}
 
