@@ -666,7 +666,7 @@ export default function ScriptwriterPanel({
     const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}${formatLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nMaximum number of scenes: ${sceneCount}${formatLine}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
       const data = normalizeScript(parseJSON(text))
@@ -1904,7 +1904,7 @@ export default function ScriptwriterPanel({
                   </div>
                 </div>
                 <div>
-                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes</label>
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes (max)</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
                       style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
@@ -1926,6 +1926,7 @@ export default function ScriptwriterPanel({
               <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
                 This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
                 1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
+                "Scenes (max)" is a ceiling, not a target — a single continuous moment becomes one scene even if you raise it.
               </p>
               <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
                 {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}

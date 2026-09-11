@@ -858,9 +858,10 @@ THE FORMAT (these decide whether the film works at this length):
 - Prefer a SINGLE location. Reuse one location id across scenes when the action stays in one place. Add a second location only when the turn is impossible without it — never for variety.
 - Keep it filmable in a handful of shots. Think in seconds, not minutes: each scene is roughly 10–40 seconds of screen time.
 - If the idea is really a larger story (several turns, an arc that needs time to land, multiple locations that all matter), do NOT compress the whole arc. Pick the smallest self-contained moment from it that still works on its own, make THAT the film, and record the narrowing in "format_note". If the idea already fits, "format_note" is an empty string.
+- A single continuous action in one place — one unbroken beat that runs from its start through its turn to its landing — is usually ONE scene, never several. Do not carve a continuous moment into multiple scenes just to produce more scenes; every additional scene must earn its place with a genuine break (a location change, a time jump, or a second beat that needs its own setup).
 
 CRAFT:
-- The scenes array must contain exactly the requested number of scenes.
+- The scenes array must contain AT MOST the requested number of scenes, never more. Use fewer whenever the story needs fewer — down to a single scene for a one-beat idea. The requested number is a ceiling, not a target to fill.
 - Propose a "soundscape" and a "music" approach that fit the genre and story. Use "none" for "music" only when an unscored film is a deliberate choice.
 - Define every speaking or on-screen character once in "characters" and every distinct place once in "locations". Give each a short stable id ("c1", "c2" … / "l1", "l2" …).
 - Each scene's "characters" lists the ids of everyone physically present; "location_id" is the id of its place. Every "dialogues" line's CHARACTER NAME must match a "name" in "characters" exactly.
