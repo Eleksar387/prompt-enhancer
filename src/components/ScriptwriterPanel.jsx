@@ -2145,6 +2145,18 @@ export default function ScriptwriterPanel({
               </button>
             </div>
           )}
+          {/* The idea/hint that produced this script — otherwise invisible once the
+              input screen (phase 'input'/'scripting') is behind you. Restoring a
+              past entry, or just moving forward in the same session, both hide that
+              screen; this is the one place to check what was actually submitted. */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={lbl}>Story Idea <span style={{ textTransform: 'none', letterSpacing: 0 }}>(as submitted)</span></label>
+            <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px' }}>
+              {(autoJob || initialState?.fullAuto)
+                ? ((autoJob?.hint ?? initialState?.fullAutoHint)?.trim() || '(Full Auto — AI invented freely, no hint given)')
+                : (idea.trim() || '—')}
+            </div>
+          </div>
           <div style={{ marginBottom: 12 }}>
             <label style={lbl}>Film Title</label>
             <input value={script.title || ''} onChange={e => updateFilmField('title', e.target.value)}
