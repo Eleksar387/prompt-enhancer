@@ -448,6 +448,13 @@ export default function ScriptwriterPanel({
   const [autoHint, setAutoHint] = useState('')
   const [autoActive, setAutoActive] = useState(!!autoJob)
   const [autoQueueOpen, setAutoQueueOpen] = useState(true)
+  // Full Auto's own Pacing choice — deliberately separate from the shared
+  // Guided-mode `pacing` state below (which stays 'standard' by default;
+  // those users already see and control it on the Script screen). Full Auto
+  // never reaches that screen, so it needs its own visible picker, and its
+  // default is 'tight' since that's the value that actually keeps clip
+  // counts down for an autonomous run.
+  const [autoPacing, setAutoPacing] = useState('tight')
   const autoDoneRef = useRef(false)
 
   const reset = () => {
@@ -637,6 +644,12 @@ export default function ScriptwriterPanel({
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, sceneCount, phase: phaseName,
       promptTarget, aspectRatio, pacing,
+      // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
+      // the user's hint appended after it (see buildAutoIdea) — a plain
+      // 80-char truncation of `idea` (as the History card does) always shows
+      // the boilerplate, never the hint. Save the hint separately so the
+      // History card can show the part a human actually wrote.
+      fullAuto: !!autoJob, fullAutoHint: autoJob?.hint || '',
       refImages: serializeRefImages(refs),
     }
   }
@@ -758,6 +771,22 @@ export default function ScriptwriterPanel({
           ...(picked ? { refs: picked } : {}),
         }
       })
+      // Full Auto, Pacing: TIGHT — deterministic merge pass. Prompt wording
+      // alone (PACING_LINE, the insert/establishing exceptions) did not
+      // reduce clip count across repeated live tests, weak and strong model
+      // alike — see isMergeEligible's comment. Guided-mode runs (autoActive
+      // false) are completely unaffected.
+      if (isH3 && autoActive && pacing === 'tight') {
+        let i = 0
+        while (i < data.shots.length - 1) {
+          if (isMergeEligible(data.shots[i], data.shots[i + 1])) {
+            try { data.shots = await mergeShotPair(data.shots, i, refs) }
+            catch { i++ } // leave this pair split rather than aborting the job
+          } else {
+            i++
+          }
+        }
+      }
       if (import.meta.env.DEV && typeof window !== 'undefined') {
         window.__peLastDirectorRefs = data.shots.map(s => ({ shot: s.shot_number, refs: s.refs }))
       }
@@ -995,7 +1024,7 @@ export default function ScriptwriterPanel({
         setRefImages((autoJob.refImages || []).map(rehydrateRefImage))
         setGenre(autoJob.genre || 'auto')
         setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
-        setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing('tight')
+        setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
       })
@@ -1138,6 +1167,116 @@ export default function ScriptwriterPanel({
     clearShotTransients()
     persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
   }
+
+  // --- Clip merging (manual button + Full-Auto automatic pass) ------------
+  // Four rounds of trying to get the Director to self-limit clip count via
+  // prompt wording (PACING_LINE, then conditional insert/establishing rules
+  // scoped to Pacing: TIGHT) produced no measurable reduction — confirmed
+  // against both a non-reasoning and a reasoning-capable model. The prompt
+  // enumerates four legitimate shot_type values, and every model tested
+  // reaches for all of them regardless of how strongly pacing asks it not
+  // to. This is the deterministic alternative: decide in code which clips
+  // are safe to combine, then ask the model only the narrow, tractable
+  // question "merge these two specific compatible clips" — never the open
+  // question "how many clips should this scene have," which is what kept
+  // failing.
+  //
+  // isMergeEligible is deliberately conservative: shot_type 'establishing'
+  // and 'action' are H3's own "does not count toward beat density"
+  // categories (see the BEAT DENSITY rule in SYSTEM_PROMPT_DIRECTOR_H3) —
+  // the only shot types this ever touches. It will under-merge a locomotion
+  // beat the model mislabeled 'performance' (as happened once in testing),
+  // but it will never risk merging two real facial/emotional beats — that
+  // would violate the one rule in h3-storyboard with direct empirical
+  // (PSNR) backing, which this project has been careful not to touch.
+  const sameIdSet = (a, b) => {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    const sa = [...a].map(String).sort(), sb = [...b].map(String).sort()
+    return sa.every((v, i) => v === sb[i])
+  }
+  const NO_BEAT_SHOT_TYPES = new Set(['establishing', 'action'])
+  const isMergeEligible = (a, b) => !!a && !!b
+    && NO_BEAT_SHOT_TYPES.has(a.shot_type) && NO_BEAT_SHOT_TYPES.has(b.shot_type)
+    && String(a.scene_id) === String(b.scene_id)
+    && String(a.location_id ?? '') === String(b.location_id ?? '')
+    && sameIdSet(a.characters, b.characters)
+    && !(a.dialogue?.length) && !(b.dialogue?.length)
+    && (Number(a.duration) || 0) + (Number(b.duration) || 0) <= 15
+
+  // The one shared LLM call, used by both the manual button and the
+  // automatic Full-Auto pass in runPhase2. Mirrors regenerateShot's "bridge"
+  // message-building pattern, but scoped to combining exactly two adjacent,
+  // already-known-compatible clips into one.
+  const mergeShotPair = async (shots, i, refsForCall) => {
+    const a = shots[i], b = shots[i + 1]
+    const isH3now = promptTarget === 'minimax_h3'
+    const noun = isH3now ? 'clip' : 'shot'
+    const scene = script?.scenes?.find(s => String(s.id) === String(a.scene_id))
+    const refBlock = assembleRefBlock(refsForCall || refImages, REF_HEADING_DIRECTOR, script)
+    const lookLine = isH3now && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
+    const langLine = isH3now && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
+    const userMsg =
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${refBlock}\n\n`
+      + `You already broke this script into the following ${noun}s:\n${JSON.stringify(shots, null, 2)}\n\n`
+      + `Merge ${noun} ${a.shot_number} and ${noun} ${b.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''} into ONE ${noun} that covers both actions in sequence. `
+      + `They share the same scene, location and cast, and neither needs its own facial/emotional beat — this is a pure locomotion/setup run. `
+      + `Use ONE camera move for the whole thing, and keep "duration" within the 4-15s H3 cap. `
+      + `Keep "scene_id": ${JSON.stringify(a.scene_id)}. `
+      + `Output only valid JSON: {"shots":[ <the one merged ${noun}, exactly the same fields as the others> ]}.`
+    const { text } = await callOllama(writerModel, userMsg, isH3now ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.6, { format: 'json' })
+    const raw = parseJSON(text)
+    const arr = Array.isArray(raw?.shots) ? raw.shots : raw?.shot ? [raw.shot] : Array.isArray(raw) ? raw : []
+    const fresh = (normalizeDirectorsCut({ shots: arr }, script).shots || [])[0]
+    if (!fresh) throw new Error(`The model did not return a merged ${noun}.`)
+    const { reference_images, ...freshRest } = fresh
+    const capd = (refsForCall || refImages || []).filter(im => im.caption && im.caption.trim())
+    const picked = isH3now ? resolveRefSelection(reference_images, capd) : null
+    const mergedRefs = Array.isArray(a.refs) || Array.isArray(b.refs)
+      ? [...new Set([...(a.refs || []), ...(b.refs || [])])]
+      : undefined
+    const merged = {
+      ...freshRest,
+      shot_number: a.shot_number,
+      scene_id: a.scene_id,
+      scene_title: a.scene_title,
+      duration: Math.min(15, fresh.duration || ((Number(a.duration) || 0) + (Number(b.duration) || 0)) || 7),
+      ...(picked ? { refs: picked } : (mergedRefs ? { refs: mergedRefs } : {})),
+    }
+    return renumberShots([...shots.slice(0, i), merged, ...shots.slice(i + 2)])
+  }
+
+  // Manual trigger — "⇄ Merge" button on the Director's-Cut screen. The user
+  // picks the pair; a mismatched pair (different scene/location/cast, or
+  // either carries dialogue) gets a confirm prompt rather than a hard block,
+  // same pattern as "↻ Re-run Director's Cut" — full manual override stays
+  // available, just with a nudge.
+  const mergeShots = async (si) => {
+    if (phase !== 'dircut' || shotBusy !== null || promptBusy !== null || !directorsCut) return
+    const a = directorsCut.shots[si], b = directorsCut.shots[si + 1]
+    if (!a || !b) return
+    if (!isMergeEligible(a, b) && typeof window !== 'undefined' && !window.confirm(
+      `Clip ${a.shot_number} and ${b.shot_number} differ in scene, location, or cast — or one carries dialogue. Merging them may not read correctly. Merge anyway?`
+    )) return
+    setShotBusy(si); setError('')
+    try {
+      const nextShots = await mergeShotPair(directorsCut.shots, si, refImages)
+      const nextCut = { ...directorsCut, shots: nextShots }
+      const nextFrames = [...framePrompts.slice(0, si), framePrompts[si] || emptyFrameEntry(), ...framePrompts.slice(si + 2)]
+      const nextPrompts = finalPrompts.length
+        ? renumberPrompts([...finalPrompts.slice(0, si), emptyPromptEntry(nextShots[si]), ...finalPrompts.slice(si + 2)])
+        : finalPrompts
+      setDirectorsCut(nextCut)
+      setFramePrompts(nextFrames)
+      if (finalPrompts.length) setFinalPrompts(nextPrompts)
+      clearShotTransients()
+      persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setShotBusy(null)
+    }
+  }
+
   // Slim dashed "insert a clip here" bar shown between / around clip cards.
   const insertBar = (idx) => (
     <button key={`ins-${idx}`} onClick={() => insertShot(idx)}
@@ -1953,8 +2092,20 @@ export default function ScriptwriterPanel({
                   ))}
                 </div>
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {PACING_OPTIONS.map(p => (
+                    <button key={p.id} onClick={() => setAutoPacing(p.id)} disabled={isLoading} style={btn(autoPacing === p.id)}>{p.label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                  Tight = fewest clips that still respect H3's two-beat limit, plus an automatic merge pass for
+                  same-scene locomotion clips. Loose = more reaction &amp; insert clips.
+                </div>
+              </div>
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), genre, hint: autoHint.trim() })}
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), genre, hint: autoHint.trim(), pacing: autoPacing })}
                 disabled={refImages.length === 0 || isLoading || captioning}
                 style={genBtn(refImages.length === 0 || isLoading || captioning)}>
                 + Add to Queue (Full Auto)
@@ -2300,6 +2451,13 @@ export default function ScriptwriterPanel({
                         background: 'var(--pe-accent-bg)', cursor: (shotBusy !== null || promptBusy !== null) ? 'wait' : 'pointer' }}>
                       {shotBusy === si ? '✦ Rewriting…' : '✦ Rewrite'}
                     </button>
+                    {si < directorsCut.shots.length - 1 && (
+                      <button onClick={() => mergeShots(si)} disabled={shotBusy !== null || promptBusy !== null}
+                        title={`Combine this ${isH3 ? 'clip' : 'shot'} with the next one into a single clip`}
+                        style={{ ...ghostBtn, cursor: (shotBusy !== null || promptBusy !== null) ? 'wait' : 'pointer' }}>
+                        {shotBusy === si ? '⇄ Merging…' : '⇄ Merge'}
+                      </button>
+                    )}
                     <button onClick={() => removeShot(si)}
                       disabled={directorsCut.shots.length <= 1 || shotBusy !== null || promptBusy !== null}
                       title={directorsCut.shots.length <= 1 ? 'A film needs at least one clip' : `Remove this ${isH3 ? 'clip' : 'shot'}`}

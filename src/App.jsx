@@ -2276,7 +2276,12 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {visibleHistory.map((h, i) => {
               if (h.type === 'scriptwriter') {
-                const ideaShort = h.idea && h.idea.length > 80 ? h.idea.slice(0, 80) + '…' : (h.idea || '')
+                // A Full Auto entry's `idea` is a fixed boilerplate instruction with the
+                // user's hint appended after it — an 80-char cutoff of `idea` always shows
+                // the boilerplate, never the hint, so prefer the separately-saved hint.
+                const ideaShort = h.fullAuto
+                  ? (h.fullAutoHint ? (h.fullAutoHint.length > 80 ? h.fullAutoHint.slice(0, 80) + '…' : h.fullAutoHint) : '(AI invented freely — no hint given)')
+                  : (h.idea && h.idea.length > 80 ? h.idea.slice(0, 80) + '…' : (h.idea || ''))
                 const phaseLabel = h.phase === 'done' ? 'Done' : h.phase === 'dircut' ? "Director's cut" : 'Script'
                 return (
                   <div key={i} style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
@@ -2289,7 +2294,7 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 4 }}>
-                      Scriptwriter · {h.model} · {phaseLabel}
+                      Scriptwriter{h.fullAuto ? ' · 🎬 Full Auto' : ''} · {h.model} · {phaseLabel}
                       {h.script ? ` · ${h.script.scenes?.length ?? 0} scenes` : ''}
                       {h.script?.characters?.length ? ` · ${h.script.characters.length} cast` : ''}
                       {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} ${h.promptTarget === 'minimax_h3' ? 'clips' : 'shots'}` : ''}
