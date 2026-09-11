@@ -392,7 +392,7 @@ export default function ScriptwriterPanel({
   const [phase, setPhase] = useState(initialState?.phase || 'input')
   const [idea, setIdea] = useState(initialState?.idea || '')
   const [genre, setGenre] = useState(initialState?.genre || 'auto')
-  const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 3)
+  const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 1)
   // Normalise on load so restored / older / model-broken entries self-repair
   // (the c1/l1 ids the whole ref-attachment path depends on).
   const [script, setScript] = useState(() => initialState?.script ? normalizeScript(initialState.script) : null)
@@ -452,7 +452,7 @@ export default function ScriptwriterPanel({
 
   const reset = () => {
     sessionId.current = generateId()
-    setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(3)
+    setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(1)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
     setPromptTarget(DEFAULT_PROMPT_TARGET); setAspectRatio(DEFAULT_ASPECT_RATIO); setPacing('standard'); setPortraitDraft({})
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
@@ -994,7 +994,7 @@ export default function ScriptwriterPanel({
       flushSync(() => {
         setRefImages((autoJob.refImages || []).map(rehydrateRefImage))
         setGenre(autoJob.genre || 'auto')
-        setSceneCount(3); setAspectRatio(DEFAULT_ASPECT_RATIO)
+        setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing('standard')
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
