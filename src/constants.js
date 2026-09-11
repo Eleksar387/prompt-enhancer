@@ -430,6 +430,9 @@ fast camera + chaotic motion; handheld + zoom. If a request centers on one of th
 
 RULES: present tense; no re-describing static frame elements; no new objects mid-prompt;
 no contradictions; no negation in the positive prompt; don't itemize body parts during a move.
+If an "Aspect ratio:" line is given, compose motion and framing for that frame shape —
+vertical: keep the action within a tall frame and prefer push-pull and tilts; wide: lateral
+moves read best.
 
 OUTPUT: always English even if the input is another language. No negative prompt (handled
 separately). Return only the prompt paragraph.`;
@@ -866,6 +869,7 @@ CRAFT:
 - Dialogue entries use the format: "CHARACTER NAME: line" (uppercase name, colon, space, line).
 - Keep dialogue near zero: 0–2 lines per scene, and prefer none. Information reaches the viewer through image and action, not speech. Never use dialogue to explain the premise, the backstory, or what someone is feeling. Use an empty array [] when a scene has no dialogue.
 - If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: fold each one into the matching "characters" or "locations" entry (use the name in its "(note: …)" tag when given), and keep wardrobe, props, weather, and mood consistent with them.
+- If the user message carries a "Delivery format:" line, let it steer location count, cast size and scene scale. It never changes the premise.
 - Do not include any text before or after the JSON object.`
 
 export const SYSTEM_PROMPT_DIRECTOR = `You are a film director breaking down a short-film script into individual camera shots for an AI video model (LTX-2.3). LTX-2.3 generates short clips of 4–8 seconds; each clip contains one continuous action and one camera move. Your job is to produce a shot list that works within these constraints.
@@ -892,8 +896,22 @@ Rules:
 - visual_action must describe ONE continuous action — the model will execute it over 4–8 seconds.
 - visual_action is present tense and physical: 'she turns and slams her palm on the table' not 'she gets angry.'
 - If the user message contains a "Reference images provided by the user" block, keep every shot's camera_framing wording, wardrobe/location detail, and lighting_mood consistent with those descriptions and any per-image note.
+- If the user message carries a "Framing for delivery:" line, choose camera_framing, how many characters share a frame, and camera_movement to suit that frame shape.
 - Do not include any text before or after the JSON object.`
 
+// SUBJECT LOCK (inside the prompt below) is a deliberately conservative default
+// for the Director's automatic shot-splitting pass, not a claim about H3's
+// technical ceiling. The h3-storyboard skill, section 六之一 (verified
+// 2026-08-27), documents that a single character's own *design-level* look CAN
+// change within one H3 generation — e.g. eye style swapping to match a
+// different reference-pinned look — if the change is fully hidden behind an
+// occluder (closed eyes, a cut, etc.) rather than rendered as a visible
+// deformation. That's a narrow, hand-tuned occlusion-timing technique verified
+// for one subject's own attribute, not a general license to skip new reference
+// conditioning on a cast/location/costume change. Keep SUBJECT LOCK's hard
+// split for this automatic pipeline — reliability matters more than shaving a
+// clip here. Only relax it if you're deliberately porting the manual occlusion
+// technique into the automatic Director, with the same care the skill describes.
 export const SYSTEM_PROMPT_DIRECTOR_H3 = `You are a film director breaking a short-film script into clips for MiniMax H3, a model that generates one 4–15 second video with synchronized audio per clip. Each clip is ONE emotional or action unit. Your shot list must respect how H3 actually behaves — the rules below come from real H3 production, not documentation.
 
 Output ONLY a valid JSON object — no markdown code fences, no preamble, no explanation. Use this exact schema:
@@ -925,6 +943,19 @@ Output ONLY a valid JSON object — no markdown code fences, no preamble, no exp
 Rules:
 - One clip = one emotional or action unit, 4–15 seconds. A scene becomes as many clips as its beats need — usually 2–4. Prefer the fewest clips that respect the beat-density limit below: do NOT split a clip that already holds two or fewer facial beats, and never add a clip with no beat of its own. A 3-scene film is typically 8–14 clips, not 20+. If the user message carries a "Pacing:" line, follow it.
 - BEAT DENSITY: a clip holds at most TWO facial/emotional beats (a brow move, an eye move, a lip move, a gaze shift, a held breath). If a moment needs more, split it into separate 2–4 second clips, one primary beat each, and let the cut carry the performance — the viewer re-reads the character at every cut. Action beats (reaching, standing, walking, turning a prop) and locomotion do not count and are H3's most reliable register.
+- SUBJECT LOCK: one clip = one fixed subject list (who and what is on screen), held for its whole duration and tied to one reference-image conditioning. These change something visible but do NOT change the subject list, so they never force a new clip on their own — net effect: fewer clips than a naive reading of the rules above, not more:
+  - a camera move or angle change around the existing subject (pan, tilt, dolly, zoom, arc);
+  - a shot-size change (close-up ↔ medium) carried as an internal cut inside the clip's own Phase-3 prose — H3's own "[Shot N]" internal-cut mechanic already handles this per clip; do not invent a separate clip for it;
+  - movement, gesture, or speech (including lip sync) from cast already in the clip;
+  - a lighting/mood change within the same location;
+  - interaction with an object already established in the clip.
+  These DO change the subject list, so each one alone forces a NEW clip with its own reference_images pin — this takes priority over the "fewest clips" guidance above whenever it applies:
+  - a person enters frame who was not already in it;
+  - a location change (e.g. interior → exterior);
+  - a costume or outfit change for a character;
+  - a time jump beyond a same-location lighting shift (e.g. "hours later");
+  - two or more of the above — or of these plus dialogue, a camera move, and a lighting change — stacked into one setup, even if the script wrote it as a single scene.
+  Never carry a subject-list change into a clip that still holds the old subject list's reference-image pin. If a planned clip trips more than one of the "NEW clip" triggers at once, split it into separate clips. When in doubt, split one clip too many rather than fold a subject-list change into an existing reference-image conditioning.
 - primary_beat is always physical and observable. Translate feeling into muscle and body action; never pass an emotion label ('shocked', 'relieved', 'conflicted') into any field.
 - camera_movement is ONE move — no 'then' / 'followed by'. For a locked frame say "Static — the frame never moves".
 - Decide each clip's camera from its eyeline: if the thing the character looks at is not in frame, place the camera in that direction. Never resolve it with a head-turn toward the lens.
@@ -939,6 +970,7 @@ Rules:
   - a location / environment reference for clips set in that place.
   Use the exact numbers from the block, never invent one. "[]" means the clip needs no reference. If there is no reference block, omit "reference_images".
 - "characters" must contain the exact "id" strings from the script's characters array (e.g. "c1", "c2") for everyone visible in that clip — never names, never invented ids. Use [] only for a true no-person insert. "location_id" is the exact id from the script's locations array. Phase 3 uses these to attach the right reference images.
+- If the user message carries a "Framing for delivery:" line, choose camera_framing, how many characters share a frame, and camera_movement to suit that frame shape.
 - Do not include any text before or after the JSON object.`
 
 export const SYSTEM_PROMPT_DRAMABOX = `You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloning). The user will give you a short, informal scene idea — a character, a mood, a rough situation, sometimes a target length. Your job is to expand that into a fully-formatted, ready-to-generate DramaBox prompt.
@@ -1017,6 +1049,44 @@ export const MINIMAX_H3_RESOLUTIONS = [
   { id: 'port34',  label: '768×1024',  w: 768,  h: 1024, ratio: 768 / 1024,  note: 'Portrait · 3:4 · 768P (also renders at 2K, same ratio)' },
   { id: 'land219', label: '1792×768',  w: 1792, h: 768,  ratio: 1792 / 768,  note: 'Ultrawide · 21:9 · 768P (also renders at 2K, same ratio)' },
 ]
+
+// Parse a MINIMAX_H3_RESOLUTIONS entry's `note` ("Landscape · 16:9 · 768P (…)")
+// into a clean orientation word + ratio token. Only these clean values go into
+// prompts — never the raw note, whose "768P / 2K" tail is H3-specific and would
+// assert false resolution facts in an LTX or still-image prompt.
+export function aspectParts(res) {
+  const parts = String(res?.note || '').split('·').map(s => s.trim())
+  return { orient: (parts[0] || '').toLowerCase(), token: parts[1] || '' }
+}
+
+// One line for Phase 1 — steers scene / cast / location scale. Empty for the
+// neutral 16:9 default so an untouched picker changes nothing.
+export function aspectSceneHint(res) {
+  const { orient, token } = aspectParts(res)
+  if (orient === 'portrait')
+    return `Delivery format is vertical short-form video (${token}): favour intimate, small-cast, single-location scenes; avoid crowd scenes and sweeping landscapes.`
+  if (orient === 'square')
+    return `Delivery format is a square ${token} frame: keep scenes centred and contained — small cast, one location.`
+  if (orient === 'ultrawide')
+    return `Delivery format is an ultrawide ${token} frame: scenes may use wide landscapes and lateral space; still keep the cast and locations few.`
+  if (token === '4:3')
+    return `Delivery format is a boxy ${token} frame: contained, classic staging; nothing that needs a wide vista.`
+  return '' // 16:9 — neutral
+}
+
+// 1–2 sentences for Phase 2 / Phase 3 — framing, staging, camera moves. Empty for
+// 16:9 (the director already assumes a horizontal frame).
+export function aspectFramingHint(res) {
+  const { orient, token } = aspectParts(res)
+  if (token === '16:9') return ''
+  if (orient === 'portrait')
+    return `Vertical ${token} frame: one or two subjects in frame at most, stacked or receding staging, faces and hands large, minimal wide vistas; camera moves favour push-pull and vertical tilts over lateral pans.`
+  if (orient === 'square')
+    return `Square ${token} frame: centred, symmetrical compositions tight on one or two subjects; keep camera moves modest.`
+  if (orient === 'ultrawide')
+    return `Ultrawide ${token} frame: strong lateral staging and negative space, wide two- and three-shots, slow lateral tracking and pans read well.`
+  return `Horizontal ${token} frame: two-shots and lateral staging read well; wide establishing shots and lateral camera moves are available.`
+}
 
 export const MINIMAX_H3_DURATIONS = [
   { label: '4s',  value: '4 seconds' },
@@ -1349,5 +1419,16 @@ export const TARGETS = {
     show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false },
   },
 }
+
+// Ordered grouping for the "Generate for" rail. Groups render top-to-bottom with
+// a header + divider each; any TARGETS id missing here falls into a trailing
+// "Other" group so a newly-added target is never hidden.
+export const TARGET_GROUPS = [
+  { label: 'Script',   ids: ['scriptwriter'] },
+  { label: 'Image',    ids: ['flux', 'flux2klein', 'krea2turbo', 'sdxl', 'threed'] },
+  { label: 'Video',    ids: ['ltx', 'ltx_guide', 'minimax_h3'] },
+  { label: 'External', ids: ['grokimage', 'kling'] },
+  { label: 'TTS',      ids: ['dramabox'] },
+]
 
 export const systemPromptFor = (target, frameMode) => target.buildSystem ? target.buildSystem(frameMode) : target.system

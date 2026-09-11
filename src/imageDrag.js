@@ -5,6 +5,8 @@
 // keep the actual payload here in module scope and put only a marker MIME type
 // on the dataTransfer, then read the payload back on drop.
 
+import { blobUrlToBase64 } from './utils'
+
 export const DRAG_MIME = 'application/x-pe-image'
 
 let payload = null
@@ -12,6 +14,16 @@ let payload = null
 export const setDragImage = (obj) => { payload = obj }
 export const peekDragImage = () => payload
 export const takeDragImage = () => { const p = payload; payload = null; return p }
+
+// A dragged/picked history image carries only a blob URL (bytes are on the
+// sidecar). Resolve it to `{ base64, mediaType, fileName, hash }` — the shape
+// every drop target consumes. Passes an already-inline payload straight through.
+export const resolveDragImage = async (d) => {
+  if (!d) return null
+  if (d.base64) return d
+  if (d.url) return { ...d, base64: await blobUrlToBase64(d.url) }
+  return null
+}
 
 export const hasDragImage = (dt) => {
   if (!dt) return false

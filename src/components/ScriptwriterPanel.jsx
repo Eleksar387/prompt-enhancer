@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import JSZip from 'jszip'
-import { callOllama } from '../api'
+import { callOllama, isCloud } from '../api'
 import {
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
   buildLtxGuideSystemPrompt,
@@ -8,8 +8,9 @@ import {
   SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
   SYSTEM_PROMPT_MINIMAX_H3, MINIMAX_H3_RESOLUTIONS,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
+  aspectParts, aspectSceneHint, aspectFramingHint,
 } from '../constants'
-import { btn, shrinkToJpeg, imageHash } from '../utils'
+import { btn, shrinkToJpeg, imageHash, mapWithConcurrency } from '../utils'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
@@ -77,7 +78,13 @@ const PROMPT_TARGETS = [
 ]
 const PROMPT_TARGET_LABEL = { ltx: 'LTX-2.3', minimax_h3: 'MiniMax H3' }
 const DEFAULT_PROMPT_TARGET = 'minimax_h3'
-const H3_DEFAULT_RATIO = 'land169'   // 16:9 landscape — film default
+const DEFAULT_ASPECT_RATIO = 'land169'   // 16:9 landscape — film default
+
+// Resolve the aspect-ratio state id to its MINIMAX_H3_RESOLUTIONS entry (used as
+// the target-agnostic aspect-ratio list — only its orientation/ratio token
+// matters here, not the H3 pixel dimensions).
+const aspectRes = (id) => MINIMAX_H3_RESOLUTIONS.find(r => r.id === id) || MINIMAX_H3_RESOLUTIONS[0]
+const aspectToken = (id) => aspectParts(aspectRes(id)).token || '16:9'
 
 // Reference-image link types → a sensible default H3 role. The user can override
 // the role per image; the link (which character / location it is) drives which
@@ -124,11 +131,6 @@ const serializeFramePrompts = (fps) => (fps || []).map(fp => ({
     return [k, { target: f.target, text: f.text, image: f.image || null }]
   })),
 }))
-
-// One scriptwriter history record over ~12 MB starts to be a liability
-// (it is re-put in full on every phase save). Above it, drop reference-image
-// bytes first (the caption text carries the info), then attached frame images.
-const HISTORY_SOFT_LIMIT = 12 * 1024 * 1024
 
 // --- reference images ------------------------------------------------------
 const MAX_REF_IMAGES = 6
@@ -395,7 +397,7 @@ export default function ScriptwriterPanel({
   })
   // Phase 3 output model + (H3-only) aspect ratio.
   const [promptTarget, setPromptTarget] = useState(initialState?.promptTarget || DEFAULT_PROMPT_TARGET)
-  const [h3Ratio, setH3Ratio]           = useState(initialState?.h3Ratio || H3_DEFAULT_RATIO)
+  const [aspectRatio, setAspectRatio]   = useState(initialState?.aspectRatio ?? initialState?.h3Ratio ?? DEFAULT_ASPECT_RATIO)
   const [pacing, setPacing]             = useState(initialState?.pacing || 'standard')
   // Transient per-entity portrait/still generator state (the resulting image is
   // persisted as a refImages entry, not here). Key: "c1" | "l1".
@@ -416,7 +418,6 @@ export default function ScriptwriterPanel({
   const [picker, setPicker] = useState({ key: null, loading: false, error: '', items: [] })
   // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
   const [attach, setAttach] = useState({ key: null, state: 'idle', error: '' })
-  const [historyNote, setHistoryNote] = useState('')
   const [refImages, setRefImages] = useState(() => (initialState?.refImages || []).map(rehydrateRefImage))
   // { state: 'idle' | 'reading' | 'error', done, total, error }
   const [refCaptionStatus, setRefCaptionStatus] = useState({ state: 'idle', done: 0, total: 0, error: '' })
@@ -426,13 +427,12 @@ export default function ScriptwriterPanel({
     sessionId.current = generateId()
     setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(3)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
-    setPromptTarget(DEFAULT_PROMPT_TARGET); setH3Ratio(H3_DEFAULT_RATIO); setPacing('standard'); setPortraitDraft({})
+    setPromptTarget(DEFAULT_PROMPT_TARGET); setAspectRatio(DEFAULT_ASPECT_RATIO); setPacing('standard'); setPortraitDraft({})
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
     setSceneBusy(null); setShotBusy(null); setPromptBusy(null)
     setComfyFrame({ key: null, state: 'idle', error: '' })
     setPicker({ key: null, loading: false, error: '', items: [] })
     setAttach({ key: null, state: 'idle', error: '' })
-    setHistoryNote('')
     setRefImages([])
     setRefCaptionStatus({ state: 'idle', done: 0, total: 0, error: '' })
   }
@@ -564,7 +564,10 @@ export default function ScriptwriterPanel({
     }
     setRefCaptionStatus({ state: 'reading', done: 0, total: targets.length, error: '' })
     let done = 0
-    const settled = await Promise.allSettled(targets.map(async (im) => {
+    // Sequential against a local Ollama: its parallel slots blend concurrent
+    // multimodal requests, so describing several references at once returns
+    // mixed descriptions. Cloud providers isolate requests — fan those out.
+    const outcomes = await mapWithConcurrency(targets, isCloud(cfg.base) ? targets.length : 1, async (im) => {
       // Once a reference is typed (character / location / style / …), describe it
       // through the H3 role-focused vision prompt so a wardrobe ref covers only the
       // garment, a style ref only palette/light, etc. Untyped refs (pre-bible) use
@@ -578,18 +581,22 @@ export default function ScriptwriterPanel({
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
         { type: 'text', text: `Describe this reference image as instructed.${focus ? ' ' + focus : ''}${noteBit}`.trim() },
       ]
-      const { text } = await callOllama(visModel, content, sys, cfg, 0.3)
-      done++; setRefCaptionStatus(s => ({ ...s, done }))
-      return { id: im.id, caption: (text || '').trim() }
-    }))
+      try {
+        const { text } = await callOllama(visModel, content, sys, cfg, 0.3)
+        done++; setRefCaptionStatus(s => ({ ...s, done }))
+        return { id: im.id, caption: (text || '').trim() }
+      } catch (e) {
+        return { id: im.id, error: e }
+      }
+    })
     const byId = new Map()
-    settled.forEach(r => { if (r.status === 'fulfilled') byId.set(r.value.id, r.value.caption) })
-    const failed = settled.filter(r => r.status === 'rejected')
+    const failed = []
+    outcomes.forEach(o => { if (o.error) failed.push(o); else byId.set(o.id, o.caption) })
     const updated = source.map(im => byId.has(im.id) ? { ...im, caption: byId.get(im.id) } : im)
     setRefImages(updated)
     setRefCaptionStatus(failed.length
       ? { state: 'error', done, total: targets.length,
-          error: `${failed.length} image${failed.length === 1 ? '' : 's'} couldn't be described: ${failed[0].reason?.message || 'unknown error'}` }
+          error: `${failed.length} image${failed.length === 1 ? '' : 's'} couldn't be described: ${failed[0].error?.message || 'unknown error'}` }
       : { state: 'idle', done, total: targets.length, error: '' })
     return updated
   }
@@ -602,19 +609,18 @@ export default function ScriptwriterPanel({
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, sceneCount, phase: phaseName,
-      promptTarget, h3Ratio, pacing,
+      promptTarget, aspectRatio, pacing,
       refImages: serializeRefImages(refs),
     }
   }
 
+  // History + blobs live in the sidecar now (server/): image bytes are split out,
+  // content-addressed and deduped on disk, so there is no per-record size cap to
+  // guard against any more (the old 12 MB IndexedDB limit + its lossy trimming
+  // are gone).
   const commitHistory = (payload) => {
     if (!onSaveHistory) return
-    const { payload: safe, dropped, droppedRefs } = guardHistorySize(payload)
-    const notes = []
-    if (droppedRefs) notes.push(`${droppedRefs} reference image${droppedRefs === 1 ? '' : 's'} kept as description only — the record was too large to store the pixels`)
-    if (dropped)     notes.push(`${dropped} attached frame image${dropped === 1 ? '' : 's'} couldn't be saved to history`)
-    setHistoryNote(notes.join('. '))
-    onSaveHistory(safe)
+    onSaveHistory(payload)
   }
 
   const runPhase1 = async () => {
@@ -631,7 +637,9 @@ export default function ScriptwriterPanel({
     setPhase('scripting')
     const genreHint = genre === 'auto' ? 'Infer a suitable genre from the story idea.' : `Genre: ${genre}`
     const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}${refBlock}\n\nOutput only valid JSON.`
+    const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
+    const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nNumber of scenes: ${sceneCount}${formatLine}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
       const data = normalizeScript(parseJSON(text))
@@ -653,8 +661,10 @@ export default function ScriptwriterPanel({
     setSceneBusy(si); setError(''); setRawFallback('')
     const genreHint = genre === 'auto' ? 'Infer the genre from the story.' : `Genre: ${genre}`
     const refBlock = assembleRefBlock(refImages, REF_HEADING_CANON, script)
+    const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
+    const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
     const userMsg =
-      `Story idea: ${idea.trim()}\n${genreHint}\n\n`
+      `Story idea: ${idea.trim()}\n${genreHint}${formatLine}\n\n`
       + `You already wrote this script (title, bible and all scenes):\n${JSON.stringify(script, null, 2)}${refBlock}\n\n`
       + `Rewrite ONLY scene ${scene.id}${scene.title ? ` ("${scene.title}")` : ''}. `
       + `Give a fresh version of the same story beat — you may change the action, blocking or dialogue — but keep it consistent with the surrounding scenes, reuse the existing characters and locations by their exact names, and keep the same scene "id". `
@@ -699,7 +709,9 @@ export default function ScriptwriterPanel({
     const lookLine = isH3 && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3 && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
     const pacingLine = isH3 ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${refBlock}\n\nOutput only valid JSON.`
+    const framingHint = aspectFramingHint(aspectRes(aspectRatio))
+    const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
       const data = normalizeDirectorsCut(parseJSON(text), script)
@@ -870,7 +882,9 @@ export default function ScriptwriterPanel({
     if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs)
     const action = shot.visual_action || shot.primary_beat || ''
     const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
-    return `Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}`
+    const framingHint = aspectFramingHint(ratio)
+    const aspectLine = `Aspect ratio: ${aspectParts(ratio).token || '16:9'}${framingHint ? `\n${framingHint}` : ''}\n\n`
+    return `${aspectLine}Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}`
   }
 
   const runPhase3 = async () => {
@@ -897,7 +911,7 @@ export default function ScriptwriterPanel({
     setPhase('prompting')
 
     const systemPrompt = isH3 ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
-    const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
+    const ratio = aspectRes(aspectRatio)
     const results = new Array(shots.length)
     const userMsgs = shots.map((shot) => buildShotPromptMsg(shot, refs, ratio))
     if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -949,13 +963,15 @@ export default function ScriptwriterPanel({
     const lookLine = isH3now && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3now && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
     const pacingLine = isH3now ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
+    const framingHint = aspectFramingHint(aspectRes(aspectRatio))
+    const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
     const task = isNew
       ? `Write a NEW ${noun} to sit between ${noun} ${prev?.shot_number ?? '(start of the film)'} and ${noun} ${next?.shot_number ?? '(end of the film)'}`
-        + `${scene?.title ? ` in scene "${scene.title}"` : ''}. Add a beat that improves the pacing or coverage between them — a reaction, an insert cutaway, or a connective action — and keep it continuous with both neighbours. Keep the same "scene_id".`
+        + `${scene?.title ? ` in scene "${scene.title}"` : ''}. Add a beat that improves the pacing or coverage between them — a reaction, an insert cutaway, a connective action, or (if the moment genuinely needs it) a new person entering, a location change, or a costume change. Only match both neighbours' subject list where nothing has actually changed — don't force continuity onto a real subject-list change; follow SUBJECT LOCK instead and give it its own reference_images pin. Keep the same "scene_id".`
       : `Rewrite ONLY ${noun} number ${shot.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''}. `
         + `Give a fresh interpretation of the same story moment — a different framing, camera move, or beat is fine — but keep it continuous with the ${noun}s immediately before and after it, and keep the same "shot_number" and "scene_id".`
     const userMsg =
-      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${refBlock}\n\n`
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${refBlock}\n\n`
       + `You already broke this script into the following ${noun}s:\n${JSON.stringify(cut.shots, null, 2)}\n\n`
       + `${task} `
       + `Output only valid JSON: {"shots":[ <the one ${noun} object, exactly the same fields as the others> ]}.`
@@ -1063,7 +1079,7 @@ export default function ScriptwriterPanel({
     if (isH3now && refImages.some(im => im.base64 && !im.caption?.trim())) {
       try { refs = await captionRefImages() } catch { /* keep going with what we have */ }
     }
-    const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || MINIMAX_H3_RESOLUTIONS[0]
+    const ratio = aspectRes(aspectRatio)
     const systemPrompt = isH3now ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
     try {
       const userMsg = buildShotPromptMsg(shot, refs, ratio)
@@ -1157,7 +1173,7 @@ export default function ScriptwriterPanel({
     // SDXL's writer is tag-based — a prose continuity block confuses it, so skip it there.
     const refBlock = target === 'sdxl' ? '' : assembleRefBlock(refImages, REF_HEADING_LITE, script)
     const action = shot.visual_action || shot.primary_beat || ''
-    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${action}\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
+    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${action}\nTarget aspect ratio: ${aspectToken(aspectRatio)} — compose for this frame shape.\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
 
     setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
       ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], loading: true, error: '' } }
@@ -1210,36 +1226,20 @@ export default function ScriptwriterPanel({
     }
   }
 
-  // Trim a would-be-oversized history payload. Reference-image bytes go first
-  // (their caption text carries what the pipeline needs), then the largest
-  // attached frame images. Returns { payload, dropped, droppedRefs }.
-  const guardHistorySize = (payload) => {
-    if (JSON.stringify(payload).length <= HISTORY_SOFT_LIMIT) return { payload, dropped: 0, droppedRefs: 0 }
-    const clone = JSON.parse(JSON.stringify(payload))
-    let droppedRefs = 0
-    for (const im of (clone.refImages || [])) {
-      if (JSON.stringify(clone).length <= HISTORY_SOFT_LIMIT) break
-      if (im.base64) { im.base64 = null; droppedRefs++ }
-    }
-    const imgs = []
-    ;(clone.framePrompts || []).forEach((fp, si) => FRAME_KEYS.forEach(k => {
-      const im = fp.frames?.[k]?.image
-      if (im?.b64) imgs.push({ si, k, len: im.b64.length })
-    }))
-    imgs.sort((a, b) => b.len - a.len)
-    let dropped = 0
-    for (const it of imgs) {
-      if (JSON.stringify(clone).length <= HISTORY_SOFT_LIMIT) break
-      clone.framePrompts[it.si].frames[it.k].image = null
-      dropped++
-    }
-    return { payload: clone, dropped, droppedRefs }
-  }
-
   // Re-save the whole session under the same id at the CURRENT phase — used after
   // a frame image, a cast portrait, or a reference edit lands between phases. Pass
   // the just-computed framePrompts / refImages arrays to sidestep state-update lag.
-  const persistState = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride) => {
+  //
+  // Debounced: this fires from ~15 call sites, several in quick succession during
+  // captioning / portrait rendering, and each save ships the WHOLE session. A
+  // trailing debounce is safe precisely because every call is a full snapshot
+  // under one stable id — last-write-wins loses no intermediate artifact. The
+  // timer is flushed on unmount (below), which also covers "navigate away" since
+  // that remounts the panel.
+  const persistTimer = useRef(null)
+  const persistArgs = useRef(null)
+  const persistNowRef = useRef(null)   // always the current-render persistStateNow
+  const persistStateNow = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride) => {
     const scr = scriptOverride || script
     if (!onSaveHistory || !scr) return
     // Always store every artifact that exists, regardless of the current screen —
@@ -1257,6 +1257,32 @@ export default function ScriptwriterPanel({
       framePrompts: serializeFramePrompts(framePromptsOverride || framePrompts),
     })
   }
+  persistNowRef.current = persistStateNow
+  const flushPersist = () => {
+    if (!persistTimer.current) return
+    clearTimeout(persistTimer.current)
+    persistTimer.current = null
+    const a = persistArgs.current
+    persistArgs.current = null
+    if (a) persistNowRef.current(...a)
+  }
+  const persistState = (...args) => {
+    persistArgs.current = args
+    if (persistTimer.current) clearTimeout(persistTimer.current)
+    persistTimer.current = setTimeout(() => {
+      persistTimer.current = null
+      const a = persistArgs.current
+      persistArgs.current = null
+      if (a) persistNowRef.current(...a)
+    }, 600)
+  }
+  // Flush a pending save on unmount (covers "navigate away", which remounts) and
+  // on a page reload / tab close inside the 600 ms window.
+  useEffect(() => {
+    const onBeforeUnload = () => flushPersist()
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => { window.removeEventListener('beforeunload', onBeforeUnload); flushPersist() }
+  }, [])
 
   // The user can jump between finished steps at will (the stepper dots and the
   // "← Back to …" buttons) — pure navigation, never re-runs the LLM. Each jump is
@@ -1550,11 +1576,10 @@ export default function ScriptwriterPanel({
       // machine-readable + a human README
       zip.file('script.json', JSON.stringify(script, null, 2))
       if (directorsCut) zip.file('directors-cut.json', JSON.stringify(directorsCut, null, 2))
-      const ratio = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio)
       zip.file('README.md', [
         `# ${script?.title || 'Untitled'}`,
         script?.logline ? `\n_${script.logline}_\n` : '',
-        `- Output: ${isH3now ? 'MiniMax H3' : 'LTX-2.3'}${isH3now && ratio ? ` · ${ratio.label}` : ''}`,
+        `- Output: ${isH3now ? 'MiniMax H3' : 'LTX-2.3'} · ${aspectToken(aspectRatio)}`,
         script?.look ? `- Look: ${script.look}` : '',
         script?.language ? `- Language: ${script.language}` : '',
         script?.soundscape ? `- Soundscape: ${script.soundscape}` : '',
@@ -1796,6 +1821,15 @@ export default function ScriptwriterPanel({
                   style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
               </div>
             </div>
+            <div>
+              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Aspect Ratio</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {MINIMAX_H3_RESOLUTIONS.map(r => (
+                  <button key={r.id} onClick={() => !isLoading && setAspectRatio(r.id)} title={r.note} disabled={isLoading}
+                    style={btn(aspectRatio === r.id)}>{aspectParts(r).token}</button>
+                ))}
+              </div>
+            </div>
           </div>
           <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
             This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
@@ -1879,19 +1913,22 @@ export default function ScriptwriterPanel({
             ) : (
               <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PROMPT_TARGET_LABEL[promptTarget] || promptTarget}</div>
             )}
-            {promptTarget === 'minimax_h3' && (
-              <div style={{ marginTop: 12 }}>
-                <label style={lbl}>Aspect Ratio</label>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {MINIMAX_H3_RESOLUTIONS.map(r => (
-                    <button key={r.id} onClick={() => phase === 'script' && setH3Ratio(r.id)} title={r.note}
-                      disabled={phase !== 'script'} style={btn(h3Ratio === r.id)}>{r.label}</button>
-                  ))}
-                </div>
-                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 8 }}>
-                  The Director breaks each scene into H3 clips (one emotional/action unit each) and phase 3 attaches
-                  each clip's character &amp; location references. 16:9 for cinema, 9:16 for short-drama.
-                </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={lbl}>Aspect Ratio</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {MINIMAX_H3_RESOLUTIONS.map(r => {
+                  const editable = phase === 'input' || phase === 'script'
+                  return (
+                    <button key={r.id} onClick={() => editable && setAspectRatio(r.id)} title={r.note}
+                      disabled={!editable} style={btn(aspectRatio === r.id)}>{aspectParts(r).token}</button>
+                  )
+                })}
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 8 }}>
+                Steers scene scale, the Director's framing, and the clip prompts. 16:9 for cinema / landscape,
+                9:16 for short-form &amp; social.
+              </div>
+              {promptTarget === 'minimax_h3' && (
                 <div style={{ marginTop: 12 }}>
                   <label style={lbl}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
                   {phase === 'script' ? (
@@ -1908,8 +1945,8 @@ export default function ScriptwriterPanel({
                     You can still insert or remove clips on the next screen.
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Cast bible */}
@@ -2088,12 +2125,6 @@ export default function ScriptwriterPanel({
               </span>
             </div>
           )}
-          {historyNote && (
-            <div style={{ ...card, fontSize: 12.5, color: 'var(--pe-danger)', background: 'var(--pe-danger-bg)', borderColor: 'var(--pe-danger-line)' }}>
-              {historyNote}
-            </div>
-          )}
-
           {/* Reference status — tells the user whether clips will be Ref2VA or T2VA */}
           {isH3 && (() => {
             const capt = (refImages || []).filter(im => im.caption && im.caption.trim()).length
@@ -2412,7 +2443,7 @@ export default function ScriptwriterPanel({
           {/* Output model was chosen on the script screen */}
           <div style={{ ...card, marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)' }}>
             Output: <span style={{ color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PROMPT_TARGET_LABEL[promptTarget] || promptTarget}</span>
-            {isH3 && <> · {(MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3Ratio) || {}).label}</>}
+            {` · ${aspectToken(aspectRatio)}`}
             {isH3 && <> · Ref2VA where a clip has linked references, T2VA otherwise</>}
           </div>
 

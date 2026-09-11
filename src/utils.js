@@ -2,6 +2,9 @@ import { CAMERA_GROUPS } from './constants'
 
 // public-domain cyrb53 (Bryc) — fast 53-bit non-crypto string hash, base-36 out.
 // Used only for cache keys, never security.
+// NOTE: cyrb53 + imageHash are copied byte-identical into `server/hash.mjs` (the
+// sidecar keys blob files by imageHash(base64)). Keep the two in sync or blob
+// dedupe and the vision-caption cache silently break.
 export function cyrb53(str, seed = 0) {
   let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed
   for (let i = 0; i < str.length; i++) {
@@ -27,6 +30,43 @@ export function visionCacheKey(model, system, content) {
   const parts = content.map(b =>
     b.type === 'text' ? `t:${cyrb53(b.text || '')}` : `i:${imageHash(b.source.data)}`)
   return `v2|t0.3|${model}|s:${cyrb53(system || '')}|${parts.join('|')}`
+}
+
+// Run `fn(item, i)` over `items` with at most `limit` promises in flight at
+// once, keeping results in input order. Rejects on the first error, like
+// Promise.all. `limit <= 1` runs everything strictly sequentially — needed for
+// vision calls against a local Ollama, whose parallel slots cross-contaminate
+// concurrent multimodal (image) requests so two references get a blended
+// description. Cloud providers handle concurrent requests independently, so the
+// caller passes a higher limit for those.
+export async function mapWithConcurrency(items, limit, fn) {
+  const list = items || []
+  const results = new Array(list.length)
+  const workers = Math.max(1, Math.min(limit || 1, list.length))
+  let next = 0
+  const run = async () => {
+    while (next < list.length) {
+      const i = next++
+      results[i] = await fn(list[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, run))
+  return results
+}
+
+// Fetch a blob URL (e.g. the sidecar's /api/blob/<hash>) and return just its
+// base64 payload — the shape the image panels / vision / ComfyUI paths expect.
+// History rows no longer carry image bytes inline, so drag/pick from the history
+// gallery resolves them on demand through here.
+export function blobUrlToBase64(url) {
+  return fetch(url)
+    .then((r) => { if (!r.ok) throw new Error(`blob fetch ${r.status}`); return r.blob() })
+    .then((blob) => new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(String(fr.result).split(',')[1] || '')
+      fr.onerror = () => reject(fr.error || new Error('read failed'))
+      fr.readAsDataURL(blob)
+    }))
 }
 
 // Re-encode an image to a bounded-size JPEG via canvas. `src` may be a Blob, a

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
 import { imageHash } from '../utils'
-import { hasDragImage, takeDragImage } from '../imageDrag'
+import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
 
 const MAX_IMAGES = 6
 const MAX_DIM = 1536
@@ -94,7 +94,7 @@ export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange
     if (images.length >= MAX_IMAGES) return
     if (hasDragImage(e.dataTransfer)) {
       const d = takeDragImage()
-      if (d) onChange([...images, refFromData(d)])
+      if (d) resolveDragImage(d).then(r => r && onChange([...images, refFromData(r)])).catch(() => {})
       return
     }
     const f = e.dataTransfer.files[0]

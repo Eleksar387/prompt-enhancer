@@ -1,15 +1,15 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { MINIMAX_H3_REF_ROLES } from '../constants'
-import { DRAG_MIME, setDragImage } from '../imageDrag'
+import { DRAG_MIME, setDragImage, resolveDragImage } from '../imageDrag'
 
 const roleLabel = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id
 
 const CAP = 60  // most thumbnails to render at once
 
-// Cheap dedupe key — avoids holding a second reference to every multi-MB base64
-// string as a Map key. Length + head + tail + filename is unique enough for our
-// inputs (all normalised to <=1536px JPEG on load).
-const keyOf = (b, fileName) => `${fileName || ''}|${b.length}|${b.slice(0, 64)}|${b.slice(-64)}`
+// Dedupe key. History rows now carry the content hash (imageHash of the bytes)
+// on every image node, so that IS the key; fall back to blobRef / url / filename
+// for anything unhashed.
+const keyOf = (im, url) => im.hash || im.blobRef || url || im.fileName || Math.random().toString(36)
 
 // Which frame(s) the entry's `caption` string actually covers, for the label on
 // the description panel. Input images in first/last/mid+last modes share one
@@ -33,18 +33,18 @@ function collectImages(history) {
   const byKey = new Map()
   const stats = { entries: (history || []).length, rawFields: 0, objWithBase64: 0, collected: 0 }
   const consider = (im, ts, slot, ctx) => {
-    if (im == null) return
+    if (im == null || typeof im !== 'object') return
     stats.rawFields++
-    const b64 = typeof im === 'object' ? (im.base64 || im.b64) : null
-    if (!b64) return
+    const url = im.url || null   // sidecar blob URL; history rows carry no bytes
+    if (!url) return
     stats.objWithBase64++
-    const key = keyOf(b64, im.fileName)
+    const key = keyOf(im, url)
     const prev = byKey.get(key)
     if (prev && prev.ts >= ts) { prev.uses++; return }
     const isRender = slot === 'render'
     byKey.set(key, {
       key,
-      base64: b64,
+      url,
       mediaType: im.mediaType || 'image/jpeg',
       fileName: im.fileName || (isRender ? `grok-render.${(im.mediaType || 'image/png').split('/')[1] || 'png'}` : 'image.jpg'),
       hash: im.hash || null,
@@ -106,8 +106,10 @@ function ImageInfoPanel({ img, onSaveCaption, onClose }) {
     <div style={{ marginTop: 10, background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
         <img
-          src={`data:${img.mediaType};base64,${img.base64}`}
+          src={img.url}
           alt={img.fileName}
+          loading="lazy"
+          decoding="async"
           style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 5, border: '1px solid var(--pe-line)', flexShrink: 0 }}
         />
         <span style={{ minWidth: 0, flex: 1, fontSize: 11.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.4px', lineHeight: 1.35 }}>
@@ -177,7 +179,8 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
   const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
 
   const onDragStart = (e, img) => {
-    setDragImage({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
+    // Only the blob URL travels — the drop target resolves bytes via resolveDragImage().
+    setDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')
       e.dataTransfer.setData('text/plain', img.fileName || 'image')
@@ -217,14 +220,18 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
                 key={img.key}
                 draggable
                 onDragStart={(e) => onDragStart(e, img)}
-                onClick={onPick ? () => onPick({
-                  base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash,
-                  // Only a per-reference caption/role carries meaning to another
-                  // reference slot; a frame/render description does not.
-                  caption: img.slot === 'ref' ? img.caption : '',
-                  role: img.slot === 'ref' ? img.role : null,
-                  note: img.slot === 'ref' ? img.note : '',
-                }) : undefined}
+                onClick={onPick ? async () => {
+                  const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
+                  if (!resolved) return
+                  onPick({
+                    ...resolved,
+                    // Only a per-reference caption/role carries meaning to another
+                    // reference slot; a frame/render description does not.
+                    caption: img.slot === 'ref' ? img.caption : '',
+                    role: img.slot === 'ref' ? img.role : null,
+                    note: img.slot === 'ref' ? img.note : '',
+                  })
+                } : undefined}
                 title={`${img.fileName}${img.render ? ' · Grok render' : ''}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
                 style={{
                   position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
@@ -235,7 +242,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
                 }}
               >
                 <img
-                  src={`data:${img.mediaType};base64,${img.base64}`}
+                  src={img.url}
                   alt={img.fileName}
                   draggable={false}
                   loading="lazy"

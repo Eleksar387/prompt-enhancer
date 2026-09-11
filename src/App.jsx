@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { flushSync } from 'react-dom'
 import JSZip from 'jszip'
 import {
-  TARGETS, DURATION_OPTIONS, OUTPUT_COUNT_OPTIONS, VARIANT_TEMPS, VARIANT_NUDGES,
+  TARGETS, TARGET_GROUPS, DURATION_OPTIONS, OUTPUT_COUNT_OPTIONS, VARIANT_TEMPS, VARIANT_NUDGES,
   GROK_IMAGE_RESOLUTIONS,
   STYLE_OPTIONS, CREATIVITY_OPTIONS, CAMERA_GROUPS,
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
@@ -10,21 +11,24 @@ import {
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   systemPromptFor,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
-  getAllHistory, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
-  clearHistory as dbClearHistory, generateId, migrateFromLocalStorage,
-  setHistoryEntryProject, loadProjects, saveProjects,
+  listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
+  clearHistory as dbClearHistory, generateId, migrateFromLocalStorage, migrateFromIndexedDB,
+  setHistoryEntryProject, loadProjects, saveProjects, importEntries,
   getCaption, putCaption, clearCaptions,
+  listQueue, getQueueItem, addQueueItem, updateQueueItem, deleteQueueItem, clearQueue as dbClearQueue,
+  checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
-import { btn, selStyle, moveLabel, presetById, syllableBudget, imageHash, visionCacheKey } from './utils'
+import { btn, selStyle, moveLabel, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency } from './utils'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
 import MinimaxRefPanel from './components/MinimaxRefPanel'
 import AdaptPanel from './components/AdaptPanel'
+import QueuePanel from './components/QueuePanel'
 import { buildStylePart } from './adapt'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
@@ -111,6 +115,14 @@ const modelProvider = (m) => {
   return 'Ollama'
 }
 const modelFilterLabel = (m) => `${modelProvider(m)} · ${m}`
+
+// "Generate for" rail groups, with any ungrouped target swept into a trailing
+// "Other" group so a newly-added TARGETS entry is never silently hidden.
+const RAIL_GROUPS = (() => {
+  const grouped = new Set(TARGET_GROUPS.flatMap(g => g.ids))
+  const leftover = Object.keys(TARGETS).filter(id => !grouped.has(id))
+  return leftover.length ? [...TARGET_GROUPS, { label: 'Other', ids: leftover }] : TARGET_GROUPS
+})()
 const imgExt = (mediaType) => ((mediaType || 'image/jpeg').split('/')[1] || 'jpg').replace('jpeg', 'jpg')
 const blobToBase64 = (blob) => new Promise((resolve, reject) => {
   const fr = new FileReader()
@@ -192,7 +204,9 @@ export default function App() {
   const [savedEditFlash, setSavedEditFlash] = useState(false)
   const [history, setHistory]         = useState([])
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [projects, setProjects]       = useState(loadProjects)
+  const [restoringId, setRestoringId] = useState(null)   // entry whose inline fetch is in flight
+  const [projects, setProjects]       = useState([])
+  const [historyDown, setHistoryDown] = useState(false)   // sidecar unreachable → banner
   const [activeProject, setActiveProject] = useState('')       // '' = save new generations unfiled
   const [historyFilter, setHistoryFilter] = useState('all')    // 'all' | 'unfiled' | <project name>
   const [histTargetFilter, setHistTargetFilter] = useState('all')  // 'all' | <target id> ('scriptwriter' for those)
@@ -205,9 +219,17 @@ export default function App() {
   const [adminUserMsg, setAdminUserMsg] = useState('')
   const [pendingSend, setPendingSend] = useState(false)
   const pendingSnapshotRef = useRef(null)
+  // Queue: pending "generate this later" items, persisted server-side (see db.js).
+  const [queue, setQueue]             = useState([])
+  const [queueOpen, setQueueOpen]     = useState(false)
+  const [queueBusy, setQueueBusy]     = useState(false)       // "Process all" in flight
+  const [queueRunningId, setQueueRunningId] = useState(null)  // item id currently mid-run
+  const queueAbortRef = useRef(false)  // set true to stop "Process all" between items
+  const enhanceRef = useRef(null)      // always the freshest enhance() closure — see runQueueItem
   const [scriptwriterKey, setScriptwriterKey] = useState(0)
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
   const importInputRef = useRef(null)
+  const projectsLoadedRef = useRef(false)   // don't PUT [] over the store before the load resolves
   const captionMemRef = useRef(new Map())  // L1 for the persistent caption cache; key = visionCacheKey(...)
   const sceneTextareaRef = useRef(null)
 
@@ -229,12 +251,41 @@ export default function App() {
     saveCfg(cfg)
   }, [cfg])
   useEffect(() => { saveComfyCfg(comfyCfg) }, [comfyCfg])
-  useEffect(() => { saveProjects(projects) }, [projects])
   useEffect(() => {
-    migrateFromLocalStorage()
-      .then(() => getAllHistory())
-      .then(setHistory)
-      .catch(() => {})
+    if (!projectsLoadedRef.current) return   // set true once the initial load resolves
+    saveProjects(projects).catch(() => {})
+  }, [projects])
+
+  // History + captions + projects now live in the local sidecar (src/db.js → /api).
+  // Load them, run the one-shot migrations from the old browser stores, and start
+  // a health poll that drives the "server unreachable" banner.
+  useEffect(() => {
+    setWriteErrorHandler(() => setHistoryDown(true))
+    let alive = true
+    const boot = async () => {
+      try {
+        await migrateFromLocalStorage()
+        await migrateFromIndexedDB()
+      } catch { /* best effort */ }
+      try {
+        const [hist, projs] = await Promise.all([listHistory(), loadProjects()])
+        if (!alive) return
+        setHistory(hist)
+        setProjects(projs)
+        projectsLoadedRef.current = true
+        setHistoryDown(false)
+      } catch {
+        if (alive) setHistoryDown(true)
+      }
+      // Best-effort — a failed queue load just leaves the panel empty/stale,
+      // it must not trip the "history server unreachable" banner on its own.
+      listQueue().then(q => { if (alive) setQueue(q) }).catch(() => {})
+    }
+    boot()
+    const ping = setInterval(() => {
+      checkHealth().then(() => alive && setHistoryDown(false)).catch(() => alive && setHistoryDown(true))
+    }, 20000)
+    return () => { alive = false; clearInterval(ping) }
   }, [])
 
   // Dropdowns and the history filter list every project that either has been
@@ -328,7 +379,8 @@ export default function App() {
     if (m) setVideoDuration(Math.min(15, Math.max(1, parseInt(m[1], 10))))
   }, [duration])
 
-  const refreshHistory = useCallback(() => getAllHistory().then(setHistory).catch(() => {}), [])
+  const refreshHistory = useCallback(() => listHistory().then(h => { setHistory(h); setHistoryDown(false) }).catch(() => setHistoryDown(true)), [])
+  const refreshQueue = useCallback(() => listQueue().then(setQueue).catch(() => {}), [])
 
   // Kept in a ref so saveScriptHistory (a stable useCallback passed to the
   // scriptwriter panel) always reads the current selection without churning.
@@ -341,6 +393,7 @@ export default function App() {
     // Adapt-panel save produces a separate entry the main results don't correspond to.
     if (trackForRender) lastSavedEntryIdRef.current = entry.id
     addHistoryEntry(entry).then(refreshHistory).catch(() => {})
+    return entry.id
   }
   const saveScriptHistory = useCallback((entry) => {
     const { activeProject: ap, history: hist } = saveCtxRef.current
@@ -405,23 +458,19 @@ export default function App() {
   }
 
   const exportHistory = () => {
-    const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
+    // The sidecar streams the full history (with image/video bytes rehydrated).
     const a = document.createElement('a')
-    a.href = url
+    a.href = HISTORY_EXPORT_URL
     a.download = `prompt-enhancer-history-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
-    URL.revokeObjectURL(url)
   }
   const importHistory = async (file) => {
     try {
-      const text = await file.text()
-      const entries = JSON.parse(text)
+      const entries = JSON.parse(await file.text())
+      if (!Array.isArray(entries)) return
+      await importEntries(entries)
       const names = new Set(projects)
-      for (const entry of entries) {
-        await addHistoryEntry(entry)
-        if (entry.project) names.add(entry.project)
-      }
+      for (const entry of entries) if (entry && entry.project) names.add(entry.project)
       setProjects([...names].sort((a, b) => a.localeCompare(b)))
       refreshHistory()
     } catch {}
@@ -653,7 +702,14 @@ export default function App() {
     }
   }
 
-  const restore = (h) => {
+  const restore = async (hMeta) => {
+    if (restoringId) return
+    // History rows carry no image bytes — pull the full entry (blob fields
+    // rehydrated) so the image panels, ComfyUI copy and ZIP export work.
+    let h = hMeta
+    setRestoringId(hMeta.id)
+    try { h = await getHistoryEntry(hMeta.id, { inline: true }) || hMeta } catch { /* offline → settings-only restore */ }
+    finally { setRestoringId(null) }
     // Continue working in the same project the restored generation belongs to.
     if (h.project) { ensureProject(h.project); setActiveProject(h.project) }
     if (h.type === 'scriptwriter') {
@@ -702,6 +758,110 @@ export default function App() {
     setH3RatioId(ratioPreset?.id || '')
     setHistoryOpen(false)
   }
+
+  // Loads a queue item's snapshot into the live workspace — the "inputs" half
+  // of restore() (target/scene/images/style/…), without restore()'s output,
+  // caption, project or history-panel side effects, since a queued item hasn't
+  // been run yet and hasn't chosen a project. Uses plain setters, never
+  // switchTarget()/switchMode() (those clear image state as a side effect,
+  // which would erase the very images just being loaded here).
+  const applyQueueItemToWorkspace = (snap) => {
+    setTarget(snap.target); setOutputCount(snap.outputCount)
+    if (snap.model) { setWriterModel(snap.model); setWriterManual(snap.model) }
+    if (snap.vision) { setVisionModel(snap.vision); setVisionManual(snap.vision) }
+    setDuration(snap.duration); setStyle(snap.style); setCreativity(snap.creativity); setFrameMode(snap.frameMode)
+    setScene(snap.scene || ''); setDialogue(snap.dialogue || ''); setDelivery(snap.delivery || '')
+    setNegative(snap.negative || '')
+    const imgFrom = (v) => (v && typeof v === 'object' && v.base64)
+      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName, hash: v.hash || imageHash(v.base64) }
+      : null
+    setFirstImg(imgFrom(snap.firstImg))
+    setMidImg(imgFrom(snap.midImg))
+    setLastImg(imgFrom(snap.lastImg))
+    setRefImages(Array.isArray(snap.refImages)
+      ? snap.refImages.filter(im => im && typeof im === 'object' && im.base64).map(im => ({
+          id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
+          previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
+          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong', note: im.note || '',
+          hash: im.hash || imageHash(im.base64),
+        }))
+      : [])
+    setRefAudio(snap.refAudio && typeof snap.refAudio === 'object' && snap.refAudio.base64
+      ? { base64: snap.refAudio.base64, mediaType: snap.refAudio.mediaType || 'audio/mpeg', fileName: snap.refAudio.fileName }
+      : null)
+    const ratioPreset = TARGETS[snap.target]?.resolutions?.find(r => r.label === snap.ratio)
+    setH3RatioId(ratioPreset?.id || '')
+    setSoundscape(snap.soundscape || ''); setMusic(snap.music || '')
+  }
+
+  // Captures the current compose panel exactly like a fresh generation would,
+  // but as a pending queue item instead of running it now. Same validity gates
+  // as enhance()'s early returns, reusing the same buildSnapshot() shape (no
+  // caption yet — frameDescription is null, vision hasn't run).
+  const addToQueue = () => {
+    const hasImg = t.type === 'image' ? !!firstImg
+      : frameMode === 'firstlast' ? (firstImg && lastImg)
+      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
+      : frameMode === 'last' ? !!firstImg
+      : frameMode === 'ref' ? refImages.length > 0
+      : !!firstImg
+    const canGen = t.type === 'image' ? (scene.trim() || firstImg)
+      : frameMode === 'firstlast' ? (firstImg && lastImg)
+      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
+      : frameMode === 'last' ? !!firstImg
+      : frameMode === 'ref' ? refImages.length > 0
+      : (scene.trim() || firstImg)
+    if (!canGen) return
+    if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
+    if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
+    const snapshot = buildSnapshot(null, hasImg, outputCount)
+    const item = { id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, snapshot }
+    addQueueItem(item).then(refreshQueue).catch(() => {})
+  }
+
+  // Runs one queue item: loads its snapshot into the workspace, runs the real
+  // enhance() pipeline (bypassing admin-mode's pause), and on success removes
+  // it from the queue — its result now lives in History like any other
+  // generation. On failure it stays queued with an error, retryable via ▶ Run.
+  const runQueueItem = async (id) => {
+    setQueueRunningId(id)
+    await updateQueueItem(id, { status: 'running' }).catch(() => {})
+    refreshQueue()
+    let outcome
+    try {
+      const full = await getQueueItem(id, { inline: true })
+      if (!full) throw new Error('queue item not found')
+      flushSync(() => applyQueueItemToWorkspace(full.snapshot))
+      outcome = await enhanceRef.current({ queue: true })
+    } catch (e) {
+      outcome = { ok: false, error: e.message }
+    }
+    if (outcome?.ok) {
+      await deleteQueueItem(id).catch(() => {})
+    } else {
+      const prevAttempts = queue.find(q => q.id === id)?.attempts || 0
+      await updateQueueItem(id, { status: 'error', error: outcome?.error || 'unknown error', attempts: prevAttempts + 1 }).catch(() => {})
+    }
+    setQueueRunningId(null)
+    refreshQueue()
+  }
+
+  // Re-reads the queue from the server on every iteration (rather than
+  // iterating a captured array) so an item removed mid-run is simply skipped
+  // on the next pass, instead of still being processed.
+  const processAllQueue = async () => {
+    if (queueBusy) return
+    setQueueBusy(true)
+    queueAbortRef.current = false
+    while (!queueAbortRef.current) {
+      const fresh = await listQueue().catch(() => [])
+      const next = fresh.find(q => q.status !== 'running')
+      if (!next) break
+      await runQueueItem(next.id)
+    }
+    setQueueBusy(false)
+  }
+  const stopProcessingQueue = () => { queueAbortRef.current = true }
 
   const sendToWriter = async () => {
     setPendingSend(false)
@@ -816,11 +976,15 @@ export default function App() {
       const roleLabel = (id) => role(id).label
       const preserveLabel = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.label || id
       const preserveMarker = (id) => MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id)?.marker || id
-      const captions = await Promise.all((s.refImages || []).map((im) => cachedVision([
+      // One vision call per reference image. Sequential against a local Ollama —
+      // its parallel slots blend concurrent multimodal requests, so two refs come
+      // back with a mixed description; cloud providers isolate requests, so fan out.
+      const refs = s.refImages || []
+      const captions = await mapWithConcurrency(refs, isCloud(cfg.base) ? refs.length : 1, (im) => cachedVision([
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
         { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
-      ], VISION_PROMPT_MINIMAX_H3_REF, stats, model)))
-      const imageBlock = (s.refImages || []).map((im, i) => {
+      ], VISION_PROMPT_MINIMAX_H3_REF, stats, model))
+      const imageBlock = refs.map((im, i) => {
         let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
         return line
@@ -883,9 +1047,11 @@ export default function App() {
     visionModel: (h.vision && models.length && models.includes(h.vision)) ? h.vision : effectiveVision,
   })
 
+  // `h` here is a history-list row — image nodes carry a blob `url`/`blobRef`, not
+  // bytes (restore/startAdapt fetch the inline entry to get those).
   const entryHasStoredImages = (h) =>
-    (Array.isArray(h.refImages) && h.refImages.some(im => im && im.base64)) ||
-    [h.firstImg, h.midImg, h.lastImg].some(im => im && typeof im === 'object' && im.base64)
+    (Array.isArray(h.refImages) && h.refImages.some(im => im && (im.url || im.blobRef || im.base64))) ||
+    [h.firstImg, h.midImg, h.lastImg].some(im => im && typeof im === 'object' && (im.url || im.blobRef || im.base64))
 
   const startAdapt = async (h) => {
     setHistoryOpen(false)
@@ -901,7 +1067,10 @@ export default function App() {
     }
     setAdaptSourceOverride({ ...base, caption: '', captioning: true })
     try {
-      const { text } = await captionForEntry(h)
+      // History rows carry no image bytes — pull the inline entry so the vision
+      // re-read has real base64 to send.
+      const full = await getHistoryEntry(h.id, { inline: true }).catch(() => h)
+      const { text } = await captionForEntry(full || h)
       setAdaptSourceOverride(prev => (prev && prev.ts === h.ts ? { ...base, caption: text } : prev))
     } catch (e) {
       setGlobalError(`Couldn't re-read the images with the Vision model "${effectiveVision}": ${e.message}`)
@@ -909,7 +1078,11 @@ export default function App() {
     }
   }
 
-  const enhance = async () => {
+  // `opts` is null for a normal interactive click; the queue passes
+  // `{ queue: true }` to skip the admin-mode pause (see runWriter). The return
+  // value ({ok:true} / {ok:false,error}) is only consumed by the queue runner —
+  // the plain onClick={enhance} handler ignores it, same as before.
+  const enhance = async (opts = null) => {
     const hasImg = t.type === 'image' ? !!firstImg
       : frameMode === 'firstlast' ? (firstImg && lastImg)
       : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
@@ -922,9 +1095,9 @@ export default function App() {
       : frameMode === 'last' ? !!firstImg
       : frameMode === 'ref' ? refImages.length > 0
       : (scene.trim() || firstImg)
-    if (!canGen) return
-    if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
-    if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
+    if (!canGen) return { ok: false, error: 'nothing to generate' }
+    if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return { ok: false, error: 'no writer model' } }
+    if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return { ok: false, error: 'no vision model' } }
     abortAllVideos()
     setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
 
@@ -946,12 +1119,12 @@ export default function App() {
       } catch (e) {
         setVisionBusy(false)
         setGlobalError(`Vision step failed (${effectiveVision}): ${e.message}`)
-        return
+        return { ok: false, error: e.message }
       }
       setVisionBusy(false)
-      await runWriter(frameDescription, stylePart, lengthPart, hasImg)
+      return await runWriter(frameDescription, stylePart, lengthPart, hasImg, opts)
     } else {
-      await runWriter(null, stylePart, lengthPart, hasImg)
+      return await runWriter(null, stylePart, lengthPart, hasImg, opts)
     }
   }
 
@@ -980,7 +1153,7 @@ export default function App() {
     }
   }
 
-  const runWriter = async (frameDescription, stylePart, lengthPart, hasImg) => {
+  const runWriter = async (frameDescription, stylePart, lengthPart, hasImg, opts = null) => {
     let userText
     if (target === 'minimax_h3') {
       const mode = frameMode === 'last' ? 'L2VA'
@@ -1038,11 +1211,11 @@ export default function App() {
 
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
 
-    if (adminMode) {
+    if (adminMode && !opts?.queue) {
       setAdminUserMsg(userText)
       pendingSnapshotRef.current = snapshot
       setPendingSend(true)
-      return
+      return { ok: false, error: 'paused for admin review' }
     }
 
     const activeSystem = systemPromptFor(t, frameMode)
@@ -1054,8 +1227,10 @@ export default function App() {
         const { text, usage } = await callOllama(effectiveWriter, userText, activeSystem, cfg, cfg.temperature)
         setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
         saveHistory(snapshot, [{ label: lbl, text }])
+        return { ok: true }
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
+        return { ok: false, error: e.message }
       }
     } else {
       const variants = buildVariants(effectiveWriter)
@@ -1073,8 +1248,14 @@ export default function App() {
       )
       const outs = await Promise.all(proms)
       saveHistory(snapshot, outs)
+      return { ok: true }
     }
   }
+
+  // Assigns enhanceRef every render (like resultsRef.current = results above),
+  // so a queue run reads the freshest enhance() closure after flushSync commits
+  // applyQueueItemToWorkspace's setters — see runQueueItem.
+  enhanceRef.current = enhance
 
   const copy = (idx) => { navigator.clipboard.writeText(results[idx].text); setCopied(idx); setTimeout(() => setCopied(null), 2000) }
   const editResult = (idx, value) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, text: value } : r))
@@ -1220,6 +1401,12 @@ export default function App() {
         </button>
       </div>
 
+      {historyDown && (
+        <div style={{ padding: '10px 28px', background: 'var(--pe-danger-bg)', borderBottom: '1px solid var(--pe-danger-line)', color: 'var(--pe-danger)', fontSize: 13.5, fontWeight: 600, position: 'sticky', top: 72, zIndex: 19 }}>
+          History-Server nicht erreichbar — Generierungen werden NICHT gespeichert. Starte ihn mit <code style={{ fontFamily: 'var(--pe-mono)' }}>npm run server</code> (oder <code style={{ fontFamily: 'var(--pe-mono)' }}>npm run dev</code>, das startet beide).
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: scriptwriterMode ? 'minmax(0,1fr)' : '360px minmax(0, 900px) minmax(420px, 760px)', gap: 28, padding: 24, alignItems: 'start', justifyContent: 'center', maxWidth: scriptwriterMode ? 1080 : 2200, margin: '0 auto' }}>
 
       {/* ================= LEFT RAIL ================= */}
@@ -1229,24 +1416,35 @@ export default function App() {
       <div style={{ marginBottom: 18 }}>
         <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Generate for</label>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {Object.values(TARGETS).map(tg => {
-            const on = target === tg.id
-            const [name, kind] = tg.label.split(' · ')
-            return (
-              <button key={tg.id} onClick={() => switchTarget(tg.id)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                  width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 8,
-                  border: '1px solid', borderColor: on ? 'var(--pe-accent-line)' : 'transparent',
-                  background: on ? 'var(--pe-accent-bg)' : 'transparent',
-                  color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)',
-                  fontSize: 15, fontWeight: on ? 600 : 500, cursor: 'pointer', transition: 'all 0.12s',
-                }}>
-                <span>{name}</span>
-                {kind && <span style={{ fontSize: 12, fontWeight: 500, color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', opacity: on ? 0.7 : 1 }}>{kind}</span>}
-              </button>
-            )
-          })}
+          {RAIL_GROUPS.map((grp, gi) => (
+            <div key={grp.label} style={{
+              display: 'flex', flexDirection: 'column', gap: 4,
+              marginTop: gi === 0 ? 0 : 12, paddingTop: gi === 0 ? 0 : 12,
+              borderTop: gi === 0 ? 'none' : '1px solid var(--pe-line-soft)',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 2px 2px' }}>{grp.label}</div>
+              {grp.ids.map(id => {
+                const tg = TARGETS[id]
+                if (!tg) return null
+                const on = target === tg.id
+                const [name, kind] = tg.label.split(' · ')
+                return (
+                  <button key={tg.id} onClick={() => switchTarget(tg.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                      width: '100%', textAlign: 'left', padding: '11px 13px', borderRadius: 8,
+                      border: '1px solid', borderColor: on ? 'var(--pe-accent-line)' : 'transparent',
+                      background: on ? 'var(--pe-accent-bg)' : 'transparent',
+                      color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)',
+                      fontSize: 15, fontWeight: on ? 600 : 500, cursor: 'pointer', transition: 'all 0.12s',
+                    }}>
+                    <span>{name}</span>
+                    {kind && <span style={{ fontSize: 12, fontWeight: 500, color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', opacity: on ? 0.7 : 1 }}>{kind}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -1614,9 +1812,16 @@ export default function App() {
       )}
 
       {/* Generate button */}
-      <button onClick={enhance} disabled={genBtnDisabled} style={genBtnStyle}>
-        {buttonLabel}
-      </button>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
+        <button onClick={enhance} disabled={genBtnDisabled} style={{ ...genBtnStyle, flex: 1 }}>
+          {buttonLabel}
+        </button>
+        <button onClick={addToQueue} disabled={!canGenerate || queueBusy}
+          title="Save this generation for later instead of running it now"
+          style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: (!canGenerate || queueBusy) ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 14, fontWeight: 600, cursor: (!canGenerate || queueBusy) ? 'not-allowed' : 'pointer' }}>
+          + Add to Queue
+        </button>
+      </div>
 
       {/* Global error */}
       {globalError && (
@@ -1999,7 +2204,7 @@ export default function App() {
                       <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(h.ts).toLocaleString()}</span>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         {entryProjectSelect(h)}
-                        <button onClick={() => restore(h)} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore</button>
+                        <button onClick={() => restore(h)} disabled={!!restoringId} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: restoringId ? 'wait' : 'pointer', opacity: restoringId && restoringId !== h.id ? 0.5 : 1 }}>{restoringId === h.id ? 'Restoring…' : 'Restore'}</button>
                         <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                       </div>
                     </div>
@@ -2019,8 +2224,8 @@ export default function App() {
                     {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
                     {h.refImages?.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
-                        {h.refImages.map((im, ii) => im.base64
-                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`}
+                        {h.refImages.map((im, ii) => im.url
+                          ? <img key={ii} src={im.url} loading="lazy" decoding="async"
                               title={`${im.note ? im.note + ' — ' : ''}${im.caption || im.fileName}`}
                               style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
                           : <span key={ii} title={im.caption || ''}
@@ -2033,13 +2238,13 @@ export default function App() {
                     {(() => {
                       const tiles = (h.framePrompts || []).flatMap((fp, si) =>
                         ['first', 'mid', 'last']
-                          .filter(fk => fp?.frames?.[fk]?.image?.b64)
+                          .filter(fk => fp?.frames?.[fk]?.image?.url)
                           .map(fk => ({ im: fp.frames[fk].image, si, fk })))
                       if (!tiles.length) return null
                       return (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
                           {tiles.map((t, ti) => (
-                            <img key={ti} src={`data:${t.im.mediaType || 'image/jpeg'};base64,${t.im.b64}`}
+                            <img key={ti} src={t.im.url} loading="lazy" decoding="async"
                               title={`Shot ${(h.directorsCut?.shots?.[t.si]?.shot_number) ?? t.si + 1} · ${t.fk} frame`}
                               style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--pe-line)' }} />
                           ))}
@@ -2081,7 +2286,7 @@ export default function App() {
                           style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
                         >⇄ Adapt</button>
                       )}
-                      <button onClick={() => restore(h)} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Restore settings</button>
+                      <button onClick={() => restore(h)} disabled={!!restoringId} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: restoringId ? 'wait' : 'pointer', opacity: restoringId && restoringId !== h.id ? 0.5 : 1 }}>{restoringId === h.id ? 'Restoring…' : 'Restore settings'}</button>
                       <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
                     </div>
                   </div>
@@ -2097,20 +2302,20 @@ export default function App() {
                   {(h.firstImg || h.midImg || h.lastImg) && (
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
                       {[h.firstImg, h.midImg, h.lastImg].filter(Boolean).map((im, ii) =>
-                        typeof im === 'object' && im.base64
-                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={im.fileName}
+                        typeof im === 'object' && im.url
+                          ? <img key={ii} src={im.url} loading="lazy" decoding="async" alt={im.fileName} title={im.fileName}
                               style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{im}</span>
+                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{typeof im === 'string' ? im : im.fileName}</span>
                       )}
                     </div>
                   )}
                   {h.refImages && h.refImages.length > 0 && (
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
                       {h.refImages.map((im, ii) =>
-                        typeof im === 'object' && im.base64
-                          ? <img key={ii} src={`data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`} alt={im.fileName} title={`${im.fileName} (${im.role})`}
+                        typeof im === 'object' && im.url
+                          ? <img key={ii} src={im.url} loading="lazy" decoding="async" alt={im.fileName} title={`${im.fileName} (${im.role})`}
                               style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{im}</span>
+                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{typeof im === 'string' ? im : im.fileName}</span>
                       )}
                     </div>
                   )}
@@ -2130,18 +2335,18 @@ export default function App() {
                         <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)' }}>{o.text}</div>
                         {Array.isArray(o.images) && o.images.length > 0 && (
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                            {o.images.map((img, k) => img.b64 && (
-                              <img key={k} src={`data:${img.mediaType || 'image/png'};base64,${img.b64}`} alt={`render ${k + 1}`} title="🎨 Grok render"
+                            {o.images.map((img, k) => img.url && (
+                              <img key={k} src={img.url} loading="lazy" decoding="async" alt={`render ${k + 1}`} title="🎨 Grok render"
                                 style={{ width: 54, height: 54, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
                             ))}
                           </div>
                         )}
-                        {o.video && (o.video.url || o.video.b64) && (
+                        {o.video && o.video.url && (
                           <div style={{ marginTop: 6 }}>
-                            <a href={o.video.b64 ? `data:${o.video.mediaType || 'video/mp4'};base64,${o.video.b64}` : o.video.url}
-                               target="_blank" rel="noreferrer" {...(o.video.b64 ? { download: 'grok-video.mp4' } : {})}
+                            <a href={o.video.url}
+                               target="_blank" rel="noreferrer" {...(o.video.blobRef ? { download: 'grok-video.mp4' } : {})}
                                style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', textDecoration: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px' }}>
-                              🎬 video{o.video.duration ? ` · ${o.video.duration}s` : ''}{o.video.b64 ? '' : ' ↗ (link may be expired)'}
+                              🎬 video{o.video.duration ? ` · ${o.video.duration}s` : ''}{o.video.blobRef ? '' : ' ↗ (link may be expired)'}
                             </a>
                           </div>
                         )}
@@ -2154,6 +2359,22 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Queue — scriptwriter has its own separate pipeline, no queue for it */}
+      {!scriptwriterMode && (
+        <QueuePanel
+          queue={queue}
+          open={queueOpen}
+          onToggleOpen={() => setQueueOpen(v => !v)}
+          busy={queueBusy}
+          runningId={queueRunningId}
+          onRun={runQueueItem}
+          onRemove={id => deleteQueueItem(id).then(refreshQueue)}
+          onProcessAll={processAllQueue}
+          onStop={stopProcessingQueue}
+          onClear={() => dbClearQueue().then(refreshQueue)}
+        />
+      )}
 
       </div>{/* ================= END RIGHT · OUTPUT ================= */}
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash, shrinkToJpeg } from '../utils'
-import { hasDragImage, takeDragImage } from '../imageDrag'
+import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
 
 export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
   const [image, setImage]           = useState(null)
@@ -65,7 +65,7 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
   const onFileChange = (e) => loadFile(e.target.files[0])
   const onDrop = (e) => {
     e.preventDefault(); setDragOver(false)
-    if (hasDragImage(e.dataTransfer)) { const d = takeDragImage(); if (d) loadFromData(d); return }
+    if (hasDragImage(e.dataTransfer)) { const d = takeDragImage(); if (d) resolveDragImage(d).then(r => r && loadFromData(r)).catch(() => {}); return }
     const f = e.dataTransfer.files[0]
     if (f?.type.startsWith('image/')) loadFile(f)
   }

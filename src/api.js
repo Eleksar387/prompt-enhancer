@@ -36,7 +36,7 @@ function toOpenAIContent(userContent) {
 export const isAnthropic = (base) => (base || '').includes('anthropic.com')
 export const isGrok = (base) => (base || '').includes('api.x.ai')
 // Any hosted provider — as opposed to a local/self-hosted Ollama-compatible server.
-const isCloud = (base) => isAnthropic(base) || isGrok(base)
+export const isCloud = (base) => isAnthropic(base) || isGrok(base)
 
 export function authHeaders(cfg) {
   if (!cfg.apiKey) return {}
