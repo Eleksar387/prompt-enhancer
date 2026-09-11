@@ -530,6 +530,17 @@ export default function App() {
     return firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' }] : []
   }
 
+  // A short filename-safe slug from the scene text, standing in for a title
+  // this pipeline has no dedicated field for (unlike the Scriptwriter's
+  // script.title). Empty when there's no scene text to draw one from (e.g.
+  // MiniMax H3 ref mode, or a pure vision-only run) — the filename then just
+  // omits the title component rather than carrying a placeholder.
+  const titleSlug = (text, maxWords = 8) => String(text || '').trim().toLowerCase()
+    .replace(/[^a-z0-9\s-]+/g, '').split(/\s+/).filter(Boolean).slice(0, maxWords).join('-').slice(0, 60)
+  // `target` ids are already short and mostly clean; only minimax_h3's suffix
+  // reads as an internal detail rather than the model name people know it by.
+  const modelSlug = (id) => id === 'minimax_h3' ? 'minimax' : id.replace(/_/g, '-')
+
   const exportBundle = async () => {
     const zip = new JSZip()
     for (const img of currentImages()) zip.file(img.name, img.base64, { base64: true })
@@ -544,7 +555,8 @@ export default function App() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `prompt-enhancer-${target}-${new Date().toISOString().slice(0, 10)}.zip`
+    const title = titleSlug(scene)
+    a.download = `${title ? title + '-' : ''}${t.type}-${modelSlug(target)}-${new Date().toISOString().slice(0, 10)}.zip`
     a.click()
     URL.revokeObjectURL(url)
   }

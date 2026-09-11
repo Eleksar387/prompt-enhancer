@@ -1921,7 +1921,11 @@ export default function ScriptwriterPanel({
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${fileSafe(script?.title || 'scriptwriter')}-${isH3now ? 'h3' : 'ltx'}-${new Date().toISOString().slice(0, 10)}.zip`
+      // <Title>-video-<model>-<date> — scriptwriter output is always video
+      // (minimax_h3 / ltx are both TARGETS[...].type === 'video'), even though
+      // the same zip may also carry per-frame image prompts as a bonus.
+      const modelSlug = isH3now ? 'minimax' : 'ltx'
+      a.download = `${fileSafe(script?.title || 'scriptwriter')}-video-${modelSlug}-${new Date().toISOString().slice(0, 10)}.zip`
       a.click()
       URL.revokeObjectURL(url)
     } finally {
