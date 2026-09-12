@@ -27,18 +27,19 @@ function QueueCard({ item, busy, runningId, onRun, onRemove }) {
     </div>
   )
 
-  // Full Auto Scriptwriter job — its snapshot is { refImages, genre, hint },
+  // Full Auto Scriptwriter job — its snapshot is { refImages, voiceRefs, genre, mature, hint },
   // nothing like the main-pipeline shape (no target/model/scene).
   if (item.kind === 'scriptwriter-auto') {
     const s = item.snapshot || {}
     const genreLabel = !s.genre || s.genre === 'auto' ? 'genre: AI picks' : s.genre
     const refCount = Array.isArray(s.refImages) ? s.refImages.length : 0
+    const voiceCount = Array.isArray(s.voiceRefs) ? s.voiceRefs.length : 0
     return (
       <div style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
         {header}
         <div style={{ fontSize: 13.5, color: status.color, fontWeight: 600, marginBottom: 4 }}>{status.text}</div>
         <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 4 }}>
-          🎬 Full Auto Film · {genreLabel} · {refCount} reference image{refCount === 1 ? '' : 's'}
+          🎬 Full Auto Film · {genreLabel}{s.mature ? ' · NSFW' : ''} · {refCount} reference image{refCount === 1 ? '' : 's'}{voiceCount ? ` · ${voiceCount} voice reference${voiceCount === 1 ? '' : 's'}` : ''}
         </div>
         {s.hint && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>“{s.hint}”</div>}
         {item.status === 'error' && item.error && (

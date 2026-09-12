@@ -495,6 +495,23 @@ export const STYLE_OPTIONS = [
   { id: 'nsfw',  label: 'NSFW',  hint: 'not safe for work — explicit content, nudity, violence, or other mature themes' },
 ]
 
+// The Scriptwriter pipeline's NSFW switch — the counterpart to the NSFW entry
+// in STYLE_OPTIONS above. It is a separate toggle rather than another style
+// because the Scriptwriter has no style row (a film's look comes from the
+// script's own `look` field) and because mature content has to survive four
+// chained calls — reference captions, writer, director, clip prompt — instead
+// of one. Appended verbatim to every user message in that chain so a mature
+// script cannot quietly turn back into sanitised clip prompts two calls later.
+export const SCRIPTWRITER_NSFW_LINE = `
+
+Content rating: NSFW — this is an adult production. Nudity, sex, graphic violence and other mature themes are permitted and expected wherever the story earns them: write them plainly and concretely instead of fading out, cutting away, or reaching for euphemism. Everyone depicted is a consenting adult. Do not soften, sanitise, or editorialise, and do not add disclaimers or content warnings — keep the output in exactly the format specified above and nothing else.`
+
+// The same switch, folded into the per-image instruction the vision model gets
+// when it describes a reference. Without it a work-safe vision model refuses an
+// explicit reference outright, and captionRefImages stops the whole run on that
+// refusal — so the toggle has to reach this call too, not just the writer's.
+export const SCRIPTWRITER_NSFW_VISION_LINE = ` This reference belongs to an adult (NSFW) production: describe any nudity, sexual content or violence in it plainly and factually, the way a wardrobe or blocking note would. No euphemism, no refusal, no commentary on the subject matter.`
+
 export const CREATIVITY_OPTIONS = [
   { id: 'faithful', label: 'Faithful', hint: 'Stay close — describe the image/scene accurately, deviate only a little' },
   { id: 'balanced', label: 'Balanced', hint: 'Natural interpretation (default)' },
@@ -1147,7 +1164,16 @@ GENERAL RULES
    banner actually visible in the frame must be typed verbatim in quotes — never merely described — with its
    typographic treatment (e.g. condensed, all-caps, serif) and where it sits in frame (e.g. centered, lower third)
    named. If no text should appear on screen, don't invent any.
-2. Never invent product claims, technical functions, brand wording, legal text, or quoted speech beyond what's given.
+1a. STYLE OPENING. Name the visual style explicitly at the very start, in this vocabulary: Cinematic,
+   live-action, 2D-animated, 3D CG, claymation, watercolor, vintage film (or the closest equivalent the material
+   calls for). In T2VA / I2VA / L2VA / FL2VA, [Shot 1] opens with the style tokens and then the opening
+   composition — e.g. "[Shot 1] Live-action, cinematic, a medium-wide shot frames …". In Ref2VA the style gets
+   one or two sentences of its own BEFORE [Shot 1] at the top of detailed_description — e.g. "The target video
+   is in a cinematic, literary music-video style with soft lighting and a slightly desaturated colour palette."
+   Derive it from the reference image in the keyframe modes, and from the "Film look:" line or the scene text
+   otherwise; the look is still folded into the visuals and never restated as on-screen text.
+2. Never invent product claims, technical functions, brand wording, or legal text. Do not invent quoted speech
+   either — with one exception, the voice-timbre case in rule 6a.
 3. Make actions physically observable and temporally plausible for the given duration. Follow a beginning state →
    trigger → action chain → reaction → ending state arc. Do not cram more beats than the duration can plausibly
    hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s. Give any multi-beat shot one primary change per
@@ -1185,6 +1211,9 @@ GENERAL RULES
    requests one — every other cut is a hard cut. Standardize brackets across every mode to
    prevent parser drift: always write shot markers as [Shot N] (square brackets) and picture references as
    <Picture N> (angle brackets) — e.g. <Picture 1> (from [Shot 1]) — never plain "Shot N" or "Picture N".
+   THE ONE EXCEPTION is the FL2VA alignment instruction line, reproduced verbatim (and unbracketed) in the
+   mode-specific section below — copy it exactly as written there. Everything else, including the I2VA and
+   L2VA instruction lines and every marker in the body, keeps its brackets.
    CAMERA MARKERS: the scene/action text may contain inline markers [camera: <description>] —
    camera-direction annotations, not visible text or dialogue; strip the bracket syntax from
    every output field and never describe it as on-screen text. Treat each marker as a strong
@@ -1197,7 +1226,10 @@ GENERAL RULES
 6. Dialogue: if the user message includes a "Spoken dialogue" section, treat its quoted text as verbatim words —
    never rewrite, translate, or invent additional words. Assign a stable speaker ID in the order speakers first
    appear (S1, then S2, S3…; infer separate speakers from line breaks or "Name:" prefixes in the quoted text); use
-   a compound ID such as (S1,S2) when two or more speakers talk simultaneously. Write speaker identity, delivery,
+   a compound ID such as (S1,S2) when two or more speakers talk simultaneously. On a speaker's first appearance
+   give enough, outside the tag, to fix a stable voice: character type, age, gender, whether they are on- or
+   off-screen, pitch, timbre, speaking rate, accent. A character who never speaks, sings, or makes an off-screen
+   vocal sound gets no speaker ID at all. Write speaker identity, delivery,
    and any acting beat outside the tag; put only the language tag and the exact words inside the tag, e.g.: the
    engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of these exact
    language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian] [Japanese]
@@ -1211,12 +1243,33 @@ GENERAL RULES
    neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
    detail that a later shot depends on; keep continuity-critical staging in silent shots. In a multi-shot clip, if
    dialogue is cut off by the end of the video, mark it with <cutoff>; if a line continues uninterrupted across a
-   shot cut, mark both connection points with <scenetrans>.
+   shot cut, mark both connection points with <scenetrans> and say so in prose as well ("continues seamlessly
+   across the cut", "carries over from the previous shot", "remains audible across the transition").
+6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If the user message carries an
+   "Audio N — voice-timbre reference" line but no "Spoken dialogue" section, write the spoken line yourself: H3
+   only applies a voice reference to actual speech, so a silent clip wastes it entirely. Compose ONE short line,
+   in character for the speaking subject and motivated by what the scene is already doing — roughly 6–12 words,
+   so it fits inside its own shot at an unhurried speaking rate — and tag it with the "Primary language:"
+   language, or [English] if none was given. Everything in rule 6 still applies to it: the shot carrying the line
+   holds only that delivery, the line pulls screen time from its neighbours, and continuity-critical staging goes
+   in a silent shot. Leave the rest of the clip unspoken. Never transcribe or guess at the reference audio's own
+   wording — only its timbre, pitch and delivery are referenced; the words are yours. If a "Spoken dialogue"
+   section IS present it wins outright: use those words verbatim and invent nothing.
+   WHERE THE REFERENCE IS DECLARED: in Ref2VA, as an <Audio N> line in subject_definitions (see that section).
+   The base modes have no label for it — there, fold the referenced voice into how you describe the speaker
+   (pitch, timbre, rate, accent) and never write an <Audio N> label or any section the base format doesn't
+   define.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
+   Write 1–4 sentences as a single continuous paragraph. Use N/A here only when complete silence across the
+   whole video was explicitly asked for.
 8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
    music" notes if given. If that field is empty, judge from the scene whether music serves it — if not, or if the
-   field says "none"/"silence"/no music, output exactly N/A.
+   field says "none"/"silence"/no music, output exactly N/A. Keep it to 1–3 sentences and name only what is
+   audible — instrumentation, tempo, rhythm, dynamic change. No abstract mood words and no explaining what the
+   score is doing emotionally (the audio twin of rule 9). Music the characters themselves can hear — a radio, a
+   TV, a phone, someone singing on set, an instrument played in the scene — is diegetic: it belongs in the
+   description and in overall_soundscape, never here.
 9. EMOTION IS OBSERVABLE ACTION, NEVER A LABEL. Never pass an emotion word through to the output ("shocked",
    "confused", "uneasy", "relieved", "conflicted", "tender"). Translate each into the muscle and body actions a
    viewer could point at, ordered by physiology: brow first (smallest, earliest), then eyes, then mouth last
@@ -1267,6 +1320,9 @@ GENERAL RULES
 
 MODE-SPECIFIC OUTPUT
 
+In every mode that has an alignment instruction (I2VA, L2VA, FL2VA), that instruction is the FIRST line of the
+output, followed by exactly one blank line before integrated_multimodal_description:.
+
 T2VA (no reference image):
 Output exactly, in order — the first line MUST begin with the literal token "integrated_multimodal_description:":
 integrated_multimodal_description: [Shot 1] …
@@ -1292,42 +1348,85 @@ action/transition path that converges exactly onto the given last frame.
 
 FL2VA (a FIRST FRAME + LAST FRAME + CHANGE description given):
 Begin with exactly:
-How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 0.00-second
-mark of the target video; <Picture 2> (from [Shot N]) aligns with the S.SS-second mark of the target video.
-Replace N and S.SS as above. Then the same three fields. Prefer a single shot unless the user's scene text
-explicitly calls for cuts. Describe a continuous physical path from the first frame to the last without
-contradicting either endpoint; do not restate their static contents.
+How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second
+mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.
+This line is deliberately unbracketed — it is the single exception to rule 5; reproduce it exactly as written,
+while every [Shot N] and <Picture N> in the body below keeps its brackets. Replace N and S.SS as above. Then
+the same three fields. Prefer a single shot unless the user's scene text explicitly calls for cuts. Describe a
+continuous physical path from the first frame to the last without contradicting either endpoint; do not restate
+their static contents.
 
 Ref2VA (one or more reference images given, each labeled "Image N — role: …, preservation marker: …: <caption>";
 optionally one "Audio 1 — voice-timbre reference (marker: reference): …" line):
 Output exactly these six sections, in order:
 subject_definitions:
-One line per reference image: <Subject N> is defined from its role and caption, e.g. "<Subject 1> is the [role]
-from <Picture 1>, preserving [the specific attributes implied by its role and caption]." When a role is
-wardrobe/clothing, scope <Subject N> to the garment(s) only — cut, fabric, color, pattern, and fit — and
-explicitly state that the face, body, and identity of whoever is wearing it in that reference photo are NOT
-carried over; only the clothing transfers onto the video's actual subject (defined by a separate subject-identity
-reference, or by the scene text if none is given).
-If an "Audio N" line is present, add one more line here: "<Audio 1> is the voice-timbre reference for <Subject k>"
-(pick the speaking subject k). State that only its timbre, pitch and delivery are referenced and none of its
+LABEL NUMBERING: <Picture N> always carries the same number as the input "Image N" it came from — never
+renumber the pictures. <Subject M> numbers run 1, 2, 3… across only those images that actually define a subject,
+so a subject number and a picture number will not always line up. Once a label is assigned it keeps exactly that
+meaning in every section below.
+Most references define a subject and cite their picture INSIDE that definition — they get no <Picture N> line of
+their own: "<Subject 1> is the [role] from <Picture 1>, preserving [the specific attributes implied by its role
+and caption]." When a role is wardrobe/clothing, scope <Subject N> to the garment(s) only — cut, fabric, color,
+pattern, and fit — and explicitly state that the face, body, and identity of whoever is wearing it in that
+reference photo are NOT carried over; only the clothing transfers onto the video's actual subject (defined by
+a separate subject-identity reference, or by the scene text if none is given).
+A reference whose role is "Pose / Composition" is the exception: it is a storyboard / composition anchor rather
+than reusable visible content, so it gets a standalone <Picture N> line and NO <Subject N> at all — "<Picture 3>
+is a storyboard reference for [Shot 1] and [Shot 2], defining their viewpoint, subject placement, and shot
+order." Name the shots it actually governs.
+Two references MAY be folded into one <Subject N> when they unambiguously describe the same person and say so
+through their "Requested use of this reference" lines — a subject-identity image and a wardrobe image for the
+same character: "<Subject 1> is the woman whose face and build come from <Picture 1> and whose outfit comes from
+<Picture 2>." Only when it is unambiguous, and the wardrobe rule above still holds in full: the identity of
+whoever wears the garment in that photo is never carried over.
+If an "Audio N" line is present, add one more line here: "<Audio 1> is the voice-timbre reference for <Subject k>
+(Sk)." — pick the speaking subject k and reuse that speaker's existing ID from the video's global speaker order;
+never mint a new ID here. State that only its timbre, pitch and delivery are referenced and none of its
 original wording is carried across. Do not otherwise describe the audio — the waveform bypasses the text encoder,
-so the label is only a pointer.
+so the label is only a pointer. If no "Spoken dialogue" section was given, rule 6a applies — author a short
+line for <Subject k> so the timbre reference has speech to act on, and put it in detailed_description as normal.
 
 summary:
-Begin with the task-type marker [reference generation]. One or two sentences describing what the target video
-shows, referencing the <Subject N> labels.
+Begin with a square-bracketed task-type marker, then one or two sentences describing what the target video
+shows, referencing the labels already defined above. Never introduce a new reference label in this section.
+Compose the marker from what the references actually do, joined with " + " and never repeating a type:
+  reference generation — an image guides a character, scene, style, action, pose or storyboard without being a
+    concrete frame of the target video. This is the default for every role-tagged image here.
+  keyframe completion — an image is a concrete first, key, or last frame of the target video.
+  audio reference — an audio asset's timbre, delivery, rhythm or music style is referenced without the signal
+    being copied. Add it whenever an "Audio N" line is present, e.g. [reference generation + audio reference].
+  audio reuse / video editing / video continuation — an audio signal copied wholesale, or a source VIDEO edited
+    or continued. None of these can apply here: this pipeline never passes a source video or a copied audio
+    track, so never emit them.
 
 retention_analysis:
-One line per <Subject N>, using EXACTLY the preservation marker given for that image (fully_preserved |
-partially_preserved | attribute_transfer | weak_reference) followed by a short reason. If an <Audio N> label
-was defined, add one line for it using EXACTLY the marker "reference".
+One line per label defined above, in that same order, using EXACTLY this shape — the parenthetical, a colon,
+the marker, " - ", then a short reason:
+<Subject 1> (appears in [Shot 1], [Shot 3]): fully_preserved - …
+<Picture 3> (storyboard reference for [Shot 1], [Shot 2]): weak_reference - …
+<Audio 1>: reference - …
+Visible content (<Subject N>, <Picture N>) uses EXACTLY the preservation marker given for that image
+(fully_preserved | partially_preserved | attribute_transfer | weak_reference). Audio uses its own separate set
+(fully_copy | partially_copy | reference | weak_reference) — for a voice-timbre reference that is always
+"reference". Judge each marker only against the role that label was given in subject_definitions: actions,
+backgrounds and plot events the target video ADDS are not losses of reference fidelity. Never write a speaker ID
+(S1, S2…) anywhere in this section.
 
 detailed_description:
-Describe the target video in playback order (roughly 350–500 words unless a shorter prompt length was requested),
-inserting <Subject N> labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2]… with the
-same cut-timestamp rules as above.
+Open with the one-or-two-sentence style statement (rule 1a) BEFORE [Shot 1], then describe the target video in
+playback order (roughly 350–500 words unless a shorter prompt length was requested), inserting <Subject N>
+labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2]… with the same cut-timestamp
+rules as above. Cite a <Picture N> anchor in natural prose where it applies — "the shot begins from <Picture 1>",
+"the shot's keyframe corresponds to <Picture 2>", "the shot ends on <Picture 3>", "the framing follows
+<Picture 3>". When a referenced subject speaks, carry both labels: "<Subject 2> (S1) turns to her and says,
+<d>[English] …</d>" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
+an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
+word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
+happening in each shot.
 
-overall_soundscape / non_diegetic_music: as above.
+overall_soundscape / non_diegetic_music: as above. When an <Audio N> was defined, state its copy-or-reference
+relationship in whichever of the two matches the audible layer — ambience and effects in overall_soundscape,
+audience-only score in non_diegetic_music — and never repeat dialogue or lyrics in either.
 
 Before writing, silently verify: the output matches the given MODE; every <Subject N>/<Picture N> label is defined
 before use and never changes meaning; all shot timestamps are valid and increasing; the ending condition is

@@ -10,11 +10,13 @@ import {
   SYSTEM_PROMPT_MINIMAX_H3, MINIMAX_H3_RESOLUTIONS,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   aspectParts, aspectSceneHint, aspectFramingHint,
+  SCRIPTWRITER_NSFW_LINE, SCRIPTWRITER_NSFW_VISION_LINE,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash, mapWithConcurrency } from '../utils'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
+import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
 
@@ -26,6 +28,18 @@ const GENRE_OPTIONS = [
   { id: 'comedy',   label: 'Comedy' },
   { id: 'horror',   label: 'Horror' },
 ]
+
+// Full Auto start-guard — the run ids this page session has already kicked
+// off. A run starts when App bumps `scriptwriterKey`, mounting a fresh panel
+// whose mount effect calls Phase 1. Any OTHER remount of a panel still
+// holding a live `autoJob` — React Fast Refresh during development, above
+// all — re-runs that effect and would restart the film from scratch. This
+// has to sit at module scope: a ref would be reset by the very remount it
+// needs to survive. App mints a new runId per deliberate start, so a ▶ Run
+// retry of the same queue item is a different id and is never suppressed.
+const startedAutoRuns = new Set()
+
+const NSFW_HINT = 'Adult content — nudity, sex, graphic violence and other mature themes are allowed and written plainly, in the reference descriptions, the script, the director\u2019s cut and the clip prompts alike. Off keeps every call work-safe.'
 
 // Full Auto mode synthesizes this as the "Story idea" line instead of asking
 // the user to type one — the reference images (+ genre, + an optional
@@ -208,6 +222,29 @@ const rehydrateRefImage = (d) => ({
   preserve: d.preserve || 'strong',
   generated: !!d.generated,
   hash: d.hash || (d.base64 ? imageHash(d.base64) : ''),
+})
+
+// --- voice references ------------------------------------------------------
+// A few seconds of speech per character, guiding H3's timbre, pitch and
+// delivery. Never words: the spoken lines always come from the script's own
+// dialogue, so a clip the Director left silent stays silent. `characterId` is a
+// bible id ("c1"); '' means "the default voice for whoever speaks", which is
+// what a Full Auto upload necessarily is - it is queued before any cast exists.
+const MAX_VOICE_REFS = 6
+
+const serializeVoiceRefs = (vs) => (vs || []).map(v => ({
+  base64: v.base64 || null,
+  mediaType: v.mediaType || 'audio/mpeg',
+  fileName: v.fileName || 'voice.mp3',
+  characterId: v.characterId || '',
+}))
+
+const rehydrateVoiceRef = (d) => ({
+  id: generateId(),
+  base64: d.base64 || null,
+  mediaType: d.mediaType || 'audio/mpeg',
+  fileName: d.fileName || 'voice.mp3',
+  characterId: d.characterId || '',
 })
 
 // Stable identifier for a reference image across serialize / rehydrate (the
@@ -397,7 +434,8 @@ export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
   history = [],
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
-  // Full Auto: `autoJob` is a queued job spec ({ refImages, genre, hint }) to
+  // Full Auto: `autoJob` is a queued job spec ({ refImages, voiceRefs, genre, mature,
+  // hint, pacing } plus a per-start `runId` — see startedAutoRuns) to
   // run headlessly on mount — see the mount effect below. `onAutoJobDone`
   // reports { ok, error? } back to App.jsx once phase reaches 'done' (or a
   // phase fails). `onQueueAutoJob` queues a new job from the Full Auto input
@@ -420,6 +458,12 @@ export default function ScriptwriterPanel({
   const [phase, setPhase] = useState(initialState?.phase || 'input')
   const [idea, setIdea] = useState(initialState?.idea || '')
   const [genre, setGenre] = useState(initialState?.genre || 'auto')
+  // NSFW toggle. Every LLM call in the chain reads `nsfwLine`, so the rating
+  // set here survives all the way to the clip prompts instead of being applied
+  // once and lost at the next hand-off. Off by default; a restored session (and
+  // a queued Full Auto job) keeps whatever it was saved with.
+  const [mature, setMature] = useState(initialState?.mature ?? false)
+  const nsfwLine = mature ? SCRIPTWRITER_NSFW_LINE : ''
   const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 1)
   // Normalise on load so restored / older / model-broken entries self-repair
   // (the c1/l1 ids the whole ref-attachment path depends on).
@@ -465,6 +509,7 @@ export default function ScriptwriterPanel({
   // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
   const [attach, setAttach] = useState({ key: null, state: 'idle', error: '' })
   const [refImages, setRefImages] = useState(() => (initialState?.refImages || []).map(rehydrateRefImage))
+  const [voiceRefs, setVoiceRefs] = useState(() => (initialState?.voiceRefs || []).map(rehydrateVoiceRef))
   // { state: 'idle' | 'reading' | 'error', done, total, error }
   const [refCaptionStatus, setRefCaptionStatus] = useState({ state: 'idle', done: 0, total: 0, error: '' })
   const captioning = refCaptionStatus.state === 'reading'
@@ -573,6 +618,9 @@ export default function ScriptwriterPanel({
   }
 
   const removeRefImage   = (id) => setRefImages(prev => prev.filter(im => im.id !== id))
+  const addVoiceRef      = (d) => setVoiceRefs(prev => prev.length >= MAX_VOICE_REFS ? prev : [...prev, rehydrateVoiceRef(d)])
+  const removeVoiceRef   = (id) => setVoiceRefs(prev => prev.filter(v => v.id !== id))
+  const setVoiceCharacter = (id, characterId) => setVoiceRefs(prev => prev.map(v => v.id === id ? { ...v, characterId } : v))
   const updateRefNote    = (id, note) => setRefImages(prev => prev.map(im => {
     if (im.id !== id) return im
     const g = guessRefLink({ ...im, note })
@@ -647,7 +695,7 @@ export default function ScriptwriterPanel({
         : ''
       const content = [
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-        { type: 'text', text: `Describe this reference image as instructed.${focus ? ' ' + focus : ''}${noteBit}`.trim() },
+        { type: 'text', text: `Describe this reference image as instructed.${focus ? ' ' + focus : ''}${noteBit}${mature ? SCRIPTWRITER_NSFW_VISION_LINE : ''}`.trim() },
       ]
       try {
         const { text } = await callOllama(visModel, content, sys, cfg, 0.3)
@@ -693,7 +741,7 @@ export default function ScriptwriterPanel({
       id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
-      idea: idea.trim(), genre, sceneCount, phase: phaseName,
+      idea: idea.trim(), genre, mature, sceneCount, phase: phaseName,
       promptTarget, aspectRatio, pacing,
       // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
       // the user's hint appended after it (see buildAutoIdea) — a plain
@@ -702,6 +750,7 @@ export default function ScriptwriterPanel({
       // History card can show the part a human actually wrote.
       fullAuto: !!autoJob, fullAutoHint: autoJob?.hint || '',
       refImages: serializeRefImages(refs),
+      voiceRefs: serializeVoiceRefs(voiceRefs),
     }
   }
 
@@ -732,7 +781,7 @@ export default function ScriptwriterPanel({
     const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nMaximum number of scenes: ${sceneCount}${formatLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nMaximum number of scenes: ${sceneCount}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
       const data = normalizeScript(parseJSON(text))
@@ -761,7 +810,7 @@ export default function ScriptwriterPanel({
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
     const userMsg =
-      `Story idea: ${idea.trim()}\n${genreHint}${formatLine}\n\n`
+      `Story idea: ${idea.trim()}\n${genreHint}${formatLine}${nsfwLine}\n\n`
       + `You already wrote this script (title, bible and all scenes):\n${JSON.stringify(script, null, 2)}${refBlock}\n\n`
       + `Rewrite ONLY scene ${scene.id}${scene.title ? ` ("${scene.title}")` : ''}. `
       + `Give a fresh version of the same story beat — you may change the action, blocking or dialogue — but keep it consistent with the surrounding scenes, reuse the existing characters and locations by their exact names, and keep the same scene "id". `
@@ -814,7 +863,7 @@ export default function ScriptwriterPanel({
     const pacingLine = isH3 ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
     const framingHint = aspectFramingHint(aspectRes(aspectRatio))
     const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
     try {
       const { text } = await callOllama(writerModel, userMsg, isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
       const data = normalizeDirectorsCut(parseJSON(text), script)
@@ -939,6 +988,45 @@ export default function ScriptwriterPanel({
     persistState(undefined, undefined, nextCut)
   }
 
+  // An explicit [] means this clip is deliberately silent (every shot the
+  // Director writes carries this field, per its schema and blankShot()) - only
+  // a genuinely missing field (pre-dialogue-field legacy entries) falls back to
+  // the scene's dialogue.
+  const shotDialogues = (shot, scene) => Array.isArray(shot?.dialogue)
+    ? shot.dialogue.filter(d => d && d.trim())
+    : (Array.isArray(scene?.dialogues) ? scene.dialogues.filter(d => d && d.trim()) : [])
+
+  // Which voice reference (if any) applies to a shot. Only a shot that actually
+  // carries dialogue gets one: the sample guides how an existing line sounds, it
+  // never authorises inventing one, so a clip the Director left silent is left
+  // alone. Resolution order - the "Name:" prefix on a dialogue line, then a
+  // single-cast shot, then a lone unlinked sample used as the default voice. An
+  // ambiguous shot (two speakers, each with their own sample) gets none: H3
+  // takes one voice reference per clip, so guessing would be worse than silence.
+  const voiceForShot = (shot, scene, dialogues) => {
+    if (!voiceRefs.length || !dialogues.length) return null
+    const chars = script?.characters || []
+    const byChar = (id) => voiceRefs.find(v => v.characterId === id && v.base64)
+    const named = [...new Set(dialogues
+      .map(d => String(d).split(':')[0].trim())
+      .filter(n => n && n.length < 40))]
+    const hits = named
+      .map(n => chars.find(c => c.name && slug(c.name) === slug(n)))
+      .filter(Boolean)
+      .map(c => ({ v: byChar(c.id), name: c.name }))
+      .filter(x => x.v)
+    if (hits.length === 1) return { ...hits[0].v, speaker: hits[0].name }
+    if (hits.length > 1) return null
+    const cast = (shot.characters?.length ? shot.characters : scene?.characters) || []
+    if (cast.length === 1) {
+      const v = byChar(cast[0])
+      if (v) return { ...v, speaker: chars.find(c => c.id === cast[0])?.name || '' }
+    }
+    const loose = voiceRefs.filter(v => !v.characterId && v.base64)
+    if (loose.length === 1) return { ...loose[0], speaker: '' }
+    return null
+  }
+
   // One H3 user message per shot. Emits MODE: Ref2VA (with a role-tagged reference
   // block byte-compatible with App.jsx's ref-mode captions, which SYSTEM_PROMPT_
   // MINIMAX_H3's Ref2VA parser reads) when the shot has captioned references;
@@ -949,15 +1037,17 @@ export default function ScriptwriterPanel({
     const refs = shotRefs(shot, scene, refsList)
     const isRef = refs.length > 0
 
-    // An explicit [] means this clip is deliberately silent (every shot the
-    // Director writes carries this field, per its schema and blankShot()) —
-    // only a genuinely missing field (pre-dialogue-field legacy entries)
-    // falls back to the scene's dialogue.
-    const dialogues = Array.isArray(shot.dialogue)
-      ? shot.dialogue.filter(d => d && d.trim())
-      : (Array.isArray(scene?.dialogues) ? scene.dialogues.filter(d => d && d.trim()) : [])
+    const dialogues = shotDialogues(shot, scene)
     const dialogueBlock = dialogues.length
       ? `\n\nSpoken dialogue (verbatim — this clip carries only this delivery):\n${dialogues.join('\n')}`
+      : ''
+
+    // H3 takes one voice reference per clip, so this is always "Audio 1" no
+    // matter how many the film carries overall. Labelled exactly as the Ref2VA
+    // section of SYSTEM_PROMPT_MINIMAX_H3 expects to read it.
+    const voice = voiceForShot(shot, scene, dialogues)
+    const voiceLine = voice
+      ? `Audio 1 — voice-timbre reference (marker: reference): file "${voice.fileName}"${voice.speaker ? ` — the voice of ${voice.speaker}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words are the dialogue given below and nothing else.\n\n`
       : ''
 
     const action = (shot.primary_beat || shot.visual_action || '').trim()
@@ -977,7 +1067,7 @@ export default function ScriptwriterPanel({
         line += `\n   Requested use of this reference: ${use}`
         return line
       })
-      block = `Reference images:\n${lines.join('\n\n')}\n\n`
+      block = `Reference images:\n${lines.join('\n\n')}\n\n${voiceLine}`
     } else {
       head = 'MODE: T2VA'
       const chars = Array.isArray(shot.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
@@ -989,6 +1079,7 @@ export default function ScriptwriterPanel({
         loc ? `Location — ${loc.name}: ${(loc.description || '').trim()}` : '',
       ].filter(Boolean).join('\n')
       if (block) block += '\n\n'
+      block += voiceLine
     }
 
     const soundscape = scene?.sound_mood?.trim() || script?.soundscape?.trim()
@@ -1012,12 +1103,12 @@ export default function ScriptwriterPanel({
   // The phase-3 user message for one shot — H3 (Ref2VA/T2VA) or LTX. Shared by
   // the full run and the per-clip "Rewrite" button on the video-prompts screen.
   const buildShotPromptMsg = (shot, refs, ratio) => {
-    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs)
+    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + nsfwLine
     const action = shot.visual_action || shot.primary_beat || ''
     const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
     const framingHint = aspectFramingHint(ratio)
     const aspectLine = `Aspect ratio: ${aspectParts(ratio).token || '16:9'}${framingHint ? `\n${framingHint}` : ''}\n\n`
-    return `${aspectLine}Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}`
+    return `${aspectLine}Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}${nsfwLine}`
   }
 
   const runPhase3 = async () => {
@@ -1116,10 +1207,26 @@ export default function ScriptwriterPanel({
   // warning on this particular mount-via-remount path.
   useEffect(() => {
     if (!autoJob) return
+    const runId = autoJob.runId
+    if (runId) {
+      if (startedAutoRuns.has(runId)) {
+        // A remount mid-run. Restarting is the wrong answer, but so is
+        // returning quietly: the remount already threw away the state the
+        // run needed, so onAutoJobDone would never fire and App's promise
+        // would hang, pinning the queue item on 'running' forever. Report it
+        // as a failed run instead — that resolves the promise and puts the
+        // item back to retryable via ▶ Run, which is the honest outcome.
+        onAutoJobDone?.({ ok: false, error: 'The Scriptwriter panel reloaded while this film was running, interrupting it. Press ▶ Run to start it again.' })
+        return
+      }
+      startedAutoRuns.add(runId)
+    }
     const t = setTimeout(() => {
       flushSync(() => {
         setRefImages((autoJob.refImages || []).map(rehydrateRefImage))
+        setVoiceRefs((autoJob.voiceRefs || []).map(rehydrateVoiceRef))
         setGenre(autoJob.genre || 'auto')
+        setMature(!!autoJob.mature)
         setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
         setIdea(buildAutoIdea(autoJob.hint))
@@ -1182,7 +1289,7 @@ export default function ScriptwriterPanel({
       : `Rewrite ONLY ${noun} number ${shot.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''}. `
         + `Give a fresh interpretation of the same story moment — a different framing, camera move, or beat is fine — but keep it continuous with the ${noun}s immediately before and after it, and keep the same "shot_number" and "scene_id".`
     const userMsg =
-      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${refBlock}\n\n`
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${nsfwLine}${refBlock}\n\n`
       + `You already broke this script into the following ${noun}s:\n${JSON.stringify(cut.shots, null, 2)}\n\n`
       + `${task} `
       + `Output only valid JSON: {"shots":[ <the one ${noun} object, exactly the same fields as the others> ]}.`
@@ -1313,7 +1420,7 @@ export default function ScriptwriterPanel({
     const lookLine = isH3now && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3now && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
     const userMsg =
-      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${refBlock}\n\n`
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${nsfwLine}${refBlock}\n\n`
       + `You already broke this script into the following ${noun}s:\n${JSON.stringify(shots, null, 2)}\n\n`
       + `Merge ${noun} ${a.shot_number} and ${noun} ${b.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''} into ONE ${noun} that covers both actions in sequence. `
       + `They share the same scene, location and cast, and neither needs its own facial/emotional beat — this is a pure locomotion/setup run. `
@@ -1841,12 +1948,15 @@ export default function ScriptwriterPanel({
   const clipHeader = (p, shot, refs) => {
     const isH3now = promptTarget === 'minimax_h3'
     if (!isH3now || !shot) return `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot?.duration || 4}s`
+    const hScene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const clipVoice = voiceForShot(shot, hScene, shotDialogues(shot, hScene))
     return [
       `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot.duration || 7}s · ${refs.length ? 'Ref2VA' : 'T2VA'}`,
       refs.length
         ? `  Load references: ${refs.map(im => `${refEntityName(im, script) || im.note || roleLabel(im.role)} (${roleLabel(im.role)}, ${preserveLabel(im.preserve)})`).join('; ')}`
         : '  No references — text-to-video',
-    ].join('\n')
+      clipVoice ? `  Load voice reference: ${clipVoice.fileName}${clipVoice.speaker ? ` (${clipVoice.speaker})` : ''}` : '',
+    ].filter(Boolean).join('\n')
   }
   const clipRefsFor = (i) => {
     const shot = (directorsCut?.shots || [])[i]
@@ -1868,6 +1978,7 @@ export default function ScriptwriterPanel({
   // frame images, and script/director JSON — as one ZIP.
   const fileSafe = (s) => String(s || '').trim().replace(/[^\w\- ]+/g, '').replace(/\s+/g, '-').slice(0, 60) || 'untitled'
   const imgExt = (mt) => ((mt || 'image/jpeg').split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+  const audioExt = (mt) => ((mt || 'audio/mpeg').split('/')[1] || 'mp3').replace('mpeg', 'mp3').replace('x-', '')
   const exportBundle = async () => {
     if (exporting) return
     setExporting(true)
@@ -1887,17 +1998,86 @@ export default function ScriptwriterPanel({
       })
       zip.file('prompts.md', `# ${script?.title || 'Untitled'} — ${isH3now ? 'MiniMax H3' : 'LTX'} prompts\n\n${allMd.join('\n\n---\n\n')}\n`)
 
-      // reference image pack
+      // reference image pack. `refFileByKey` records the exact filename each
+      // image was given here, keyed by refKey() — manifest.json (below) looks
+      // filenames up through this map rather than recomputing the naming
+      // logic, so it can never point at a file that doesn't actually exist.
       const refMd = ['# Reference images\n']
+      const refFileByKey = new Map()
       ;(refImages || []).forEach((im, i) => {
         const name = refEntityName(im, script) || im.note || im.fileName || `ref-${i + 1}`
         const base = `${im.linkId ? im.linkId + '-' : ''}${fileSafe(name)}`
-        if (im.base64) zip.file(`references/${base || 'ref-' + (i + 1)}.${imgExt(im.mediaType)}`, im.base64, { base64: true })
+        const fname = `references/${base || 'ref-' + (i + 1)}.${imgExt(im.mediaType)}`
+        if (im.base64) {
+          zip.file(fname, im.base64, { base64: true })
+          refFileByKey.set(refKey(im), fname)
+        }
         refMd.push(`## ${name}${im.linkType ? ` — ${linkTypeDef(im.linkType)?.label || im.linkType}` : ''}`)
         refMd.push(`role: ${roleLabel(im.role || '—')} · preservation: ${preserveLabel(im.preserve || 'strong')}${im.generated ? ' · generated' : ''}`)
         refMd.push(`\n${im.caption?.trim() || '(not described)'}\n`)
       })
       if ((refImages || []).length) zip.file('references.md', refMd.join('\n'))
+
+      // voice-reference pack, named by the character each sample belongs to.
+      // `voiceFileById` is the same trick as refFileByKey above: the manifest
+      // looks filenames up here rather than recomputing them, so it can never
+      // point at a file that was skipped for having no bytes.
+      const voiceFileById = new Map()
+      ;(voiceRefs || []).forEach((v, i) => {
+        if (!v.base64) return
+        const who = (script?.characters || []).find(c => c.id === v.characterId)?.name || 'any-speaker'
+        const fname = `voices/${fileSafe(who)}-${i + 1}.${audioExt(v.mediaType)}`
+        zip.file(fname, v.base64, { base64: true })
+        voiceFileById.set(v.id, fname)
+      })
+
+      // manifest.json — the machine-readable index for automation (e.g. the
+      // comfyui-prompt-enhancer-bridge node pack): per clip, its prompt file,
+      // duration, and its reference images IN THE EXACT ORDER their "Image N"
+      // labels appear inside that clip's prompt text (clipRefsFor(i) is the
+      // same shotRefs() call buildH3ShotMessage used to generate that text,
+      // against the same refImages array, so the order matches by construction).
+      const manifest = {
+        title: script?.title || 'Untitled',
+        target: promptTarget,
+        aspectRatio: aspectToken(aspectRatio),
+        clips: done.map((p, i) => {
+          const shot = shots[i]
+          // Keep refs/file lookups paired by index (not two independently
+          // filtered arrays) so a reference with a caption but no saved file
+          // (shouldn't happen, but don't let it silently shift every
+          // subsequent "Image N" mapping if it ever does) drops cleanly
+          // instead of desyncing the rest of the list.
+          // Same clip, same resolution the prompt text was built from, so the
+          // manifest never disagrees with what the prompt actually asked for.
+          const vScene = script?.scenes?.find(s => String(s.id) === String(shot?.scene_id))
+          const vv = (isH3now && shot) ? voiceForShot(shot, vScene, shotDialogues(shot, vScene)) : null
+          const voice = (vv && voiceFileById.get(vv.id))
+            ? { file: voiceFileById.get(vv.id), speaker: vv.speaker || '' }
+            : null
+          const references = (isH3now ? clipRefsFor(i) : [])
+            .map(im => {
+              const file = refFileByKey.get(refKey(im))
+              return file ? { file, role: im.role || '', preserve: im.preserve || '' } : null
+            })
+            .filter(Boolean)
+          return {
+            clipNumber: p.shotNumber || i + 1,
+            sceneTitle: p.sceneTitle || '',
+            // promptFile points at the human-readable .txt (header + text);
+            // promptText is the raw generated text alone (no header) so a
+            // consumer never has to parse clipHeader()'s prose back out.
+            promptFile: `prompts/clip-${pad(p.shotNumber || i + 1)}.txt`,
+            promptText: p.text || '',
+            mode: references.length ? 'Ref2VA' : 'T2VA',
+            durationSec: shot?.duration || (isH3now ? 7 : 4),
+            voice,
+            outputName: `clip-${pad(p.shotNumber || i + 1)}`,
+            references,
+          }
+        }),
+      }
+      zip.file('manifest.json', JSON.stringify(manifest, null, 2))
 
       // LTX attached frame images
       ;(framePrompts || []).forEach((fp, si) => FRAME_KEYS.forEach(k => {
@@ -1917,6 +2097,9 @@ export default function ScriptwriterPanel({
         script?.soundscape ? `- Soundscape: ${script.soundscape}` : '',
         script?.music ? `- Music: ${script.music}` : '',
         `- ${done.length} clip${done.length === 1 ? '' : 's'}, ${(refImages || []).filter(im => im.base64).length} reference image${(refImages || []).filter(im => im.base64).length === 1 ? '' : 's'}`,
+        (voiceRefs || []).filter(v => v.base64).length
+          ? `- ${(voiceRefs || []).filter(v => v.base64).length} voice reference${(voiceRefs || []).filter(v => v.base64).length === 1 ? '' : 's'} in \`voices/\` — timbre only; each clip's header names the one to load`
+          : '',
         `\n## Cast\n${(script?.characters || []).map(c => `- **${c.name}** — ${c.appearance || ''}${c.wardrobe ? ` · wardrobe: ${c.wardrobe}` : ''}`).join('\n')}`,
         `\n## Locations\n${(script?.locations || []).map(l => `- **${l.name}** — ${l.description || ''}`).join('\n')}`,
       ].filter(Boolean).join('\n'))
@@ -2128,6 +2311,17 @@ export default function ScriptwriterPanel({
         onField={updateRefField}
       />
 
+      <ScriptwriterVoiceRefs
+        voices={voiceRefs}
+        editable={!['prompting', 'done'].includes(phase)}
+        busy={isLoading || captioning}
+        max={MAX_VOICE_REFS}
+        characters={script?.characters || []}
+        onAdd={addVoiceRef}
+        onRemove={removeVoiceRef}
+        onCharacter={setVoiceCharacter}
+      />
+
       {/* Phase 1 — input */}
       {['input', 'scripting'].includes(phase) && (
         <div>
@@ -2148,10 +2342,12 @@ export default function ScriptwriterPanel({
               <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div>
                   <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'stretch' }}>
                     {GENRE_OPTIONS.map(g => (
-                      <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
+                      <button key={g.id} type="button" onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
                     ))}
+                    <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', background: 'var(--pe-line)', margin: '0 4px' }} />
+                    <button type="button" onClick={() => setMature(v => !v)} disabled={isLoading} title={NSFW_HINT} style={btn(mature)}>NSFW</button>
                   </div>
                 </div>
                 <div>
@@ -2198,10 +2394,12 @@ export default function ScriptwriterPanel({
               </div>
               <div style={{ marginBottom: 20 }}>
                 <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Genre</label>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'stretch' }}>
                   {GENRE_OPTIONS.map(g => (
-                    <button key={g.id} onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
+                    <button key={g.id} type="button" onClick={() => setGenre(g.id)} disabled={isLoading} style={btn(genre === g.id)}>{g.label}</button>
                   ))}
+                  <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', background: 'var(--pe-line)', margin: '0 4px' }} />
+                  <button type="button" onClick={() => setMature(v => !v)} disabled={isLoading} title={NSFW_HINT} style={btn(mature)}>NSFW</button>
                 </div>
               </div>
               <div style={{ marginBottom: 20 }}>
@@ -2217,7 +2415,7 @@ export default function ScriptwriterPanel({
                 </div>
               </div>
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), genre, hint: autoHint.trim(), pacing: autoPacing })}
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing })}
                 disabled={refImages.length === 0 || isLoading || captioning}
                 style={genBtn(refImages.length === 0 || isLoading || captioning)}>
                 + Add to Queue (Full Auto)

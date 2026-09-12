@@ -902,7 +902,13 @@ export default function App() {
         scriptwriterAutoResolveRef.current = resolve
         setTarget('scriptwriter')
         setScriptwriterInitial(null)   // fresh session, not a restore
-        setScriptwriterAutoJob(full.snapshot)
+        // `runId` is minted fresh on every deliberate start — first run and
+        // ▶ Run retry alike — and is what ScriptwriterPanel's mount effect
+        // keys its start-guard on. A retry is therefore always allowed to run
+        // again; only a *remount* of this same start (Fast Refresh, most
+        // often) is suppressed. It rides on the prop copy only — the stored
+        // queue item's own snapshot is left exactly as it was queued.
+        setScriptwriterAutoJob({ ...full.snapshot, runId: `${id}:${generateId()}` })
         setScriptwriterKey(k => k + 1) // force a real remount
       })
     } catch (e) {
@@ -1072,7 +1078,7 @@ export default function App() {
         return line
       }).join('\n\n')
       const text = s.refAudio
-        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${s.refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; do not infer any words from it.`
+        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${s.refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. If no spoken dialogue is supplied elsewhere in this message, write one short line for that subject yourself so the voice reference has speech to act on.`
         : imageBlock
       return { text, stats }
     }
