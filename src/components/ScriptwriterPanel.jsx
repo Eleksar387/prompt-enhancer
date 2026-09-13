@@ -617,6 +617,41 @@ export default function ScriptwriterPanel({
   const [sceneBusy, setSceneBusy] = useState(null)
   const [shotBusy, setShotBusy] = useState(null)
   const [promptBusy, setPromptBusy] = useState(null)
+  // Fold state for the Director's-Cut clip/shot cards and the Video-Prompts
+  // cards — both lists get long fast (10+ clips, each with a full field set
+  // or a multi-paragraph prompt), so every card starts folded and opens only
+  // on click. Index-keyed (not persisted — purely transient view state); the
+  // insert/remove/merge handlers below keep the indices in step with the
+  // splices they already do to directorsCut.shots/finalPrompts.
+  const [expandedShots, setExpandedShots] = useState(() => new Set())
+  const [expandedPrompts, setExpandedPrompts] = useState(() => new Set())
+  const toggleShotExpanded = (si) => setExpandedShots(prev => {
+    const next = new Set(prev)
+    next.has(si) ? next.delete(si) : next.add(si)
+    return next
+  })
+  const togglePromptExpanded = (i) => setExpandedPrompts(prev => {
+    const next = new Set(prev)
+    next.has(i) ? next.delete(i) : next.add(i)
+    return next
+  })
+  // Re-key an expanded-index Set across a splice, same shape as renumberShots
+  // above but for view state that lives outside directorsCut/finalPrompts.
+  const shiftExpandedForInsert = (set, atIndex) => {
+    const next = new Set()
+    set.forEach(i => next.add(i >= atIndex ? i + 1 : i))
+    return next
+  }
+  const shiftExpandedForRemove = (set, si) => {
+    const next = new Set()
+    set.forEach(i => { if (i !== si) next.add(i > si ? i - 1 : i) })
+    return next
+  }
+  const shiftExpandedForMerge = (set, si) => {
+    const next = new Set()
+    set.forEach(i => { if (i !== si && i !== si + 1) next.add(i > si + 1 ? i - 1 : i) })
+    return next
+  }
   // ComfyUI output picker: { key: "<shotIdx>-<frameKey>" | null, loading, error, items: [] }
   const [picker, setPicker] = useState({ key: null, loading: false, error: '', items: [] })
   // { key | null, state: 'idle'|'fetching'|'error', error } — the fetch+encode of a chosen image
@@ -1525,6 +1560,7 @@ export default function ScriptwriterPanel({
       const nextCut = { ...cut, shots: cut.shots.map((s, i) => i === si ? merged : s) }
       setDirectorsCut(nextCut)
       setRawFallback('')
+      setExpandedShots(prev => new Set(prev).add(si))
       persistState(undefined, undefined, nextCut)
     } catch (e) {
       setError(e.message)
@@ -1567,6 +1603,8 @@ export default function ScriptwriterPanel({
     setFramePrompts(nextFrames)
     if (finalPrompts.length) setFinalPrompts(nextPrompts)
     clearShotTransients()
+    setExpandedShots(prev => shiftExpandedForInsert(prev, atIndex).add(atIndex))
+    setExpandedPrompts(prev => shiftExpandedForInsert(prev, atIndex))
     persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
     regenerateShot(atIndex, { cut: nextCut, bridge: true })
   }
@@ -1579,6 +1617,8 @@ export default function ScriptwriterPanel({
     setFramePrompts(nextFrames)
     if (finalPrompts.length) setFinalPrompts(nextPrompts)
     clearShotTransients()
+    setExpandedShots(prev => shiftExpandedForRemove(prev, si))
+    setExpandedPrompts(prev => shiftExpandedForRemove(prev, si))
     persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
   }
 
@@ -1785,6 +1825,8 @@ export default function ScriptwriterPanel({
       setFramePrompts(nextFrames)
       if (finalPrompts.length) setFinalPrompts(nextPrompts)
       clearShotTransients()
+      setExpandedShots(prev => shiftExpandedForMerge(prev, si).add(si))
+      setExpandedPrompts(prev => shiftExpandedForMerge(prev, si))
       persistState(nextFrames, undefined, nextCut, undefined, nextPrompts)
     } catch (e) {
       setError(e.message)
@@ -1814,6 +1856,7 @@ export default function ScriptwriterPanel({
     const shot = directorsCut.shots[idx]
     const isH3now = promptTarget === 'minimax_h3'
     setPromptBusy(idx); setError('')
+    setExpandedPrompts(prev => new Set(prev).add(idx))
     setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: true, error: '' } : p))
     let refs = refImages
     if (isH3now && refImages.some(im => im.base64 && !im.caption?.trim())) {
@@ -3164,20 +3207,40 @@ export default function ScriptwriterPanel({
             )
           })()}
 
-          {directorsCut.shots.map((shot, si) => (
+          {directorsCut.shots.length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 8 }}>
+              <button onClick={() => setExpandedShots(new Set(directorsCut.shots.map((_, i) => i)))} style={ghostBtn}>Expand all</button>
+              <button onClick={() => setExpandedShots(new Set())} style={ghostBtn}>Collapse all</button>
+            </div>
+          )}
+          {directorsCut.shots.map((shot, si) => {
+            const expanded = expandedShots.has(si) || shotBusy === si
+            return (
             <div key={si}>
               {phase === 'dircut' && insertBar(si)}
               <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
-                  {isH3 ? 'Clip' : 'Shot'} {shot.shot_number}
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{shot.scene_title}</span>
-                {isH3 && shot.shot_type && (
-                  <span style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '1px 6px' }}>{shot.shot_type}</span>
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: expanded ? 10 : 0, flexWrap: 'wrap' }}>
+                <button onClick={() => toggleShotExpanded(si)}
+                  title={expanded ? 'Collapse' : 'Expand'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 auto', minWidth: 0,
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', color: 'inherit', font: 'inherit' }}>
+                  <span style={{ fontSize: 11, color: 'var(--pe-ink-3)', flexShrink: 0, display: 'inline-block',
+                    transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }}>▸</span>
+                  <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0 }}>
+                    {isH3 ? 'Clip' : 'Shot'} {shot.shot_number}
+                  </span>
+                  <span style={{ fontSize: 13, color: 'var(--pe-ink-3)', flexShrink: 0 }}>{shot.scene_title}</span>
+                  {isH3 && shot.shot_type && (
+                    <span style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>{shot.shot_type}</span>
+                  )}
+                  {!expanded && (
+                    <span style={{ fontSize: 12, color: 'var(--pe-ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                      — {(isH3 ? shot.primary_beat : shot.visual_action) || 'no beat written yet'} · {shot.duration || (isH3 ? 7 : 4)}s
+                    </span>
+                  )}
+                </button>
                 {phase === 'dircut' && (
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <button onClick={() => regenerateShot(si)} disabled={shotBusy !== null || promptBusy !== null}
                       title={`Have the AI write a fresh version of this ${isH3 ? 'clip' : 'shot'}`}
                       style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)',
@@ -3201,6 +3264,7 @@ export default function ScriptwriterPanel({
                   </div>
                 )}
               </div>
+              {expanded && <>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={lbl}>Camera Framing</label>
@@ -3459,9 +3523,10 @@ export default function ScriptwriterPanel({
                   })}
                 </div>
               )}
+              </>}
               </div>
             </div>
-          ))}
+          )})}
           {phase === 'dircut' && insertBar(directorsCut.shots.length)}
 
           {/* Output model was chosen on the script screen */}
@@ -3492,28 +3557,48 @@ export default function ScriptwriterPanel({
             <div style={{ marginTop: 28 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                 <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{PROMPT_TARGET_LABEL[promptTarget] || 'Video'} Prompts</label>
-                {phase === 'done' && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={copyAll}
-                      style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
-                      {copiedAll ? '✓ Copied all' : 'Copy all'}
-                    </button>
-                    <button onClick={exportBundle} disabled={exporting}
-                      style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, cursor: exporting ? 'wait' : 'pointer' }}>
-                      {exporting ? 'Zipping…' : '⬇ Export ZIP'}
-                    </button>
-                  </div>
-                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {finalPrompts.length > 1 && (
+                    <>
+                      <button onClick={() => setExpandedPrompts(new Set(finalPrompts.map((_, i) => i)))} style={ghostBtn}>Expand all</button>
+                      <button onClick={() => setExpandedPrompts(new Set())} style={ghostBtn}>Collapse all</button>
+                    </>
+                  )}
+                  {phase === 'done' && (
+                    <>
+                      <button onClick={copyAll}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-line)', background: copiedAll ? 'var(--pe-ok-bg)' : 'var(--pe-surface)', color: copiedAll ? 'var(--pe-ok)' : 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
+                        {copiedAll ? '✓ Copied all' : 'Copy all'}
+                      </button>
+                      <button onClick={exportBundle} disabled={exporting}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, cursor: exporting ? 'wait' : 'pointer' }}>
+                        {exporting ? 'Zipping…' : '⬇ Export ZIP'}
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                {finalPrompts.map((p, i) => (
+                {finalPrompts.map((p, i) => {
+                  const expanded = expandedPrompts.has(i) || p.loading || !!p.error
+                  return (
                   <div key={i}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <div>
-                        <span style={{ fontSize: 13, color: 'var(--pe-accent)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Shot {p.shotNumber}</span>
-                        <span style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginLeft: 8 }}>{p.sceneTitle}</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: expanded ? 6 : 0, gap: 10 }}>
+                      <button onClick={() => togglePromptExpanded(i)}
+                        title={expanded ? 'Collapse' : 'Expand'}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 auto', minWidth: 0,
+                          background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', color: 'inherit', font: 'inherit' }}>
+                        <span style={{ fontSize: 11, color: 'var(--pe-ink-3)', flexShrink: 0, display: 'inline-block',
+                          transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }}>▸</span>
+                        <span style={{ fontSize: 13, color: 'var(--pe-accent)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600, flexShrink: 0 }}>Shot {p.shotNumber}</span>
+                        <span style={{ fontSize: 13, color: 'var(--pe-ink-3)', flexShrink: 0 }}>{p.sceneTitle}</span>
+                        {!expanded && p.text && (
+                          <span style={{ fontSize: 12, color: 'var(--pe-ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                            — {p.text.replace(/\s+/g, ' ').trim()}
+                          </span>
+                        )}
+                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                         {p.usage && <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>in {p.usage.input_tokens} · out {p.usage.output_tokens} tokens</span>}
                         {phase === 'done' && !p.loading && directorsCut?.shots?.[i] && (
                           <button onClick={() => regeneratePrompt(i)} disabled={promptBusy !== null || shotBusy !== null}
@@ -3530,6 +3615,7 @@ export default function ScriptwriterPanel({
                         )}
                       </div>
                     </div>
+                    {expanded && <>
                     {p.loading && (
                       <div style={{ padding: '18px 20px', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>Generating…</div>
                     )}
@@ -3542,8 +3628,9 @@ export default function ScriptwriterPanel({
                         style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
                         onFocus={focusBorder} onBlur={blurBorder} />
                     )}
+                    </>}
                   </div>
-                ))}
+                )})}
               </div>
               {phase === 'done' && (
                 <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
