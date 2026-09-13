@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, memo } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
 import { imageHash } from '../utils'
@@ -77,7 +77,7 @@ const refFromData = (d) => ({
   hash: d.hash || imageHash(d.base64),
 })
 
-export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange }) {
+function MinimaxRefPanel({ images, onChange, audio, onAudioChange }) {
   const fileInputRef = useRef(null)
   const audioInputRef = useRef(null)
   const [audioError, setAudioError] = useState('')
@@ -208,3 +208,8 @@ export default function MinimaxRefPanel({ images, onChange, audio, onAudioChange
     </div>
   )
 }
+
+// Memoized: images/audio are state values and both onChange props are useState
+// setters, so up to six reference thumbnails stop re-rendering on every keystroke
+// elsewhere in the compose column.
+export default memo(MinimaxRefPanel)

@@ -9,7 +9,8 @@ import {
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
   DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
-  systemPromptFor,
+  SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG,
+  systemPromptFor, caps,
 } from './constants'
 import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
@@ -18,103 +19,35 @@ import {
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage, migrateFromIndexedDB,
   setHistoryEntryProject, loadProjects, saveProjects, importEntries,
   getCaption, putCaption, clearCaptions,
-  listQueue, getQueueItem, addQueueItem, updateQueueItem, deleteQueueItem, clearQueue as dbClearQueue,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
-import { btn, selStyle, moveLabel, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency } from './utils'
+import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency } from './utils'
+import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
 import MinimaxRefPanel from './components/MinimaxRefPanel'
 import AdaptPanel from './components/AdaptPanel'
+import LoraPanel from './components/LoraPanel'
 import QueuePanel from './components/QueuePanel'
-import { buildStylePart } from './adapt'
+import HistoryPanel from './components/HistoryPanel'
+import { useHistoryFilters } from './hooks/useHistoryFilters'
+import { useAdminReview } from './hooks/useAdminReview'
+import { useRenderSettings } from './hooks/useRenderSettings'
+import { useQueue } from './hooks/useQueue'
+import { useImageSlots } from './hooks/useImageSlots'
+import {
+  buildSnapshot as buildWorkspaceSnapshot, snapshotToWorkspace,
+  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode,
+} from './workspace'
+import { buildStylePart, buildWriterUserText } from './adapt'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   label: `${writer} · T${temp}`,
   temp,
   nudge: VARIANT_NUDGES[i] || '',
 }))
-
-// The vision description stored on a history entry — read it, and (when `onSave`
-// is given) edit it in place. `onSave(text)` should persist + refresh.
-function HistoryCaptionEditor({ value, onSave }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const [flash, setFlash] = useState(false)
-  useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
-
-  const save = async () => {
-    await onSave(draft)
-    setEditing(false)
-    setFlash(true)
-    setTimeout(() => setFlash(false), 1800)
-  }
-
-  if (editing) {
-    return (
-      <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 4 }}>👁 vision description</div>
-        <textarea value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false}
-          rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
-          style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.55, color: 'var(--pe-ink-2)', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '6px 8px', fontFamily: 'inherit', resize: 'vertical' }} />
-        <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-          <button onClick={save} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 10px', cursor: 'pointer' }}>Save</button>
-          <button onClick={() => { setDraft(value); setEditing(false) }} style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Cancel</button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <details style={{ marginBottom: 6 }}>
-      <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--pe-ink-3)' }}>
-        👁 vision description{flash ? ' · ✓ saved' : ''}
-      </summary>
-      <div style={{ fontSize: 13, color: 'var(--pe-ink-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', marginTop: 4 }}>{value}</div>
-      {onSave && (
-        <button onClick={() => { setDraft(value); setEditing(true) }}
-          style={{ marginTop: 4, fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>✎ Edit</button>
-      )}
-    </details>
-  )
-}
-
-// History-filter helpers — pure, work on any saved entry shape (old or new).
-const entryTargetId = (h) => (h.type === 'scriptwriter' ? 'scriptwriter' : h.target)
-const entryTargetLabel = (id) => (id === 'scriptwriter' ? 'Scriptwriter' : TARGETS[id]?.label || id)
-const entryHasImages = (h) => !!(
-  h.firstImg || h.midImg || h.lastImg ||
-  (Array.isArray(h.refImages) && h.refImages.length) ||
-  h.vision
-)
-// Flattened, lowercased text of one history entry for the free-text search box.
-// Skips image bytes; covers the scene, vision caption, generated output(s),
-// project, model and target label (and the scriptwriter's idea / script / shots).
-const entrySearchText = (h) => {
-  const parts = [h.project, h.model, entryTargetLabel(entryTargetId(h))]
-  if (h.type === 'scriptwriter') {
-    parts.push(h.idea, h.script?.title, h.script?.logline, h.script?.look)
-    for (const c of h.script?.characters || []) parts.push(c.name, c.appearance, c.wardrobe)
-    for (const l of h.script?.locations || []) parts.push(l.name, l.description)
-    parts.push(JSON.stringify(h.script?.scenes || ''), JSON.stringify(h.directorsCut?.shots || ''))
-    for (const p of h.finalPrompts || []) parts.push(p.text, p.sceneTitle)
-    for (const im of h.refImages || []) parts.push(im.note, im.caption)
-  } else {
-    parts.push(h.scene, h.caption, h.negative, h.dialogue, h.style)
-    for (const o of h.outputs || []) parts.push(o.text, o.label)
-  }
-  return parts.filter(Boolean).join('  ').toLowerCase()
-}
-const modelProvider = (m) => {
-  const s = (m || '').toLowerCase()
-  if (!s) return '—'
-  if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
-  if (s.includes('grok')) return 'Grok'
-  return 'Ollama'
-}
-const modelFilterLabel = (m) => `${modelProvider(m)} · ${m}`
 
 // "Generate for" rail groups, with any ungrouped target swept into a trailing
 // "Other" group so a newly-added TARGETS entry is never silently hidden.
@@ -138,35 +71,29 @@ export default function App() {
   const [comfyCfg, setComfyCfg]       = useState(loadComfyCfg)
   const [comfyCopyStatus, setComfyCopyStatus] = useState({ state: 'idle' })
   const [comfySendStatus, setComfySendStatus] = useState({ state: 'idle', idx: null })
-  // xAI (Grok) image-render options — a compact strip shown above the results when on an xAI backend.
-  const [imageAspect, setImageAspect]         = useState('auto')   // GROK_IMAGE_RESOLUTIONS.ar
-  const [imageCount, setImageCount]           = useState(1)        // n, 1–4
-  const [imageResolution, setImageResolution] = useState('1k')     // '1k' | '2k'
-  // xAI (Grok) video-render options — second row of the same strip.
-  const [videoDuration, setVideoDuration]     = useState(8)        // seconds, 1–15
-  const [videoResolution, setVideoResolution] = useState('720p')   // '480p' | '720p' | '1080p'
-  const [videoAspect, setVideoAspect]         = useState('auto')
-  const [videoAudio, setVideoAudio]           = useState(true)
-  const [upStatus, setUpStatus]               = useState({})       // `${i}-${k}` -> 'loading' | { error }
-  // 🎨 Render provider. Grok (needs an xAI backend) and Gemini (needs cfg.geminiKey, any
-  // backend) are independent; `renderProvider` only matters when BOTH are available.
-  const [renderProvider, setRenderProvider]   = useState('grok')   // 'grok' | 'gemini' — only consulted when both are available
   // Id of the history entry the current results were last saved as — so a 🎨 Render can
   // patch its `outputs` in place instead of spawning a new entry.
   const lastSavedEntryIdRef = useRef(null)
   const resultsRef = useRef([])            // freshest `results` for the long-running video poll
   const videoAbortRef = useRef(new Map())  // result idx -> AbortController for an in-flight video render
 
+  const [target, setTarget]           = useState('minimax_h3')
+  const [scene, setScene]             = useState('')
+  const [duration, setDuration]       = useState('8 seconds')
+
+  // The 🎨 / 🎬 render strip's settings (image aspect/count/resolution, video
+  // duration/resolution/aspect/audio, provider, per-image upscale status). None of
+  // it is saved in history or seen by the writer — see src/hooks/useRenderSettings.js.
+  // Declared after `duration` because it follows it: rendering a clip defaults to
+  // the length the prompt was written for.
+  const render = useRenderSettings(duration)
+
   // 🎨 Render availability. Grok render needs an xAI backend; Gemini render needs only a
   // key (works on any backend). `imgProvider` is what a click actually uses.
   const grokRenderOn = isGrok(cfg.base)
   const geminiRenderOn = !!(cfg.geminiKey && cfg.geminiKey.trim())
   const canRender = grokRenderOn || geminiRenderOn
-  const imgProvider = grokRenderOn && geminiRenderOn ? renderProvider : (grokRenderOn ? 'grok' : 'gemini')
-
-  const [target, setTarget]           = useState('minimax_h3')
-  const [scene, setScene]             = useState('')
-  const [duration, setDuration]       = useState('8 seconds')
+  const imgProvider = grokRenderOn && geminiRenderOn ? render.provider : (grokRenderOn ? 'grok' : 'gemini')
   const [writerModel, setWriterModel] = useState('')
   const [visionModel, setVisionModel] = useState('grok-4.6')
   const [writerManual, setWriterManual] = useState('mistral-nemo')
@@ -178,14 +105,25 @@ export default function App() {
   const [negative, setNegative]       = useState('')
   const [dialogue, setDialogue]       = useState('')
   const [delivery, setDelivery]       = useState('')
+  // The LoRA library is shared with the Scriptwriter and persisted on every
+  // edit; which of them a given generation uses is per-workspace state, so it
+  // travels with history and the queue like any other input.
+  const [loras, setLoras] = useState(loadLoras)
+  const [activeLoraIds, setActiveLoraIds] = useState([])
+  const saveLoraLibrary = (list) => { setLoras(list); saveLoras(list) }
+  const toggleLora = (id) => setActiveLoraIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  const activeLoras = lorasByIds(loras, activeLoraIds)
+  // The language everyone in the video speaks. Lives outside the Dialogue block
+  // because a target can need it with no typed dialogue at all (H3 writes a line
+  // itself for a voice reference; DramaBox is all speech and shows no Dialogue
+  // block). show.spokenLang is the gate — see TARGETS.
+  const [spokenLangId, setSpokenLangId] = useState(DEFAULT_SPOKEN_LANG)
   const [frameMode, setFrameMode]     = useState(() => TARGETS['minimax_h3'].defaultFrameMode || 'single')
-  const [firstImg, setFirstImg]       = useState(null)
-  const [midImg, setMidImg]           = useState(null)
-  const [lastImg, setLastImg]         = useState(null)
-  const [refImages, setRefImages]     = useState([])
-  const [refAudio, setRefAudio]       = useState(null)
-  // Bumped to push a history-gallery image into a first/mid/last ImagePanel.
-  const [seeds, setSeeds]             = useState({ first: null, mid: null, last: null })
+  // Input images: the three frame slots, the H3 reference list and its voice
+  // reference, plus the seed handoff for a thumbnail picked from history. They move
+  // as a set (switching target or frame mode clears all of them), so they live
+  // together — see src/hooks/useImageSlots.js.
+  const imgs = useImageSlots()
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
@@ -208,23 +146,15 @@ export default function App() {
   const [projects, setProjects]       = useState([])
   const [historyDown, setHistoryDown] = useState(false)   // sidecar unreachable → banner
   const [activeProject, setActiveProject] = useState('')       // '' = save new generations unfiled
-  const [historyFilter, setHistoryFilter] = useState('all')    // 'all' | 'unfiled' | <project name>
-  const [histTargetFilter, setHistTargetFilter] = useState('all')  // 'all' | <target id> ('scriptwriter' for those)
-  const [histModelFilter, setHistModelFilter]   = useState('all')  // 'all' | <exact model string>
-  const [histImageFilter, setHistImageFilter]   = useState('all')  // 'all' | 'with' | 'without'
-  const [histSearch, setHistSearch]             = useState('')     // free-text query (AND over whitespace-split terms)
-  const [adminMode, setAdminMode]     = useState(false)
-  const [adminSystem, setAdminSystem] = useState(() => systemPromptFor(TARGETS['minimax_h3'], 'single'))
-  const [adminSystemOpen, setAdminSystemOpen] = useState(false)
-  const [adminUserMsg, setAdminUserMsg] = useState('')
-  const [pendingSend, setPendingSend] = useState(false)
-  const pendingSnapshotRef = useRef(null)
+  // Admin mode — see and edit the system prompt and user message before sending.
+  // Declared after `t`/`frameMode` further down would be neater, but state has to
+  // come before the effects that use it; the hook itself owns the reset-on-target
+  // -change effect. See src/hooks/useAdminReview.js.
+  const admin = useAdminReview(TARGETS[target], frameMode)
   // Queue: pending "generate this later" items, persisted server-side (see db.js).
-  const [queue, setQueue]             = useState([])
-  const [queueOpen, setQueueOpen]     = useState(false)
-  const [queueBusy, setQueueBusy]     = useState(false)       // "Process all" in flight
-  const [queueRunningId, setQueueRunningId] = useState(null)  // item id currently mid-run
-  const queueAbortRef = useRef(false)  // set true to stop "Process all" between items
+  // The hook owns its state and the run bookkeeping every job kind shares; the two
+  // job bodies stay here, below. See src/hooks/useQueue.js.
+  const queue = useQueue()
   const enhanceRef = useRef(null)      // always the freshest enhance() closure — see runQueueItem
   const [scriptwriterKey, setScriptwriterKey] = useState(0)
   const [scriptwriterInitial, setScriptwriterInitial] = useState(null)
@@ -239,11 +169,49 @@ export default function App() {
   const sceneTextareaRef = useRef(null)
 
   const t = TARGETS[target]
-  const show = t.show
+  const show = t.show                 // which controls render
+  const tcaps = caps(t)               // what the target can actually do
   const showImage = show.image !== false
+  // Reference mode: this target takes a list of role-tagged reference images
+  // instead of fixed frame slots.
+  const refMode = !!tcaps.refImages && frameMode === 'ref'
 
   const effectiveWriter = models.length ? writerModel : writerManual.trim()
   const effectiveVision = models.length ? visionModel : visionManual.trim()
+
+  // The compose panel as one plain object, for the pure helpers in src/workspace.js
+  // (snapshot building and the generation gates) and for AdaptPanel, which needs
+  // most of the same values. `targetType`/`show` are what the gates and the
+  // per-target field gating read.
+  //
+  // `promptLength` rides along but is deliberately NOT in WORKSPACE_FIELDS: it
+  // shapes the instruction sent to the writer and was never saved in history, so a
+  // restored entry keeps the current setting rather than an old one. The registry
+  // governs what persists; this object is just "the panel right now".
+  const workspace = {
+    targetType: t.type, show,
+    target, duration, style, creativity, frameMode, negative, scene,
+    dialogue, delivery, spokenLangId, activeLoraIds,
+    firstImg: imgs.firstImg, midImg: imgs.midImg, lastImg: imgs.lastImg,
+    h3RatioId, soundscape, music, refImages: imgs.refImages, refAudio: imgs.refAudio,
+    promptLength,
+  }
+
+  // The other direction: snapshotToWorkspace() returns exactly these keys, and
+  // this is the only place that knows which setter each one belongs to. Adding a
+  // compose field means one row in WORKSPACE_FIELDS and one line here.
+  const applyWorkspace = (values) => {
+    const setters = {
+      target: setTarget, duration: setDuration, style: setStyle, creativity: setCreativity,
+      frameMode: setFrameMode, negative: setNegative, scene: setScene,
+      dialogue: setDialogue, delivery: setDelivery,
+      spokenLangId: setSpokenLangId, activeLoraIds: setActiveLoraIds,
+      firstImg: imgs.setFirstImg, midImg: imgs.setMidImg, lastImg: imgs.setLastImg,
+      h3RatioId: setH3RatioId, soundscape: setSoundscape, music: setMusic,
+      refImages: imgs.setRefImages, refAudio: imgs.setRefAudio,
+    }
+    for (const [key, value] of Object.entries(values)) setters[key]?.(value)
+  }
 
   // Skip the very first run: `cfg`'s initial value already includes any .env-derived
   // override (VITE_API_KEY/VITE_API_BASE) baked in by loadCfg(). Persisting that on
@@ -284,7 +252,7 @@ export default function App() {
       }
       // Best-effort — a failed queue load just leaves the panel empty/stale,
       // it must not trip the "history server unreachable" banner on its own.
-      listQueue().then(q => { if (alive) setQueue(q) }).catch(() => {})
+      queue.refresh()
     }
     boot()
     const ping = setInterval(() => {
@@ -307,54 +275,11 @@ export default function App() {
     setProjects(prev => prev.includes(n) ? prev : [...prev, n].sort((a, b) => a.localeCompare(b)))
   }, [])
 
-  const histTargets = useMemo(() => {
-    const s = new Set(history.map(entryTargetId).filter(Boolean))
-    return [...s].sort((a, b) => entryTargetLabel(a).localeCompare(entryTargetLabel(b)))
-  }, [history])
-  const histModels = useMemo(() => {
-    const s = new Set(history.map(h => h.model).filter(Boolean))
-    return [...s].sort((a, b) => modelFilterLabel(a).localeCompare(modelFilterLabel(b)))
-  }, [history])
-
-  const histFiltersActive = historyFilter !== 'all' || histTargetFilter !== 'all'
-    || histModelFilter !== 'all' || histImageFilter !== 'all' || histSearch.trim() !== ''
-  const resetHistFilters = () => {
-    setHistoryFilter('all'); setHistTargetFilter('all'); setHistModelFilter('all'); setHistImageFilter('all'); setHistSearch('')
-  }
-
-  // Per-entry flattened search text, rebuilt only when the history changes.
-  const histSearchIndex = useMemo(() => {
-    const m = new Map()
-    for (const h of history) m.set(h, entrySearchText(h))
-    return m
-  }, [history])
-  const histSearchTerms = histSearch.trim().toLowerCase().split(/\s+/).filter(Boolean)
-
-  const visibleHistory = useMemo(() => history.filter(h => {
-    if (historyFilter === 'unfiled' && h.project) return false
-    if (historyFilter !== 'all' && historyFilter !== 'unfiled' && h.project !== historyFilter) return false
-    if (histTargetFilter !== 'all' && entryTargetId(h) !== histTargetFilter) return false
-    if (histModelFilter !== 'all' && h.model !== histModelFilter) return false
-    if (histImageFilter === 'with' && !entryHasImages(h)) return false
-    if (histImageFilter === 'without' && entryHasImages(h)) return false
-    if (histSearchTerms.length) {
-      const hay = histSearchIndex.get(h) || ''
-      if (!histSearchTerms.every(t => hay.includes(t))) return false
-    }
-    return true
-  }), [history, historyFilter, histTargetFilter, histModelFilter, histImageFilter, histSearch, histSearchIndex])
-
-  const entryProjectSelect = (h) => (
-    <select
-      value={h.project || ''}
-      onChange={e => assignEntryProject(h.id, e.target.value)}
-      title="Assign this generation to a project"
-      style={{ fontSize: 13.5, color: h.project ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '2px 6px', cursor: 'pointer', maxWidth: 150 }}>
-      <option value="">Unfiled</option>
-      {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
-      <option value="__new__">+ New project…</option>
-    </select>
-  )
+  // The history list's five filters, the option lists they need, and the filtered
+  // result. Everything this returns is either stable or memoized, which is what
+  // lets <HistoryPanel> sit behind React.memo.
+  const histFilters = useHistoryFilters(history)
+  const visibleHistory = histFilters.visible
 
   const reloadModels = async () => {
     setModelStatus({ loading: true, ok: false, error: '' })
@@ -370,7 +295,6 @@ export default function App() {
     }
   }
   useEffect(() => { reloadModels() }, [cfg.base, cfg.apiKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setAdminSystem(systemPromptFor(TARGETS[target], frameMode)); setPendingSend(false); setAdminUserMsg('') }, [target, frameMode])
   useEffect(() => {
     if (adaptSourceOverride) document.getElementById('adapt-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [adaptSourceOverride])
@@ -378,14 +302,39 @@ export default function App() {
   resultsRef.current = results
   const abortAllVideos = () => { videoAbortRef.current.forEach(c => c.abort()); videoAbortRef.current.clear() }
   useEffect(() => () => abortAllVideos(), [])
-  // Keep the video-render duration in step with the target's chosen duration ("8 seconds" etc.).
-  useEffect(() => {
-    const m = String(duration).match(/(\d+)\s*second/)
-    if (m) setVideoDuration(Math.min(15, Math.max(1, parseInt(m[1], 10))))
-  }, [duration])
 
+  // Full re-list. Only for boot, import and clear — see syncHistoryEntry below.
   const refreshHistory = useCallback(() => listHistory().then(h => { setHistory(h); setHistoryDown(false) }).catch(() => setHistoryDown(true)), [])
-  const refreshQueue = useCallback(() => listQueue().then(setQueue).catch(() => {}), [])
+
+  // Apply ONE entry's change locally instead of re-listing everything.
+  //
+  // `listHistory()` is the whole metadata array — ~640 KB at 72 entries — and it
+  // used to be refetched after every single mutation, including the
+  // Scriptwriter's 600 ms debounced autosave, i.e. roughly once a second while
+  // editing a script. Each one also handed React a brand-new `history` identity,
+  // which invalidated every history memo (search index, project/target/model
+  // option lists, the gallery's image walk) and repainted the whole list.
+  //
+  // GET /api/history/:id returns the same row in the same shape — the sidecar
+  // runs stripEntry() on both routes, so blob fields arrive as { url, hash, … }
+  // with no bytes either way — just without the other 71 entries. Re-sorting by
+  // ts desc keeps the order the sidecar itself uses (server/store.mjs byTsDesc).
+  const syncHistoryEntry = useCallback((id) => getHistoryEntry(id)
+    .then(row => {
+      if (!row || !row.id) return
+      setHistory(prev => (prev.some(h => h.id === row.id)
+        ? prev.map(h => (h.id === row.id ? row : h))
+        : [row, ...prev]
+      ).sort((a, b) => (b.ts || 0) - (a.ts || 0)))
+      setHistoryDown(false)
+    })
+    .catch(() => setHistoryDown(true)), [])
+
+  // Same idea for a field we already know the new value of on every affected
+  // entry (project rename/delete): no round trip at all.
+  const patchHistoryLocal = useCallback((match, patch) => {
+    setHistory(prev => prev.map(h => (match(h) ? { ...h, ...patch } : h)))
+  }, [])
 
   // Kept in a ref so saveScriptHistory (a stable useCallback passed to the
   // scriptwriter panel) always reads the current selection without churning.
@@ -397,7 +346,7 @@ export default function App() {
     // Only the live workspace results should become the 🎨 Render patch target — an
     // Adapt-panel save produces a separate entry the main results don't correspond to.
     if (trackForRender) lastSavedEntryIdRef.current = entry.id
-    addHistoryEntry(entry).then(refreshHistory).catch(() => {})
+    addHistoryEntry(entry).then(() => syncHistoryEntry(entry.id)).catch(() => {})
     return entry.id
   }
   const saveScriptHistory = useCallback((entry) => {
@@ -406,8 +355,8 @@ export default function App() {
     // project the user reassigned in the meantime rather than resetting it.
     const existing = hist.find(h => h.id === entry.id)
     const project = existing ? (existing.project ?? null) : (ap || null)
-    addHistoryEntry({ ...entry, project }).then(refreshHistory).catch(() => {})
-  }, [refreshHistory])
+    addHistoryEntry({ ...entry, project }).then(() => syncHistoryEntry(entry.id)).catch(() => {})
+  }, [syncHistoryEntry])
 
   const clearHistory = () => {
     if (!window.confirm(`Delete all ${history.length} generation${history.length === 1 ? '' : 's'} from history? This cannot be undone — use "Export ↓" first if you want a backup.`)) return
@@ -426,7 +375,7 @@ export default function App() {
     }
     if (project) ensureProject(project)
     await setHistoryEntryProject(id, project || null).catch(() => {})
-    refreshHistory()
+    syncHistoryEntry(id)
   }
 
   const createProject = () => {
@@ -447,8 +396,8 @@ export default function App() {
       return next.sort((a, b) => a.localeCompare(b))
     })
     setActiveProject(p => (p === oldName ? n : p))
-    setHistoryFilter(f => (f === oldName ? n : f))
-    refreshHistory()
+    histFilters.retargetProjectFilter(oldName, n)
+    patchHistoryLocal(h => h.project === oldName, { project: n })
   }
   const deleteProject = async (name) => {
     const n = history.filter(x => x.project === name).length
@@ -458,8 +407,8 @@ export default function App() {
     }
     setProjects(prev => prev.filter(p => p !== name))
     setActiveProject(p => (p === name ? '' : p))
-    setHistoryFilter(f => (f === name ? 'all' : f))
-    refreshHistory()
+    histFilters.retargetProjectFilter(name, null)
+    patchHistoryLocal(h => h.project === name, { project: null })
   }
 
   const exportHistory = () => {
@@ -483,12 +432,12 @@ export default function App() {
 
   // Clicking a thumbnail in the history image gallery — route it to the right
   // slot for the current frame mode. (Drag-and-drop is handled inside the panels.)
-  const bumpSeed = (slot, data) =>
-    setSeeds(s => ({ ...s, [slot]: { data, nonce: (s[slot]?.nonce || 0) + 1 } }))
   const pickHistoryImage = (data) => {
-    if (target === 'minimax_h3' && frameMode === 'ref') {
-      if (refImages.length >= 6) return
-      setRefImages(prev => [...prev, {
+    // A target that accepts role-tagged references collects picks into that list
+    // instead of filling a frame slot; caps.refImages is also the cap.
+    if (refMode) {
+      if (imgs.refImages.length >= tcaps.refImages) return
+      imgs.setRefImages(prev => [...prev, {
         id: generateId(), base64: data.base64, mediaType: data.mediaType || 'image/jpeg',
         previewUrl: `data:${data.mediaType || 'image/jpeg'};base64,${data.base64}`,
         fileName: data.fileName || 'from-history.jpg',
@@ -497,37 +446,37 @@ export default function App() {
       }])
       return
     }
-    if (t.type === 'image' || frameMode === 'single' || frameMode === 'last') { bumpSeed('first', data); return }
-    if (frameMode === 'firstlast') { bumpSeed(!firstImg ? 'first' : 'last', data); return }
-    if (frameMode === 'firstmidlast') { bumpSeed(!firstImg ? 'first' : !midImg ? 'mid' : 'last', data) }
+    if (t.type === 'image' || frameMode === 'single' || frameMode === 'last') { imgs.bumpSeed('first', data); return }
+    if (frameMode === 'firstlast') { imgs.bumpSeed(!imgs.firstImg ? 'first' : 'last', data); return }
+    if (frameMode === 'firstmidlast') { imgs.bumpSeed(!imgs.firstImg ? 'first' : !imgs.midImg ? 'mid' : 'last', data) }
   }
   const galleryPickHint =
-    target === 'minimax_h3' && frameMode === 'ref' ? 'to add it as a reference'
+    refMode ? 'to add it as a reference'
     : frameMode === 'firstlast' || frameMode === 'firstmidlast' ? 'to fill the next empty frame'
     : 'to load it as the reference image'
 
   const currentImages = () => {
     const mt = (im) => im.mediaType || 'image/jpeg'
     if (frameMode === 'ref') {
-      return refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64, mediaType: mt(im), role: 'ref' }))
+      return imgs.refImages.map((im, i) => ({ name: `reference-${i + 1}-${im.role}.jpg`, base64: im.base64, mediaType: mt(im), role: 'ref' }))
     }
     if (frameMode === 'firstlast') {
       return [
-        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' },
-        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64, mediaType: mt(lastImg), role: 'last' },
+        imgs.firstImg && { name: 'first-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' },
+        imgs.lastImg && { name: 'last-frame.jpg', base64: imgs.lastImg.base64, mediaType: mt(imgs.lastImg), role: 'last' },
       ].filter(Boolean)
     }
     if (frameMode === 'firstmidlast') {
       return [
-        firstImg && { name: 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' },
-        midImg && { name: 'mid-frame.jpg', base64: midImg.base64, mediaType: mt(midImg), role: 'mid' },
-        lastImg && { name: 'last-frame.jpg', base64: lastImg.base64, mediaType: mt(lastImg), role: 'last' },
+        imgs.firstImg && { name: 'first-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' },
+        imgs.midImg && { name: 'mid-frame.jpg', base64: imgs.midImg.base64, mediaType: mt(imgs.midImg), role: 'mid' },
+        imgs.lastImg && { name: 'last-frame.jpg', base64: imgs.lastImg.base64, mediaType: mt(imgs.lastImg), role: 'last' },
       ].filter(Boolean)
     }
     if (frameMode === 'last') {
-      return firstImg ? [{ name: 'last-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'last' }] : []
+      return imgs.firstImg ? [{ name: 'last-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'last' }] : []
     }
-    return firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: firstImg.base64, mediaType: mt(firstImg), role: 'first' }] : []
+    return imgs.firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' }] : []
   }
 
   // A short filename-safe slug from the scene text, standing in for a title
@@ -537,13 +486,15 @@ export default function App() {
   // omits the title component rather than carrying a placeholder.
   const titleSlug = (text, maxWords = 8) => String(text || '').trim().toLowerCase()
     .replace(/[^a-z0-9\s-]+/g, '').split(/\s+/).filter(Boolean).slice(0, maxWords).join('-').slice(0, 60)
-  // `target` ids are already short and mostly clean; only minimax_h3's suffix
-  // reads as an internal detail rather than the model name people know it by.
-  const modelSlug = (id) => id === 'minimax_h3' ? 'minimax' : id.replace(/_/g, '-')
+  // Ids are already short and mostly clean; a target only needs its own `slug` in
+  // the table where the id reads as an internal detail rather than the model name
+  // people know it by (minimax_h3 -> minimax).
+  const modelSlug = (id) => TARGETS[id]?.slug || id.replace(/_/g, '-')
 
   const exportBundle = async () => {
     const zip = new JSZip()
-    for (const img of currentImages()) zip.file(img.name, img.base64, { base64: true })
+    const images = currentImages()
+    for (const img of images) zip.file(img.name, img.base64, { base64: true })
     results.forEach((r, i) => {
       if (r.text) zip.file(results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`, r.text)
       ;(r.images || []).forEach((img, k) => {
@@ -551,6 +502,44 @@ export default function App() {
       })
       if (r.video?.b64) zip.file(results.length === 1 ? 'render.mp4' : `render-${i + 1}.mp4`, r.video.b64, { base64: true })
     })
+    // manifest.json — same machine-readable shape the Scriptwriter's export uses
+    // (see ScriptwriterPanel.jsx's exportBundle), so the comfyui-prompt-enhancer-
+    // bridge node pack can drive a single image/video generation from this export
+    // too, not just a scriptwriter film. Only meaningful for image/video targets
+    // (dramabox/scriptwriter aren't ComfyUI-shaped output at all); the receiving
+    // ComfyUI workflow still has to be wired for PEClipPrompt/PEClipImage itself —
+    // this only ships the manifest, it doesn't make an arbitrary workflow work.
+    if (t.type === 'image' || t.type === 'video') {
+      // Every result/variant shares the same loaded input image(s) — ordered the
+      // same way `images` already is, so index N here is index N in the zip and
+      // in `images` (a 'ref'-mode item also carries its semantic role/preservation
+      // from imgs.refImages, not just the generic 'ref' role currentImages() gives it).
+      const references = images.map((img, idx) => {
+        const ref = frameMode === 'ref' ? imgs.refImages[idx] : null
+        return { file: img.name, role: (ref ? ref.role : img.role) || '', preserve: ref?.preserve || '' }
+      })
+      // Keep each clip's original `i` (not the post-filter position) so promptFile/
+      // outputName still names the same file the loop above actually wrote — a
+      // failed variant among 3 must not shift the other two's filenames by one.
+      const clips = results
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.text)
+        .map(({ r, i }) => ({
+          clipNumber: i + 1,
+          sceneTitle: r.label || '',
+          promptFile: results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`,
+          promptText: r.text,
+          mode: images.length ? `image-to-${t.type}` : `text-to-${t.type}`,
+          // `duration` is a free-text label ('8 seconds', '97 frames (~4 seconds)'),
+          // not a number — pull the seconds figure out the same way syllableBudget() does.
+          durationSec: show.duration ? (parseFloat(String(duration || '').match(/(\d+(?:\.\d+)?)\s*seconds?/)?.[1]) || null) : null,
+          outputName: results.length === 1 ? 'prompt' : `prompt-${i + 1}`,
+          references,
+        }))
+      if (clips.length) {
+        zip.file('manifest.json', JSON.stringify({ title: titleSlug(scene) || target, target, type: t.type, clips }, null, 2))
+      }
+    }
     const blob = await zip.generateAsync({ type: 'blob' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -562,9 +551,9 @@ export default function App() {
   }
 
   // A previous copy's status shouldn't linger against a different set of loaded images.
-  useEffect(() => { setComfyCopyStatus({ state: 'idle' }) }, [firstImg, midImg, lastImg, refImages])
+  useEffect(() => { setComfyCopyStatus({ state: 'idle' }) }, [imgs.firstImg, imgs.midImg, imgs.lastImg, imgs.refImages])
   // Same for a send — the shot it reported on is no longer the one on screen.
-  useEffect(() => { setComfySendStatus({ state: 'idle', idx: null }) }, [firstImg, midImg, lastImg, refImages, results])
+  useEffect(() => { setComfySendStatus({ state: 'idle', idx: null }) }, [imgs.firstImg, imgs.midImg, imgs.lastImg, imgs.refImages, results])
 
   const copyImagesToComfy = async () => {
     const imgs = currentImages()
@@ -619,7 +608,7 @@ export default function App() {
         ...(r.video ? { video: r.video } : {}),
       }))
     const id = lastSavedEntryIdRef.current
-    if (id) await updateHistoryEntry(id, { outputs: outs }).then(refreshHistory).catch(() => {})
+    if (id) await updateHistoryEntry(id, { outputs: outs }).then(() => syncHistoryEntry(id)).catch(() => {})
     else saveHistory(buildSnapshot(caption || null, hasImgNow, outs.length), outs)
   }
 
@@ -637,8 +626,8 @@ export default function App() {
       if (imgProvider === 'gemini') {
         // Gemini returns one image per call — fan out for count > 1.
         const settled = await Promise.allSettled(
-          Array.from({ length: Math.max(1, imageCount) }, () => generateImagesGemini(prompt, {
-            key: cfg.geminiKey, model: cfg.geminiImageModel, aspectRatio: imageAspect, images: refs.slice(0, 3),
+          Array.from({ length: Math.max(1, render.imageCount) }, () => generateImagesGemini(prompt, {
+            key: cfg.geminiKey, model: cfg.geminiImageModel, aspectRatio: render.imageAspect, images: refs.slice(0, 3),
           }))
         )
         const ok = settled.filter(s => s.status === 'fulfilled').flatMap(s => s.value)
@@ -646,7 +635,7 @@ export default function App() {
         images = ok.map(im => ({ b64: im.b64, mediaType: im.mediaType || 'image/png', revisedPrompt: im.revisedPrompt }))
       } else {
         const imgs = await generateImages(prompt, cfg, {
-          n: imageCount, aspectRatio: imageAspect, resolution: imageResolution,
+          n: render.imageCount, aspectRatio: render.imageAspect, resolution: render.imageResolution,
           images: refs.slice(0, 5),
         })
         images = imgs.map(im => ({ b64: im.b64, mediaType: im.mediaType || 'image/jpeg', revisedPrompt: im.revisedPrompt }))
@@ -671,8 +660,8 @@ export default function App() {
     setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidLoading: true, vidError: '', vidProgress: 0, vidStatus: 'pending' } : r))
     try {
       const { url, duration } = await generateVideo(prompt, cfg, {
-        duration: videoDuration, resolution: videoResolution, aspectRatio: videoAspect,
-        audio: videoAudio, image: imageDataUri, signal: ctrl.signal,
+        duration: render.videoDuration, resolution: render.videoResolution, aspectRatio: render.videoAspect,
+        audio: render.videoAudio, image: imageDataUri, signal: ctrl.signal,
         onProgress: (s, p) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, vidStatus: s, vidProgress: p } : r)),
       })
       let video = { url, mediaType: 'video/mp4', duration }
@@ -702,20 +691,20 @@ export default function App() {
     const img = r?.images?.[k]
     if (!img?.b64 || !isGrok(cfg.base)) return
     const key = `${i}-${k}`
-    setUpStatus(s => ({ ...s, [key]: 'loading' }))
+    render.setUpStatus(s => ({ ...s, [key]: 'loading' }))
     try {
       const out = await generateImages(r.text, cfg, {
         images: [{ base64: img.b64, mediaType: img.mediaType }],
-        resolution: '2k', aspectRatio: imageAspect,
+        resolution: '2k', aspectRatio: render.imageAspect,
       })
       if (!out[0]?.b64) throw new Error('No image returned')
       const newImg = { b64: out[0].b64, mediaType: out[0].mediaType || img.mediaType, revisedPrompt: out[0].revisedPrompt || img.revisedPrompt, upscaled: true }
       const nextImages = r.images.map((im, ki) => ki === k ? newImg : im)
       setResults(prev => prev.map((rr, ri) => ri === i ? { ...rr, images: nextImages } : rr))
-      setUpStatus(s => { const n = { ...s }; delete n[key]; return n })
+      render.setUpStatus(s => { const n = { ...s }; delete n[key]; return n })
       await persistOutputs(i, { images: nextImages })
     } catch (e) {
-      setUpStatus(s => ({ ...s, [key]: { error: e.message } }))
+      render.setUpStatus(s => ({ ...s, [key]: { error: e.message } }))
     }
   }
 
@@ -738,31 +727,13 @@ export default function App() {
       setHistoryOpen(false)
       return
     }
-    setTarget(h.target); setOutputCount(h.outputCount)
+    // Every compose field, through the one table (src/workspace.js). Entries that
+    // predate a field fall back to its default; ones that stored only an image
+    // FILENAME rather than bytes read back as absent, exactly as before.
+    setOutputCount(h.outputCount)
     if (h.model) { setWriterModel(h.model); setWriterManual(h.model) }
     if (h.vision) { setVisionModel(h.vision); setVisionManual(h.vision) }
-    setDuration(h.duration); setStyle(h.style); setCreativity(h.creativity); setFrameMode(h.frameMode)
-    setScene(h.scene || ''); setDialogue(h.dialogue || ''); setDelivery(h.delivery || '')
-    setNegative(h.negative || '')
-    // Older entries only ever stored a filename string (no image bytes) — those
-    // fall through to null/[] here, exactly like the pre-restore-support behavior.
-    const imgFromHistory = (v) => (v && typeof v === 'object' && v.base64)
-      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName, hash: v.hash || imageHash(v.base64) }
-      : null
-    setFirstImg(imgFromHistory(h.firstImg))
-    setMidImg(imgFromHistory(h.midImg))
-    setLastImg(imgFromHistory(h.lastImg))
-    setRefImages(Array.isArray(h.refImages)
-      ? h.refImages.filter(im => im && typeof im === 'object' && im.base64).map(im => ({
-          id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
-          previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
-          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong', note: im.note || '',
-          hash: im.hash || imageHash(im.base64),
-        }))
-      : [])
-    setRefAudio(h.refAudio && typeof h.refAudio === 'object' && h.refAudio.base64
-      ? { base64: h.refAudio.base64, mediaType: h.refAudio.mediaType || 'audio/mpeg', fileName: h.refAudio.fileName }
-      : null)
+    applyWorkspace(snapshotToWorkspace(h, { newId: generateId }))
     // `saved` = the text as restored, so a later hand-edit is detectable (resultsEdited).
     setResults(Array.isArray(h.outputs)
       ? h.outputs.filter(o => o && typeof o === 'object').map(o => ({ label: o.label || h.model || 'output', text: o.text || '', saved: o.text || '', usage: null, loading: false, error: '', images: Array.isArray(o.images) ? o.images : [], imgLoading: false, imgError: '', video: (o.video && typeof o.video === 'object' && (o.video.url || o.video.b64)) ? o.video : null, vidLoading: false, vidError: '', vidProgress: 0 }))
@@ -770,9 +741,6 @@ export default function App() {
     // A 🎨 Render right after a restore should patch this same entry.
     lastSavedEntryIdRef.current = h.id || null
     setCaption(h.caption || ''); setSavedCaption(h.caption || ''); setVisionStats(null); setAdaptSourceOverride(null)
-    setSoundscape(h.soundscape || ''); setMusic(h.music || '')
-    const ratioPreset = TARGETS[h.target]?.resolutions?.find(r => r.label === h.ratio)
-    setH3RatioId(ratioPreset?.id || '')
     setHistoryOpen(false)
   }
 
@@ -783,32 +751,10 @@ export default function App() {
   // switchTarget()/switchMode() (those clear image state as a side effect,
   // which would erase the very images just being loaded here).
   const applyQueueItemToWorkspace = (snap) => {
-    setTarget(snap.target); setOutputCount(snap.outputCount)
+    setOutputCount(snap.outputCount)
     if (snap.model) { setWriterModel(snap.model); setWriterManual(snap.model) }
     if (snap.vision) { setVisionModel(snap.vision); setVisionManual(snap.vision) }
-    setDuration(snap.duration); setStyle(snap.style); setCreativity(snap.creativity); setFrameMode(snap.frameMode)
-    setScene(snap.scene || ''); setDialogue(snap.dialogue || ''); setDelivery(snap.delivery || '')
-    setNegative(snap.negative || '')
-    const imgFrom = (v) => (v && typeof v === 'object' && v.base64)
-      ? { base64: v.base64, mediaType: v.mediaType || 'image/jpeg', previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`, fileName: v.fileName, hash: v.hash || imageHash(v.base64) }
-      : null
-    setFirstImg(imgFrom(snap.firstImg))
-    setMidImg(imgFrom(snap.midImg))
-    setLastImg(imgFrom(snap.lastImg))
-    setRefImages(Array.isArray(snap.refImages)
-      ? snap.refImages.filter(im => im && typeof im === 'object' && im.base64).map(im => ({
-          id: generateId(), base64: im.base64, mediaType: im.mediaType || 'image/jpeg',
-          previewUrl: `data:${im.mediaType || 'image/jpeg'};base64,${im.base64}`, fileName: im.fileName,
-          role: im.role || MINIMAX_H3_REF_ROLES[0].id, preserve: im.preserve || 'strong', note: im.note || '',
-          hash: im.hash || imageHash(im.base64),
-        }))
-      : [])
-    setRefAudio(snap.refAudio && typeof snap.refAudio === 'object' && snap.refAudio.base64
-      ? { base64: snap.refAudio.base64, mediaType: snap.refAudio.mediaType || 'audio/mpeg', fileName: snap.refAudio.fileName }
-      : null)
-    const ratioPreset = TARGETS[snap.target]?.resolutions?.find(r => r.label === snap.ratio)
-    setH3RatioId(ratioPreset?.id || '')
-    setSoundscape(snap.soundscape || ''); setMusic(snap.music || '')
+    applyWorkspace(snapshotToWorkspace(snap, { newId: generateId }))
   }
 
   // Captures the current compose panel exactly like a fresh generation would,
@@ -816,66 +762,38 @@ export default function App() {
   // as enhance()'s early returns, reusing the same buildSnapshot() shape (no
   // caption yet — frameDescription is null, vision hasn't run).
   const addToQueue = () => {
-    const hasImg = t.type === 'image' ? !!firstImg
-      : frameMode === 'firstlast' ? (firstImg && lastImg)
-      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
-      : frameMode === 'last' ? !!firstImg
-      : frameMode === 'ref' ? refImages.length > 0
-      : !!firstImg
-    const canGen = t.type === 'image' ? (scene.trim() || firstImg)
-      : frameMode === 'firstlast' ? (firstImg && lastImg)
-      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
-      : frameMode === 'last' ? !!firstImg
-      : frameMode === 'ref' ? refImages.length > 0
-      : (scene.trim() || firstImg)
-    if (!canGen) return
+    const hasImg = hasRequiredImages(workspace)
+    if (!canGenerateFrom(workspace)) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
     const snapshot = buildSnapshot(null, hasImg, outputCount)
-    const item = { id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, snapshot }
-    addQueueItem(item).then(refreshQueue).catch(() => {})
+    queue.add({ id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, snapshot })
   }
 
   // Runs one queue item: loads its snapshot into the workspace, runs the real
   // enhance() pipeline (bypassing admin-mode's pause), and on success removes
   // it from the queue — its result now lives in History like any other
   // generation. On failure it stays queued with an error, retryable via ▶ Run.
-  const runQueueItem = async (id) => {
-    setQueueRunningId(id)
-    await updateQueueItem(id, { status: 'running' }).catch(() => {})
-    refreshQueue()
-    let outcome
-    try {
-      const full = await getQueueItem(id, { inline: true })
-      if (!full) throw new Error('queue item not found')
-      flushSync(() => applyQueueItemToWorkspace(full.snapshot))
-      outcome = await enhanceRef.current({ queue: true })
-    } catch (e) {
-      outcome = { ok: false, error: e.message }
-    }
-    if (outcome?.ok) {
-      await deleteQueueItem(id).catch(() => {})
-    } else {
-      const prevAttempts = queue.find(q => q.id === id)?.attempts || 0
-      await updateQueueItem(id, { status: 'error', error: outcome?.error || 'unknown error', attempts: prevAttempts + 1 }).catch(() => {})
-    }
-    setQueueRunningId(null)
-    refreshQueue()
-  }
+  const runQueueItem = (id) => queue.runOne(id, async (full) => {
+    // flushSync so the setters below are committed before enhanceRef is read —
+    // enhance() closes over this render's state, so without it the run would use
+    // the previous workspace.
+    flushSync(() => applyQueueItemToWorkspace(full.snapshot))
+    return enhanceRef.current({ queue: true })
+  })
 
-  // Queues a Full Auto Scriptwriter job — { refImages, genre, hint } — from the
+  // Queues a Full Auto Scriptwriter job — { imgs.refImages, genre, hint } — from the
   // Full Auto tab of ScriptwriterPanel. Reuses the same queue item shape as
   // addToQueue, just tagged with `kind` so runAnyQueueItem/QueueCard can tell
   // it apart from a main-pipeline item (whose snapshot has no `kind`).
   const addScriptwriterAutoJob = (spec) => {
-    const item = { id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, kind: 'scriptwriter-auto', snapshot: spec }
-    addQueueItem(item).then(refreshQueue).catch(() => {})
+    queue.add({ id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, kind: 'scriptwriter-auto', snapshot: spec })
   }
 
   // Runs one Full Auto Scriptwriter queue item. Unlike runQueueItem (which
   // replays a snapshot into the already-mounted main workspace), this forces a
   // fresh ScriptwriterPanel mount — via a bumped scriptwriterKey — carrying the
-  // job as its `autoJob` prop; the panel seeds its own state and chains
+  // job as its `autoJob` prop; the panel imgs.seeds its own state and chains
   // Phase 1 → 2 → 3 with no review clicks, then calls `onAutoJobDone`, which
   // resolves the promise below. Same success/failure bookkeeping as
   // runQueueItem: success removes the item (its result is now a normal
@@ -890,15 +808,9 @@ export default function App() {
   // for that hop; nesting one flushSync inside another (this one would fire
   // while React is still flushing this render's effects) is what React's
   // "flushSync was called from inside a lifecycle method" warning is about.
-  const runScriptwriterQueueItem = async (id) => {
-    setQueueRunningId(id)
-    await updateQueueItem(id, { status: 'running' }).catch(() => {})
-    refreshQueue()
-    let outcome
+  const runScriptwriterQueueItem = (id) => queue.runOne(id, async (full) => {
     try {
-      const full = await getQueueItem(id, { inline: true })
-      if (!full) throw new Error('queue item not found')
-      outcome = await new Promise((resolve) => {
+      return await new Promise((resolve) => {
         scriptwriterAutoResolveRef.current = resolve
         setTarget('scriptwriter')
         setScriptwriterInitial(null)   // fresh session, not a restore
@@ -911,78 +823,79 @@ export default function App() {
         setScriptwriterAutoJob({ ...full.snapshot, runId: `${id}:${generateId()}` })
         setScriptwriterKey(k => k + 1) // force a real remount
       })
-    } catch (e) {
-      outcome = { ok: false, error: e.message }
+    } finally {
+      // Runs whether the panel reported success, failure, or threw: leaving
+      // `autoJob` set would re-arm the next mount.
+      scriptwriterAutoResolveRef.current = null
+      setScriptwriterAutoJob(null)
     }
-    scriptwriterAutoResolveRef.current = null
-    setScriptwriterAutoJob(null)
-    if (outcome?.ok) {
-      await deleteQueueItem(id).catch(() => {})
-    } else {
-      const prevAttempts = queue.find(q => q.id === id)?.attempts || 0
-      await updateQueueItem(id, { status: 'error', error: outcome?.error || 'unknown error', attempts: prevAttempts + 1 }).catch(() => {})
-    }
-    setQueueRunningId(null)
-    refreshQueue()
-  }
+  })
 
   // Dispatches a queue item to the right runner by kind — there is one shared
   // queue, but a Full Auto Scriptwriter job needs the ScriptwriterPanel-mount
   // path above instead of the main-workspace restore-then-enhance path.
   const runAnyQueueItem = (id) => {
-    const item = queue.find(q => q.id === id)
+    const item = queue.find(id)
     return item?.kind === 'scriptwriter-auto' ? runScriptwriterQueueItem(id) : runQueueItem(id)
   }
 
-  // Re-reads the queue from the server on every iteration (rather than
-  // iterating a captured array) so an item removed mid-run is simply skipped
-  // on the next pass, instead of still being processed.
-  const processAllQueue = async () => {
-    if (queueBusy) return
-    setQueueBusy(true)
-    queueAbortRef.current = false
-    while (!queueAbortRef.current) {
-      const fresh = await listQueue().catch(() => [])
-      const next = fresh.find(q => q.status !== 'running')
-      if (!next) break
-      await runAnyQueueItem(next.id)
-    }
-    setQueueBusy(false)
-  }
-  const stopProcessingQueue = () => { queueAbortRef.current = true }
+  const processAllQueue = () => queue.processAll(runAnyQueueItem)
 
-  const sendToWriter = async () => {
-    setPendingSend(false)
-    const snapshot = pendingSnapshotRef.current
-    const systemToUse = adminSystem
-    const userToUse = adminUserMsg
+  // The writer fan-out: one prompt, or three temperature variants in parallel.
+  //
+  // Both callers come through here — a normal generation (runWriter, which
+  // assembles the user message) and the admin "review the message before sending"
+  // path (sendToWriter, which takes the hand-edited one). These were two separate
+  // ~30-line copies of the same loading/settle/error/save dance, and the admin
+  // copy had silently fallen behind: it never applied the LoRA trigger repair, so
+  // reviewing a message before sending it could drop an active trigger. One
+  // implementation, so that cannot happen again.
+  //
+  // `saved` is set alongside `text` because the hand-edit detector (resultsEdited)
+  // compares the two. A null `snapshot` means "don't record this in history".
+  const runWriterCall = async ({ user, system, snapshot }) => {
+    // Put back any active LoRA trigger the writer dropped or mangled, in the
+    // shape this target's output format expects.
+    const repair = (raw) => withLoraTriggers(raw, activeLoras, target)
+
     if (outputCount === 1) {
       const lbl = effectiveWriter
       setResults([{ label: lbl, text: '', usage: null, loading: true, error: '' }])
       try {
-        const { text, usage } = await callOllama(effectiveWriter, userToUse, systemToUse, cfg, cfg.temperature)
+        const { text: raw, usage } = await callOllama(effectiveWriter, user, system, cfg, cfg.temperature)
+        const text = repair(raw)
         setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
         if (snapshot) saveHistory(snapshot, [{ label: lbl, text }])
+        return { ok: true }
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
+        return { ok: false, error: e.message }
       }
-    } else {
-      const variants = buildVariants(effectiveWriter)
-      setResults(variants.map(v => ({ label: v.label, text: '', usage: null, loading: true, error: '' })))
-      const proms = variants.map((v, i) =>
-        callOllama(effectiveWriter, userToUse + v.nudge, systemToUse, cfg, v.temp)
-          .then(({ text, usage }) => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
-            return { label: v.label, text }
-          })
-          .catch(e => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r))
-            return { label: v.label, text: `(error: ${e.message})` }
-          })
-      )
-      const outs = await Promise.all(proms)
-      if (snapshot) saveHistory(snapshot, outs)
     }
+
+    const variants = buildVariants(effectiveWriter)
+    setResults(variants.map(v => ({ label: v.label, text: '', usage: null, loading: true, error: '' })))
+    // Each variant settles its own row as it lands; a failed one records its error
+    // in place and still contributes a row to the saved entry.
+    const outs = await Promise.all(variants.map((v, i) =>
+      callOllama(effectiveWriter, user + v.nudge, system, cfg, v.temp)
+        .then(({ text: raw, usage }) => {
+          const text = repair(raw)
+          setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
+          return { label: v.label, text }
+        })
+        .catch(e => {
+          setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r))
+          return { label: v.label, text: `(error: ${e.message})` }
+        })
+    ))
+    if (snapshot) saveHistory(snapshot, outs)
+    return { ok: true }
+  }
+
+  const sendToWriter = async () => {
+    admin.setPending(false)
+    return runWriterCall({ user: admin.userMsg, system: admin.system, snapshot: admin.snapshotRef.current })
   }
 
   const insertCameraMarker = (move) => {
@@ -1011,19 +924,22 @@ export default function App() {
   }
   const switchMode = (m) => {
     abortAllVideos()
-    setFrameMode(m); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
-    setSeeds({ first: null, mid: null, last: null })
-    if (target === 'minimax_h3' && m === 'ref') setH3RatioId(prev => prev || 'port916')
+    setFrameMode(m)
+    imgs.clearAll()
+    // Reference mode starts on the target's preferred ratio (portrait, for H3's
+    // vertical-video use) unless one was already chosen.
+    const refRatio = m === 'ref' ? t.defaultRefRatio : null
+    if (refRatio) setH3RatioId(prev => prev || refRatio)
   }
   const switchTarget = (id) => {
     abortAllVideos()
     const opts = TARGETS[id].durations || DURATION_OPTIONS
     setDuration(d => opts.some(o => o.value === d) ? d : opts[0].value)
-    setTarget(id); setFirstImg(null); setMidImg(null); setLastImg(null); setRefImages([]); setRefAudio(null)
-    setSeeds({ first: null, mid: null, last: null })
+    setTarget(id)
+    imgs.clearAll()
     setSoundscape(''); setMusic('')
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
-    setH3RatioId(id === 'minimax_h3' && nextMode === 'ref' ? 'port916' : '')
+    setH3RatioId(nextMode === 'ref' ? (TARGETS[id].defaultRefRatio || '') : '')
     setFrameMode(nextMode); setResults([]); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null)
   }
 
@@ -1054,7 +970,9 @@ export default function App() {
   // re-describe a stored history entry's images without touching the workspace.
   const captionImages = async (src = null) => {
     const s = src || {
-      frameMode, refImages, firstImg, midImg, lastImg, refAudio, scene,
+      frameMode, scene,
+      refImages: imgs.refImages, firstImg: imgs.firstImg, midImg: imgs.midImg,
+      lastImg: imgs.lastImg, refAudio: imgs.refAudio,
       targetType: t.type, visionPromptSingle: t.visionPrompt, visionModel: effectiveVision,
     }
     const model = s.visionModel || effectiveVision
@@ -1071,7 +989,7 @@ export default function App() {
       const captions = await mapWithConcurrency(refs, isCloud(cfg.base) ? refs.length : 1, (im) => cachedVision([
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
         { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
-      ], VISION_PROMPT_MINIMAX_H3_REF, stats, model))
+      ], role(im.role).visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model))
       const imageBlock = refs.map((im, i) => {
         let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
@@ -1171,26 +1089,17 @@ export default function App() {
   // value ({ok:true} / {ok:false,error}) is only consumed by the queue runner —
   // the plain onClick={enhance} handler ignores it, same as before.
   const enhance = async (opts = null) => {
-    const hasImg = t.type === 'image' ? !!firstImg
-      : frameMode === 'firstlast' ? (firstImg && lastImg)
-      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
-      : frameMode === 'last' ? !!firstImg
-      : frameMode === 'ref' ? refImages.length > 0
-      : !!firstImg
-    const canGen = t.type === 'image' ? (scene.trim() || firstImg)
-      : frameMode === 'firstlast' ? (firstImg && lastImg)
-      : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
-      : frameMode === 'last' ? !!firstImg
-      : frameMode === 'ref' ? refImages.length > 0
-      : (scene.trim() || firstImg)
-    if (!canGen) return { ok: false, error: 'nothing to generate' }
+    const hasImg = hasRequiredImages(workspace)
+    if (!canGenerateFrom(workspace)) return { ok: false, error: 'nothing to generate' }
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return { ok: false, error: 'no writer model' } }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return { ok: false, error: 'no vision model' } }
     abortAllVideos()
-    setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); setPendingSend(false)
+    setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); admin.setPending(false)
 
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
+      spokenLang: show.spokenLang ? spokenLangId : null,
+      loras: activeLoras, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
@@ -1220,124 +1129,31 @@ export default function App() {
   // the assembled vision caption (null for text-only); `count` is how many
   // outputs the entry carries. Used by runWriter() after a fresh generation and
   // by saveResultsEdit() to persist hand-edited result text as a new entry.
-  const buildSnapshot = (frameDescription, hasImg, count) => {
-    const isH3 = target === 'minimax_h3'
-    return {
-      ts: Date.now(), target, outputCount: count, model: effectiveWriter, vision: hasImg ? effectiveVision : null,
-      duration, style, creativity, frameMode, negative,
-      scene, dialogue: show.dialogue ? dialogue : '', delivery: show.dialogue ? delivery : '',
-      firstImg: firstImg ? { base64: firstImg.base64, mediaType: firstImg.mediaType, fileName: firstImg.fileName, hash: firstImg.hash || imageHash(firstImg.base64) } : null,
-      midImg: midImg ? { base64: midImg.base64, mediaType: midImg.mediaType, fileName: midImg.fileName, hash: midImg.hash || imageHash(midImg.base64) } : null,
-      lastImg: lastImg ? { base64: lastImg.base64, mediaType: lastImg.mediaType, fileName: lastImg.fileName, hash: lastImg.hash || imageHash(lastImg.base64) } : null,
-      ratio: isH3 ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]).label : null,
-      soundscape: isH3 ? soundscape : '', music: isH3 ? music : '',
-      refImages: isH3 && frameMode === 'ref'
-        ? refImages.map(im => ({ base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, role: im.role, preserve: im.preserve, note: im.note || '', hash: im.hash || imageHash(im.base64) }))
-        : null,
-      refAudio: isH3 && frameMode === 'ref' && refAudio
-        ? { base64: refAudio.base64, mediaType: refAudio.mediaType, fileName: refAudio.fileName }
-        : null,
-      caption: frameDescription || null,
-    }
-  }
+  const buildSnapshot = (frameDescription, hasImg, count) => buildWorkspaceSnapshot(workspace, {
+    model: effectiveWriter,
+    vision: hasImg ? effectiveVision : null,
+    outputCount: count,
+    caption: frameDescription,
+  })
 
   const runWriter = async (frameDescription, stylePart, lengthPart, hasImg, opts = null) => {
-    let userText
-    if (target === 'minimax_h3') {
-      const mode = frameMode === 'last' ? 'L2VA'
-        : frameMode === 'firstlast' ? 'FL2VA'
-        : frameMode === 'ref' ? 'Ref2VA'
-        : hasImg ? 'I2VA' : 'T2VA'
-      const selectedRatio = presetById(h3RatioId, t.resolutions) || t.resolutions[0]
-      const ratioLine = (frameMode === 'single' && !hasImg) || frameMode === 'ref'
-        ? `Aspect ratio: ${selectedRatio.label} (${selectedRatio.note})\n`
-        : 'Aspect ratio: derived from the input image(s) — do not override it.\n'
-      const frameBlock = frameMode === 'last'
-        ? (frameDescription ? `LAST FRAME (already established — the clip must end here; do not restate it, only describe the plausible path that leads to it):\n${frameDescription}\n\n` : '')
-        : frameMode === 'firstlast'
-        ? (frameDescription ? `FIRST FRAME and LAST FRAME (already established — do not restate their static contents, only describe the transition):\n${frameDescription}\n\n` : '')
-        : frameMode === 'ref'
-        ? `Reference images:\n${frameDescription}\n\n`
-        : frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : ''
-      const scenePart = scene.trim()
-        ? `Scene / action:\n${scene}`
-        : frameMode === 'last' ? 'No description provided — propose a plausible action path that leads naturally to the last frame.'
-        : frameMode === 'firstlast' ? 'No description provided — infer the natural motion that carries the scene from the first frame to the last.'
-        : frameMode === 'ref' ? 'No description provided — propose a fitting scene using the reference images above.'
-        : hasImg ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.'
-        : 'No scene description provided.'
-      const audioPart = `\n\nAmbient / diegetic sound (overall_soundscape): ${soundscape.trim() || 'not specified — invent restrained ambience that fits the scene.'}`
-        + `\n\nAudience-only music (non_diegetic_music): ${music.trim() || 'not specified — decide whether music serves this scene; if not, use N/A.'}`
-      userText = `MODE: ${mode}\n\n${frameBlock}${ratioLine}Target duration: ${duration}\n\n${scenePart}${stylePart}${audioPart}${lengthPart}`
-    } else if (t.type === 'image') {
-      const ref = frameDescription ? `Reference image description:\n${frameDescription}\n\n` : ''
-      const scenePart = scene.trim()
-        ? `Image description / subject:\n${scene}`
-        : (frameDescription ? 'No extra description — base the FLUX prompt on the reference description above.' : 'No description provided.')
-      userText = `${ref}${scenePart}${stylePart}${lengthPart}`
-    } else if (t.type === 'text') {
-      userText = `${scene.trim()}${stylePart}${lengthPart}`
-    } else if (frameMode === 'firstmidlast') {
-      const frames = frameDescription ? `Frames (already established — do not restate their static contents):\n${frameDescription}\n\n` : ''
-      const scenePart = scene.trim()
-        ? `Transition description:\n${scene}`
-        : 'No description provided — infer the natural motion that carries the scene through both transitions.'
-      userText = `MODE: First-mid-last-frame interpolation. The clip begins on the FIRST frame, passes through the MID frame at approximately the halfway point, and ends on the LAST frame; describe the two-phase motion and camera as one continuous arc with a clear beat at the mid frame.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
-    } else if (frameMode === 'firstlast') {
-      const frames = frameDescription ? `Frames (already established — do not restate their static contents):\n${frameDescription}\n\n` : ''
-      const scenePart = scene.trim()
-        ? `Transition description:\n${scene}`
-        : 'No description provided — infer the natural motion that carries the scene from the first frame to the last.'
-      userText = `MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.\n\n${frames}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
-    } else {
-      const frame = frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : ''
-      const scenePart = scene.trim()
-        ? `Basic scene description:\n${scene}`
-        : (frameDescription ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.' : 'No scene description provided.')
-      userText = `${frame}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
-    }
+    const userText = buildWriterUserText({
+      target, targetType: t.type, frameMode, scene, duration,
+      frameDescription, hasImg,
+      ratio: selectedRatio, soundscape, music,
+      stylePart, lengthPart,
+    })
 
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
 
-    if (adminMode && !opts?.queue) {
-      setAdminUserMsg(userText)
-      pendingSnapshotRef.current = snapshot
-      setPendingSend(true)
+    // Admin mode intercepts here: hold the assembled message for review instead
+    // of sending it. A queued run never pauses — nobody is watching it.
+    if (admin.mode && !opts?.queue) {
+      admin.pause(userText, snapshot)
       return { ok: false, error: 'paused for admin review' }
     }
 
-    const activeSystem = systemPromptFor(t, frameMode)
-
-    if (outputCount === 1) {
-      const lbl = effectiveWriter
-      setResults([{ label: lbl, text: '', usage: null, loading: true, error: '' }])
-      try {
-        const { text, usage } = await callOllama(effectiveWriter, userText, activeSystem, cfg, cfg.temperature)
-        setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
-        saveHistory(snapshot, [{ label: lbl, text }])
-        return { ok: true }
-      } catch (e) {
-        setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
-        return { ok: false, error: e.message }
-      }
-    } else {
-      const variants = buildVariants(effectiveWriter)
-      setResults(variants.map(v => ({ label: v.label, text: '', usage: null, loading: true, error: '' })))
-      const proms = variants.map((v, i) =>
-        callOllama(effectiveWriter, userText + v.nudge, activeSystem, cfg, v.temp)
-          .then(({ text, usage }) => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
-            return { label: v.label, text }
-          })
-          .catch(e => {
-            setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r))
-            return { label: v.label, text: `(error: ${e.message})` }
-          })
-      )
-      const outs = await Promise.all(proms)
-      saveHistory(snapshot, outs)
-      return { ok: true }
-    }
+    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode), snapshot })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -1351,14 +1167,9 @@ export default function App() {
   const writing = results.some(r => r.loading)
   const isLoading = visionBusy || writing
 
-  // Whether the workspace currently holds any input image (mirrors enhance()'s
-  // local `hasImg`) — used to stamp the Vision model onto a manually-saved snapshot.
-  const hasImgNow = t.type === 'image' ? !!firstImg
-    : frameMode === 'firstlast' ? !!(firstImg && lastImg)
-    : frameMode === 'firstmidlast' ? !!(firstImg && midImg && lastImg)
-    : frameMode === 'last' ? !!firstImg
-    : frameMode === 'ref' ? refImages.length > 0
-    : !!firstImg
+  // Whether the workspace currently holds the input image(s) this target needs —
+  // used to stamp the Vision model onto a manually-saved snapshot.
+  const hasImgNow = hasRequiredImages(workspace)
 
   // The result text or the vision description has been hand-edited away from what
   // was generated/restored — offer to persist it as a new history entry.
@@ -1383,26 +1194,16 @@ export default function App() {
     setGlobalError(''); setCopied(null); setAdaptSourceOverride(null)
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
+      spokenLang: show.spokenLang ? spokenLangId : null,
+      loras: activeLoras, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
     setSavedCaption(caption)
     await runWriter(caption, stylePart, lengthPart, hasImgNow)
   }
-  const canGenerate = t.type === 'image'
-    ? (!!scene.trim() || !!firstImg)
-    : frameMode === 'firstlast' ? (!!firstImg && !!lastImg)
-    : frameMode === 'firstmidlast' ? (!!firstImg && !!midImg && !!lastImg)
-    : frameMode === 'last' ? !!firstImg
-    : frameMode === 'ref' ? refImages.length > 0
-    : (!!scene.trim() || !!firstImg)
-  const proposeMode = !scene.trim() && (
-    t.type === 'image' ? !!firstImg
-    : frameMode === 'firstlast' ? (firstImg && lastImg)
-    : frameMode === 'firstmidlast' ? (firstImg && midImg && lastImg)
-    : frameMode === 'last' ? !!firstImg
-    : frameMode === 'ref' ? refImages.length > 0
-    : !!firstImg
-  )
+  const canGenerate = canGenerateFrom(workspace)
+  // No typed scene but images loaded → the writer proposes the scene from them.
+  const proposeMode = isProposeMode(workspace)
   const buttonLabel = visionBusy ? '👁 Reading images…'
     : writing ? '✦ Writing prompt…'
     : t.type === 'image'
@@ -1416,7 +1217,7 @@ export default function App() {
           : '✦ Enhance Prompt')
 
   const sceneHint = t.type === 'image'
-    ? (firstImg ? '(optional — leave blank to describe the reference image)' : '')
+    ? (imgs.firstImg ? '(optional — leave blank to describe the reference image)' : '')
     : t.type === 'text'
       ? ''
       : frameMode === 'firstlast'
@@ -1427,19 +1228,19 @@ export default function App() {
             ? '(optional — leave blank to let the writer propose the path to your ending frame)'
             : frameMode === 'ref'
               ? '(optional — leave blank to let the writer propose a scene from your reference images)'
-              : firstImg ? '(optional — leave blank to let the writer propose one from the frame)' : ''
+              : imgs.firstImg ? '(optional — leave blank to let the writer propose one from the frame)' : ''
 
   const sceneLabel = t.type === 'image' ? 'Image Description' : t.type === 'text' ? 'Scene / Story Idea' : 'Your Scene'
   const scenePlaceholder = t.type === 'image'
     ? 'e.g. A weathered fisherman mending nets at dawn, harbor and boats behind him'
     : t.type === 'text'
       ? 'e.g. A queen betrayed by her advisor, cold fury building to a threat'
-      : firstImg
+      : imgs.firstImg
         ? 'Leave blank to auto-propose, or describe what should happen…'
         : 'e.g. A woman walks through a rainy night market in Tokyo, stops at a noodle stall'
 
-  const selectedRatio = target === 'minimax_h3' ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]) : null
-  const ratioPicker = target === 'minimax_h3' ? (
+  const selectedRatio = tcaps.ratioPicker ? (presetById(h3RatioId, t.resolutions) || t.resolutions[0]) : null
+  const ratioPicker = tcaps.ratioPicker ? (
     <div style={{ marginBottom: 14 }}>
       <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         Aspect Ratio <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(no exact frame to derive it from — pick one explicitly)</span>
@@ -1462,7 +1263,7 @@ export default function App() {
     </div>
   ) : null
 
-  const genBtnDisabled = isLoading || !canGenerate || pendingSend
+  const genBtnDisabled = isLoading || !canGenerate || admin.pending
   const genBtnStyle = {
     width: '100%', height: 54, padding: '0 24px', borderRadius: 10, border: 'none',
     background: genBtnDisabled ? 'var(--pe-line-soft)' : 'var(--pe-accent)',
@@ -1471,7 +1272,67 @@ export default function App() {
     transition: 'all 0.15s', marginTop: 10,
   }
 
-  const scriptwriterMode = target === 'scriptwriter'
+  const scriptwriterMode = t.type === 'scriptwriter'
+
+  // Stable action handles for the memoized <HistoryPanel>.
+  //
+  // The handlers themselves (restore, startAdapt, …) close over most of App's
+  // state, so they are new functions on every render — passing them straight down
+  // would defeat React.memo and repaint every card on every keystroke. The ref is
+  // re-pointed at the current render's functions each pass, while the object the
+  // panel receives keeps one identity for the life of the component. Same trick
+  // saveCtxRef already uses for saveScriptHistory.
+  const historyActionsRef = useRef({})
+  historyActionsRef.current = {
+    restore, removeHistoryEntry, startAdapt, assignEntryProject, clearHistory, exportHistory,
+    saveCaption: (id, text) => updateHistoryEntry(id, { caption: text }).then(() => syncHistoryEntry(id)).catch(() => {}),
+    importFiles: () => importInputRef.current?.click(),
+  }
+  const historyActions = useMemo(() => ({
+    restore: (h) => historyActionsRef.current.restore(h),
+    remove: (id) => historyActionsRef.current.removeHistoryEntry(id),
+    adapt: (h) => historyActionsRef.current.startAdapt(h),
+    assignProject: (id, value) => historyActionsRef.current.assignEntryProject(id, value),
+    saveCaption: (id, text) => historyActionsRef.current.saveCaption(id, text),
+    clearAll: () => historyActionsRef.current.clearHistory(),
+    exportAll: () => historyActionsRef.current.exportHistory(),
+    importFiles: () => historyActionsRef.current.importFiles(),
+  }), [])
+  const toggleHistoryOpen = useCallback(() => setHistoryOpen(v => !v), [])
+
+  // Same treatment for the image gallery, which renders up to 60 draggable tiles
+  // and used to re-run all of them on every unrelated keystroke.
+  const galleryActionsRef = useRef({})
+  galleryActionsRef.current = { pickHistoryImage, saveCaption: historyActionsRef.current.saveCaption }
+  const galleryActions = useMemo(() => ({
+    pick: (data) => galleryActionsRef.current.pickHistoryImage(data),
+    saveCaption: (id, text) => galleryActionsRef.current.saveCaption(id, text),
+  }), [])
+
+  // …and for the queue. This bundle replaces two hand-assembled copies of the
+  // same seven callbacks — one for the bottom QueuePanel, one as `queueProps` for
+  // the Scriptwriter's embedded copy — so the queue's call surface is written once.
+  const queueActionsRef = useRef({})
+  queueActionsRef.current = { runAnyQueueItem }
+  const queueActions = useMemo(() => ({
+    onRun: (id) => queueActionsRef.current.runAnyQueueItem(id),
+    onRemove: queue.remove,
+    onProcessAll: () => queue.processAll(queueActionsRef.current.runAnyQueueItem),
+    onStop: queue.stop,
+    onClear: queue.clear,
+    onToggleOpen: queue.toggleOpen,
+  }), [queue.remove, queue.processAll, queue.stop, queue.clear, queue.toggleOpen])
+
+  // ConfigBar's two non-setter props.
+  const configActionsRef = useRef({})
+  configActionsRef.current = {
+    reloadModels,
+    clearCaptionCache: () => { clearCaptions().catch(() => {}); captionMemRef.current.clear(); setVisionStats(null) },
+  }
+  const configActions = useMemo(() => ({
+    reloadModels: () => configActionsRef.current.reloadModels(),
+    clearCaptionCache: () => configActionsRef.current.clearCaptionCache(),
+  }), [])
 
   return (
     <div style={{ fontFamily: 'var(--pe-font)', minHeight: '100vh', color: 'var(--pe-ink)' }}>
@@ -1482,10 +1343,10 @@ export default function App() {
           <p style={{ fontSize: 14, color: 'var(--pe-ink-3)', margin: 0 }}>{t.subtitle}{showImage ? ' · two-stage: vision → writer' : ' · single-stage writer'}</p>
         </div>
         <button
-          onClick={() => { setAdminMode(v => !v); setPendingSend(false) }}
-          style={{ flexShrink: 0, padding: '9px 15px', borderRadius: 8, border: '1px solid', borderColor: adminMode ? 'var(--pe-accent-line)' : 'var(--pe-line)', background: adminMode ? 'var(--pe-accent-bg)' : 'var(--pe-surface)', color: adminMode ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+          onClick={() => { admin.setMode(v => !v); admin.setPending(false) }}
+          style={{ flexShrink: 0, padding: '9px 15px', borderRadius: 8, border: '1px solid', borderColor: admin.mode ? 'var(--pe-accent-line)' : 'var(--pe-line)', background: admin.mode ? 'var(--pe-accent-bg)' : 'var(--pe-surface)', color: admin.mode ? 'var(--pe-accent-ink)' : 'var(--pe-ink-2)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
         >
-          {adminMode ? '⚙ Admin: ON' : '⚙ Admin'}
+          {admin.mode ? '⚙ Admin: ON' : '⚙ Admin'}
         </button>
       </div>
 
@@ -1582,8 +1443,8 @@ export default function App() {
       </div>
 
       <div style={{ marginTop: 4 }}>
-        <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus} reloadModels={reloadModels}
-          onClearCaptionCache={() => { clearCaptions().catch(() => {}); captionMemRef.current.clear(); setVisionStats(null) }} />
+        <ConfigBar cfg={cfg} setCfg={setCfg} models={models} modelStatus={modelStatus}
+          reloadModels={configActions.reloadModels} onClearCaptionCache={configActions.clearCaptionCache} />
       </div>
 
       </div>{/* ================= END LEFT RAIL ================= */}
@@ -1591,7 +1452,7 @@ export default function App() {
       {/* ================= CENTER · COMPOSE ================= */}
       <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
 
-      {target === 'scriptwriter' ? (
+      {scriptwriterMode ? (
         <ScriptwriterPanel
           key={scriptwriterKey}
           cfg={cfg}
@@ -1602,16 +1463,13 @@ export default function App() {
           history={history}
           comfyCfg={comfyCfg}
           setComfyCfg={setComfyCfg}
+          loras={loras}
+          onSaveLoras={saveLoraLibrary}
           autoJob={scriptwriterAutoJob}
           onAutoJobDone={(res) => scriptwriterAutoResolveRef.current?.(res)}
           onQueueAutoJob={addScriptwriterAutoJob}
-          queueProps={{
-            queue, busy: queueBusy, runningId: queueRunningId,
-            onRun: runAnyQueueItem,
-            onRemove: id => deleteQueueItem(id).then(refreshQueue),
-            onProcessAll: processAllQueue, onStop: stopProcessingQueue,
-            onClear: () => dbClearQueue().then(refreshQueue),
-          }}
+          queueProps={{ queue: queue.items, busy: queue.busy, runningId: queue.runningId, ...queueActions }}
+          adminMode={admin.mode}
         />
       ) : (<>
 
@@ -1742,6 +1600,27 @@ export default function App() {
         </div>
       )}
 
+      {/* LoRA triggers */}
+      {targetTakesLoras(target) && (
+        <LoraPanel
+          loras={loras} activeIds={activeLoraIds} editable={!isLoading}
+          onToggle={toggleLora} onSaveLoras={saveLoraLibrary} />
+      )}
+
+      {/* Spoken language */}
+      {show.spokenLang && (
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Spoken Language <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(the language everyone in the video speaks — dialogue you type is translated into it)</span>
+          </label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {SPOKEN_LANGUAGES.map(l => (
+              <button key={l.id} onClick={() => setSpokenLangId(l.id)} style={btn(spokenLangId === l.id)} title={l.label}>{l.short}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Dialogue */}
       {show.dialogue && (
         <div style={{ marginBottom: 18 }}>
@@ -1752,13 +1631,13 @@ export default function App() {
             style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
             onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
           {dialogue.trim() && (() => {
-            const b = syllableBudget(duration, dialogue)
+            const b = syllableBudget(duration, dialogue, show.spokenLang ? spokenLangId : null)
             const over = b.max != null && b.count > b.max
             return (
               <div style={{ fontSize: 13, color: over ? 'var(--pe-warn)' : 'var(--pe-ink-3)', marginTop: 6, lineHeight: 1.5 }}>
                 {b.count} syllable{b.count === 1 ? '' : 's'}
                 {b.max != null && (
-                  <> · budget ≈{b.min}–{b.max} for a {b.seconds}s clip ({b.german ? 'German' : 'English'} pacing, ~{b.spsLo}–{b.spsHi} syll/s)</>
+                  <> · budget ≈{b.min}–{b.max} for a {b.seconds}s clip ({b.langLabel} pacing, ~{b.spsLo}–{b.spsHi} syll/s)</>
                 )}
                 {over && ' — too many syllables for this duration; speech may rush or get cut. Trim the line or pick a longer duration.'}
               </div>
@@ -1771,8 +1650,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Soundscape / music (MiniMax H3 only) */}
-      {target === 'minimax_h3' && (
+      {/* Ambient sound + audience-only score, for a target that generates audio */}
+      {tcaps.audioFields && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Ambient Sound <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)</span>
@@ -1807,31 +1686,31 @@ export default function App() {
 
       {/* Image panels */}
       {showImage && (
-        <HistoryImageGallery history={history} onPick={pickHistoryImage} pickHint={galleryPickHint}
-          onSaveCaption={(entryId, text) => updateHistoryEntry(entryId, { caption: text }).then(refreshHistory).catch(() => {})} />
+        <HistoryImageGallery history={history} onPick={galleryActions.pick} pickHint={galleryPickHint}
+          onSaveCaption={galleryActions.saveCaption} />
       )}
       {showImage && (t.type === 'image' || frameMode === 'single' ? (
         <>
-          {!firstImg && ratioPicker}
-          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={seeds.first} />
+          {!imgs.firstImg && ratioPicker}
+          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first} />
         </>
       ) : frameMode === 'last' ? (
-        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
+        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
       ) : frameMode === 'ref' ? (
         <>
           {ratioPicker}
-          <MinimaxRefPanel images={refImages} onChange={setRefImages} audio={refAudio} onAudioChange={setRefAudio} />
+          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audio={imgs.refAudio} onAudioChange={imgs.setRefAudio} />
         </>
       ) : frameMode === 'firstmidlast' ? (
         <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
-          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.mid} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.last} />
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
+          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={imgs.setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.mid} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
         </>
       ) : (
         <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.first} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={seeds.last} />
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
         </>
       ))}
 
@@ -1868,40 +1747,40 @@ export default function App() {
       )}
 
       {/* Admin system prompt */}
-      {adminMode && (
+      {admin.mode && (
         <div style={{ marginBottom: 18, background: 'var(--pe-rail)', border: '1px solid var(--pe-accent-line)', borderRadius: 10, padding: '12px 16px' }}>
           <button
-            onClick={() => setAdminSystemOpen(v => !v)}
+            onClick={() => admin.setSystemOpen(v => !v)}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: adminSystemOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+              <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: admin.systemOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
               System Prompt
             </span>
             <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>editable · sent on every generation</span>
           </button>
-          {adminSystemOpen && (
+          {admin.systemOpen && (
             <div style={{ marginTop: 12 }}>
-              <textarea value={adminSystem} onChange={e => setAdminSystem(e.target.value)} rows={12}
+              <textarea value={admin.system} onChange={e => admin.setSystem(e.target.value)} rows={12}
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => setAdminSystem(systemPromptFor(t, frameMode))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>
       )}
 
       {/* Admin user message review */}
-      {adminMode && pendingSend && (
+      {admin.mode && admin.pending && (
         <div style={{ marginBottom: 18, background: 'var(--pe-rail)', border: '1px solid var(--pe-accent-line)', borderRadius: 10, padding: '14px 16px' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-accent-ink)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>User Message · review & edit before sending</div>
-          <textarea value={adminUserMsg} onChange={e => setAdminUserMsg(e.target.value)} rows={10}
+          <textarea value={admin.userMsg} onChange={e => admin.setUserMsg(e.target.value)} rows={10}
             style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
           <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
             <button onClick={sendToWriter} disabled={writing}
               style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: writing ? 'var(--pe-line)' : 'var(--pe-accent)', color: writing ? 'var(--pe-ink-3)' : '#fff', fontSize: 14, fontWeight: 600, cursor: writing ? 'not-allowed' : 'pointer', transition: 'all 0.15s' }}>
               {writing ? '✦ Writing prompt…' : '→ Send to Writer'}
             </button>
-            <button onClick={() => setPendingSend(false)} disabled={writing}
+            <button onClick={() => admin.setPending(false)} disabled={writing}
               style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: writing ? 'not-allowed' : 'pointer' }}>
               Cancel
             </button>
@@ -1914,9 +1793,9 @@ export default function App() {
         <button onClick={enhance} disabled={genBtnDisabled} style={{ ...genBtnStyle, flex: 1 }}>
           {buttonLabel}
         </button>
-        <button onClick={addToQueue} disabled={!canGenerate || queueBusy}
+        <button onClick={addToQueue} disabled={!canGenerate || queue.busy}
           title="Save this generation for later instead of running it now"
-          style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: (!canGenerate || queueBusy) ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 14, fontWeight: 600, cursor: (!canGenerate || queueBusy) ? 'not-allowed' : 'pointer' }}>
+          style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: (!canGenerate || queue.busy) ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 14, fontWeight: 600, cursor: (!canGenerate || queue.busy) ? 'not-allowed' : 'pointer' }}>
           + Add to Queue
         </button>
       </div>
@@ -1981,7 +1860,7 @@ export default function App() {
               {grokRenderOn && geminiRenderOn && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   via
-                  <select value={renderProvider} onChange={e => setRenderProvider(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  <select value={render.provider} onChange={e => render.setProvider(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                     <option value="grok">Grok</option>
                     <option value="gemini">Gemini</option>
                   </select>
@@ -1989,20 +1868,20 @@ export default function App() {
               )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 aspect
-                <select value={imageAspect} onChange={e => setImageAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                <select value={render.imageAspect} onChange={e => render.setImageAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                   {GROK_IMAGE_RESOLUTIONS.map(r => <option key={r.id} value={r.ar}>{r.label}</option>)}
                 </select>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 count
-                <select value={imageCount} onChange={e => setImageCount(parseInt(e.target.value, 10) || 1)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                <select value={render.imageCount} onChange={e => render.setImageCount(parseInt(e.target.value, 10) || 1)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                   {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </label>
               {imgProvider === 'grok' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   resolution
-                  <select value={imageResolution} onChange={e => setImageResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                  <select value={render.imageResolution} onChange={e => render.setImageResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                     <option value="1k">1K</option>
                     <option value="2k">2K</option>
                   </select>
@@ -2022,13 +1901,13 @@ export default function App() {
               <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>🎬 Grok video</span>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 duration
-                <select value={videoDuration} onChange={e => setVideoDuration(parseInt(e.target.value, 10) || 8)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                <select value={render.videoDuration} onChange={e => render.setVideoDuration(parseInt(e.target.value, 10) || 8)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                   {Array.from({ length: 15 }, (_, n) => n + 1).map(n => <option key={n} value={n}>{n}s</option>)}
                 </select>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 resolution
-                <select value={videoResolution} onChange={e => setVideoResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                <select value={render.videoResolution} onChange={e => render.setVideoResolution(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                   <option value="480p">480p</option>
                   <option value="720p">720p</option>
                   <option value="1080p">1080p</option>
@@ -2036,16 +1915,16 @@ export default function App() {
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 aspect
-                <select value={videoAspect} onChange={e => setVideoAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
+                <select value={render.videoAspect} onChange={e => render.setVideoAspect(e.target.value)} style={{ ...selStyle, width: 'auto', padding: '3px 6px', fontSize: 13 }}>
                   {GROK_IMAGE_RESOLUTIONS.filter(r => r.id !== 'cine219').map(r => <option key={r.id} value={r.ar}>{r.label}</option>)}
                 </select>
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <input type="checkbox" checked={videoAudio} onChange={e => setVideoAudio(e.target.checked)} /> audio
+                <input type="checkbox" checked={render.videoAudio} onChange={e => render.setVideoAudio(e.target.checked)} /> audio
               </label>
               <span style={{ color: 'var(--pe-ink-3)' }}>model: {cfg.videoModel || 'grok-imagine-video-1.5'} · set in ⚙ Backend</span>
               {currentImages().length > 0 && <span style={{ color: 'var(--pe-ok)' }}>· image-to-video: first frame used</span>}
-              {videoResolution === '1080p' && currentImages().length > 0 && (
+              {render.videoResolution === '1080p' && currentImages().length > 0 && (
                 <span style={{ color: 'var(--pe-warn)' }}>· 1080p may be rejected for image-to-video — retries automatically</span>
               )}
             </div>
@@ -2096,7 +1975,7 @@ export default function App() {
                     return (
                     <button
                       onClick={() => renderImage(i)} disabled={r.imgLoading}
-                      title={r.imgError ? r.imgError : `${edit ? 'Image-to-image edit' : 'Render'} with ${pModel} (${imageCount}× · ${imageAspect}${imgProvider === 'grok' ? ` · ${imageResolution}` : ''})${edit ? ` · ${currentImages().length} reference image(s)` : ''}.`}
+                      title={r.imgError ? r.imgError : `${edit ? 'Image-to-image edit' : 'Render'} with ${pModel} (${render.imageCount}× · ${render.imageAspect}${imgProvider === 'grok' ? ` · ${render.imageResolution}` : ''})${edit ? ` · ${currentImages().length} reference image(s)` : ''}.`}
                       style={{
                         padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
                         background: r.imgError ? 'var(--pe-danger-bg)' : r.images?.length ? 'var(--pe-ok-bg)' : 'var(--pe-surface)',
@@ -2118,7 +1997,7 @@ export default function App() {
                     return (
                       <button
                         onClick={() => renderVideo(i)} disabled={r.vidLoading}
-                        title={r.vidError || `Submit + poll ${cfg.videoModel || 'grok-imagine-video-1.5'} (${videoDuration}s · ${videoResolution} · ${videoAspect} · audio ${videoAudio ? 'on' : 'off'})${fromImg ? ' · image-to-video' : ''}. Takes 1–5 min — keep the tab open.`}
+                        title={r.vidError || `Submit + poll ${cfg.videoModel || 'grok-imagine-video-1.5'} (${render.videoDuration}s · ${render.videoResolution} · ${render.videoAspect} · audio ${render.videoAudio ? 'on' : 'off'})${fromImg ? ' · image-to-video' : ''}. Takes 1–5 min — keep the tab open.`}
                         style={{
                           padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)',
                           background: r.vidError ? 'var(--pe-danger-bg)' : r.video ? 'var(--pe-ok-bg)' : 'var(--pe-surface)',
@@ -2151,7 +2030,7 @@ export default function App() {
                         download={`render-${i + 1}-${k + 1}.${imgExt(img.mediaType)}`}
                         style={{ fontSize: 13, color: 'var(--pe-accent-ink)', textDecoration: 'none' }}>⬇ Save image</a>
                       {isGrok(cfg.base) && (() => {
-                        const st = upStatus[`${i}-${k}`]
+                        const st = render.upStatus[`${i}-${k}`]
                         return (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <button onClick={() => upscaleImage(i, k)} disabled={st === 'loading'}
@@ -2211,275 +2090,39 @@ export default function App() {
           fromHistory={!!adaptSourceOverride}
           sourceTs={adaptSourceOverride?.ts}
           models={models} defaultModel={effectiveWriter} cfg={cfg}
-          style={style} creativity={creativity} negative={negative}
-          dialogue={dialogue} delivery={delivery} promptLength={promptLength}
-          soundscape={soundscape} music={music}
-          duration={duration} h3RatioId={h3RatioId}
+          workspace={workspace} activeLoras={activeLoras}
           onSaveAdapt={(snap, outs) => saveHistory(snap, outs, false)}
           onClose={() => setAdaptSourceOverride(null)}
         />
       )}
 
-      {/* History */}
-      <div style={{ marginTop: 28, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <button onClick={() => setHistoryOpen(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--pe-ink-3)', fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: historyOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
-            History {history.length > 0 ? `(${histFiltersActive ? `${visibleHistory.length}/${history.length}` : history.length})` : ''}
-          </button>
-          {historyOpen && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }}
-                onChange={e => { if (e.target.files[0]) importHistory(e.target.files[0]); e.target.value = '' }} />
-              <button onClick={exportHistory} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Export ↓</button>
-              <button onClick={() => importInputRef.current?.click()} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Import ↑</button>
-              {history.length > 0 && <button onClick={clearHistory} style={{ fontSize: 13, color: 'var(--pe-danger)', background: 'none', border: '1px solid var(--pe-danger-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>Clear</button>}
-            </div>
-          )}
-        </div>
-        {historyOpen && history.length > 1 && (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-            {(() => {
-              const fsel = { fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', maxWidth: 200 }
-              return <>
-                <input
-                  type="search" value={histSearch} onChange={e => setHistSearch(e.target.value)}
-                  placeholder="Search history…" spellCheck={false}
-                  style={{ ...fsel, cursor: 'text', minWidth: 160, maxWidth: 240, color: 'var(--pe-ink)' }}
-                  title="Match scene, prompt text, vision caption, model or project (space = AND)"
-                />
-                {(allProjects.length > 0 || history.some(h => !h.project)) && (
-                  <select value={historyFilter} onChange={e => setHistoryFilter(e.target.value)} style={fsel} title="Project">
-                    <option value="all">All projects</option>
-                    <option value="unfiled">Unfiled</option>
-                    {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                )}
-                {histTargets.length > 1 && (
-                  <select value={histTargetFilter} onChange={e => setHistTargetFilter(e.target.value)} style={fsel} title="Generated for">
-                    <option value="all">All targets</option>
-                    {histTargets.map(id => <option key={id} value={id}>{entryTargetLabel(id)}</option>)}
-                  </select>
-                )}
-                {histModels.length > 1 && (
-                  <select value={histModelFilter} onChange={e => setHistModelFilter(e.target.value)} style={fsel} title="Writer model">
-                    <option value="all">All models</option>
-                    {histModels.map(m => <option key={m} value={m}>{modelFilterLabel(m)}</option>)}
-                  </select>
-                )}
-                {history.some(entryHasImages) && history.some(h => !entryHasImages(h)) && (
-                  <select value={histImageFilter} onChange={e => setHistImageFilter(e.target.value)} style={fsel} title="Image inputs">
-                    <option value="all">Any input</option>
-                    <option value="with">With images</option>
-                    <option value="without">Without images</option>
-                  </select>
-                )}
-                {histFiltersActive && (
-                  <button onClick={resetHistFilters} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>Reset</button>
-                )}
-              </>
-            })()}
-          </div>
-        )}
-        {historyOpen && history.length === 0 && (
-          <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', padding: '8px 0' }}>No history yet.</div>
-        )}
-        {historyOpen && history.length > 0 && visibleHistory.length === 0 && (
-          <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', padding: '8px 0' }}>
-            No generations match these filters.
-          </div>
-        )}
-        {historyOpen && visibleHistory.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {visibleHistory.map((h, i) => {
-              if (h.type === 'scriptwriter') {
-                // A Full Auto entry's `idea` is a fixed boilerplate instruction with the
-                // user's hint appended after it — an 80-char cutoff of `idea` always shows
-                // the boilerplate, never the hint, so prefer the separately-saved hint.
-                const ideaShort = h.fullAuto
-                  ? (h.fullAutoHint ? (h.fullAutoHint.length > 80 ? h.fullAutoHint.slice(0, 80) + '…' : h.fullAutoHint) : '(AI invented freely — no hint given)')
-                  : (h.idea && h.idea.length > 80 ? h.idea.slice(0, 80) + '…' : (h.idea || ''))
-                const phaseLabel = h.phase === 'done' ? 'Done' : h.phase === 'dircut' ? "Director's cut" : 'Script'
-                return (
-                  <div key={i} style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                      <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(h.ts).toLocaleString()}</span>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        {entryProjectSelect(h)}
-                        <button onClick={() => restore(h)} disabled={!!restoringId} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: restoringId ? 'wait' : 'pointer', opacity: restoringId && restoringId !== h.id ? 0.5 : 1 }}>{restoringId === h.id ? 'Restoring…' : 'Restore'}</button>
-                        <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 4 }}>
-                      Scriptwriter{h.fullAuto ? ' · 🎬 Full Auto' : ''} · {h.model} · {phaseLabel}
-                      {h.script ? ` · ${h.script.scenes?.length ?? 0} scenes` : ''}
-                      {h.script?.characters?.length ? ` · ${h.script.characters.length} cast` : ''}
-                      {h.directorsCut ? ` · ${h.directorsCut.shots?.length ?? 0} ${h.promptTarget === 'minimax_h3' ? 'clips' : 'shots'}` : ''}
-                      {h.finalPrompts ? ` · ${h.finalPrompts.filter(p => p.text).length} ${h.promptTarget === 'minimax_h3' ? 'H3' : 'LTX'} prompts` : ''}
-                    </div>
-                    {h.script?.title && <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600, marginBottom: 4 }}>{h.script.title}</div>}
-                    {h.script?.characters?.length > 0 && (
-                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginBottom: 4 }}>
-                        Cast: {h.script.characters.map(c => c.name).join(', ')}
-                      </div>
-                    )}
-                    {ideaShort && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6, fontStyle: 'italic' }}>"{ideaShort}"</div>}
-                    {h.refImages?.length > 0 && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
-                        {h.refImages.map((im, ii) => im.url
-                          ? <img key={ii} src={im.url} loading="lazy" decoding="async"
-                              title={`${im.note ? im.note + ' — ' : ''}${im.caption || im.fileName}`}
-                              style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                          : <span key={ii} title={im.caption || ''}
-                              style={{ fontSize: 12, color: 'var(--pe-ink-3)', border: '1px solid var(--pe-line)', borderRadius: 4, padding: '2px 6px' }}>
-                              📄 {im.note || im.fileName}
-                            </span>
-                        )}
-                      </div>
-                    )}
-                    {(() => {
-                      const tiles = (h.framePrompts || []).flatMap((fp, si) =>
-                        ['first', 'mid', 'last']
-                          .filter(fk => fp?.frames?.[fk]?.image?.url)
-                          .map(fk => ({ im: fp.frames[fk].image, si, fk })))
-                      if (!tiles.length) return null
-                      return (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0' }}>
-                          {tiles.map((t, ti) => (
-                            <img key={ti} src={t.im.url} loading="lazy" decoding="async"
-                              title={`Shot ${(h.directorsCut?.shots?.[t.si]?.shot_number) ?? t.si + 1} · ${t.fk} frame`}
-                              style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--pe-line)' }} />
-                          ))}
-                        </div>
-                      )
-                    })()}
-                    {h.finalPrompts && h.finalPrompts.filter(p => p.text).length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-                        {h.finalPrompts.filter(p => p.text).map((p, pi) => (
-                          <div key={pi} style={{ background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '8px 10px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                              <span style={{ fontSize: 13.5, color: 'var(--pe-accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shot {p.shotNumber} · {p.sceneTitle}</span>
-                              <button onClick={() => navigator.clipboard.writeText(p.text)} style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
-                            </div>
-                            <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)' }}>{p.text}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              }
-
-              const tg = TARGETS[h.target]
-              const ml = h.outputCount === 1 ? h.model : '3 variants'
-              const sl = STYLE_OPTIONS.find(s => s.id === h.style)?.label
-              const cl = CREATIVITY_OPTIONS.find(c => c.id === h.creativity)?.label
-              const moves = (h.moves || []).map(moveLabel)
-              return (
-                <div key={i} style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{new Date(h.ts).toLocaleString()}</span>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      {entryProjectSelect(h)}
-                      {h.outputs?.length > 0 && (
-                        <button
-                          onClick={() => startAdapt(h)}
-                          title="Rewrite this generation's prompt for another model"
-                          style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
-                        >⇄ Adapt</button>
-                      )}
-                      <button onClick={() => restore(h)} disabled={!!restoringId} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '3px 10px', cursor: restoringId ? 'wait' : 'pointer', opacity: restoringId && restoringId !== h.id ? 0.5 : 1 }}>{restoringId === h.id ? 'Restoring…' : 'Restore settings'}</button>
-                      <button onClick={() => removeHistoryEntry(h.id)} style={{ fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>✕</button>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--pe-accent-ink)', marginBottom: 6 }}>
-                    {tg?.label} · {ml}{h.vision ? ` · 👁 ${h.vision}` : ''}{h.duration && tg?.type !== 'image' ? ` · ${h.duration}` : ''}{sl && sl !== 'Auto' ? ` · ${sl}` : ''}{cl && cl !== 'Balanced' ? ` · ${cl}` : ''}{h.frameMode === 'firstlast' ? ' · first→last' : h.frameMode === 'firstmidlast' ? ' · first→mid→last' : h.frameMode === 'last' ? ' · last frame' : h.frameMode === 'ref' ? ' · reference' : ''}{h.ratio ? ` · ${h.ratio}` : ''}{h.adaptedFrom ? ` · ⇄ from ${(TARGETS[h.adaptedFrom.target]?.label || h.adaptedFrom.target).split(' · ')[0]}` : ''}
-                  </div>
-                  {moves.length > 0 && <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 6 }}>Camera: {moves.join(', ')}</div>}
-                  <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>{h.scene ? h.scene : <span style={{ color: 'var(--pe-ink-3)' }}>(proposed from image)</span>}</div>
-                  {h.dialogue && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Dialogue: "{h.dialogue}"{h.delivery ? ` (${h.delivery})` : ''}</div>}
-                  {h.soundscape && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Soundscape: {h.soundscape}</div>}
-                  {h.music && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Music: {h.music}</div>}
-                  {h.negative && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 6 }}>Avoid: {h.negative}</div>}
-                  {(h.firstImg || h.midImg || h.lastImg) && (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
-                      {[h.firstImg, h.midImg, h.lastImg].filter(Boolean).map((im, ii) =>
-                        typeof im === 'object' && im.url
-                          ? <img key={ii} src={im.url} loading="lazy" decoding="async" alt={im.fileName} title={im.fileName}
-                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{typeof im === 'string' ? im : im.fileName}</span>
-                      )}
-                    </div>
-                  )}
-                  {h.refImages && h.refImages.length > 0 && (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
-                      {h.refImages.map((im, ii) =>
-                        typeof im === 'object' && im.url
-                          ? <img key={ii} src={im.url} loading="lazy" decoding="async" alt={im.fileName} title={`${im.fileName} (${im.role})`}
-                              style={{ width: 40, height: 30, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                          : <span key={ii} style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>{typeof im === 'string' ? im : im.fileName}</span>
-                      )}
-                    </div>
-                  )}
-                  {h.caption && (
-                    <HistoryCaptionEditor
-                      value={h.caption}
-                      onSave={h.id ? (text => updateHistoryEntry(h.id, { caption: text }).then(refreshHistory).catch(() => {})) : null}
-                    />
-                  )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
-                    {(h.outputs || []).map((o, oi) => (
-                      <div key={oi} style={{ background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '8px 10px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                          <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{o.label}</span>
-                          <button onClick={() => navigator.clipboard.writeText(o.text)} style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Copy</button>
-                        </div>
-                        <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)' }}>{o.text}</div>
-                        {Array.isArray(o.images) && o.images.length > 0 && (
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                            {o.images.map((img, k) => img.url && (
-                              <img key={k} src={img.url} loading="lazy" decoding="async" alt={`render ${k + 1}`} title="🎨 Grok render"
-                                style={{ width: 54, height: 54, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--pe-line)' }} />
-                            ))}
-                          </div>
-                        )}
-                        {o.video && o.video.url && (
-                          <div style={{ marginTop: 6 }}>
-                            <a href={o.video.url}
-                               target="_blank" rel="noreferrer" {...(o.video.blobRef ? { download: 'grok-video.mp4' } : {})}
-                               style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', textDecoration: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px' }}>
-                              🎬 video{o.video.duration ? ` · ${o.video.duration}s` : ''}{o.video.blobRef ? '' : ' ↗ (link may be expired)'}
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
+      {/* History — the list, its filters and its cards live in HistoryPanel,
+          which is memoized: the hidden file input stays here because App owns
+          the import flow. */}
+      <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }}
+        onChange={e => { if (e.target.files[0]) importHistory(e.target.files[0]); e.target.value = '' }} />
+      <HistoryPanel
+        history={history}
+        visible={visibleHistory}
+        open={historyOpen}
+        onToggleOpen={toggleHistoryOpen}
+        projects={allProjects}
+        restoringId={restoringId}
+        actions={historyActions}
+        filters={histFilters.filters}
+        setFilter={histFilters.setFilter}
+        resetFilters={histFilters.resetFilters}
+        filtersActive={histFilters.active}
+        targets={histFilters.targets}
+        models={histFilters.models}
+      />
 
       {/* Queue — one shared queue for main-pipeline items and Full Auto
           Scriptwriter jobs alike (QueueCard renders both). Hidden while the
           Scriptwriter tab is open — it has its own filtered, embedded copy of
           this same panel in its Full Auto view instead. */}
       {!scriptwriterMode && (
-        <QueuePanel
-          queue={queue}
-          open={queueOpen}
-          onToggleOpen={() => setQueueOpen(v => !v)}
-          busy={queueBusy}
-          runningId={queueRunningId}
-          onRun={runAnyQueueItem}
-          onRemove={id => deleteQueueItem(id).then(refreshQueue)}
-          onProcessAll={processAllQueue}
-          onStop={stopProcessingQueue}
-          onClear={() => dbClearQueue().then(refreshQueue)}
-        />
+        <QueuePanel queue={queue.items} open={queue.open} busy={queue.busy} runningId={queue.runningId} {...queueActions} />
       )}
 
       </div>{/* ================= END RIGHT · OUTPUT ================= */}

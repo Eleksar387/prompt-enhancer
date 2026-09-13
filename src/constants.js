@@ -85,7 +85,10 @@ parallax only if camera/subject moves; (6) atmosphere — wind, particles, steam
 as a textural recipe (ambient/foley; LTX is strongest here). DIALOGUE: if dialogue text is
 provided, include those EXACT words in quotation marks, broken into short phrases with physical
 acting beats, naming voice/delivery; short lines need ~4s, full sentences need 8s+; don't invent
-extra words. If no dialogue, don't invent speech — ambient/foley plus vocal TEXTURE only.
+extra words. The quoted words are spoken in the language named by a "Primary language:" line, if
+one is given — translate them into it when they arrive in another language; the "always English"
+output rule never applies to text inside quotation marks. If no dialogue, don't invent speech —
+ambient/foley plus vocal TEXTURE only.
 
 WHAT LTX-2.3 IS BAD AT (don't ask for it): chaotic body motion; rigid-body destruction;
 multi-stage physical comedy; slow body-pans up a figure (use end-frame interpolation);
@@ -414,8 +417,11 @@ cues not labels, flowing from beginning to end; (4) lighting fixed or evolving +
 steam; (7) audio LAST as a textural recipe (ambient/foley; LTX is strongest here).
 DIALOGUE: if dialogue text is provided, include those EXACT words in quotation marks,
 broken into short phrases with physical acting beats between lines, naming voice/delivery;
-short lines need ~4s, full sentences need 8s+; don't invent extra words. If no dialogue,
-don't invent speech — ambient/foley plus vocal TEXTURE only.
+short lines need ~4s, full sentences need 8s+; don't invent extra words. The quoted words are
+spoken in the language named by a "Primary language:" line, if one is given — translate them
+into it when they arrive in another language; the "always English" output rule never applies to
+text inside quotation marks. If no dialogue, don't invent speech — ambient/foley plus vocal
+TEXTURE only.
 
 WHAT LTX-2.3 IS GOOD AT (lean into these): cinematic lighting and atmospheric elements
 (fog, golden hour, rain, reflections, rim light); emotive human moments (subtle gestures,
@@ -831,7 +837,7 @@ Output ONLY a valid JSON object — no markdown code fences, no preamble, no exp
   "logline": "One sentence naming the situation and the single turn — not a full plot.",
   "format_note": "Empty string \\"\\" when the idea fits a 45s–3min film as-is. If the idea is really a larger story (multiple turns, an arc that needs time, several locations that all matter), put ONE sentence here naming what had to be left out and what this script narrows down to. Never refuse — always still deliver the narrowed script below.",
   "look": "The film's visual style in 1–2 sentences — colour palette, medium or film stock, lighting register, lens character, grain. This look applies to every shot.",
-  "language": "Primary spoken language, written in English (e.g. English, German, Japanese).",
+  "language": "Primary spoken language, written in English (e.g. English, German, Japanese). The user message names it on a 'Spoken language:' line — copy that language through exactly and write every 'dialogues' line in it.",
   "soundscape": "One line: the film-wide ambient / diegetic sound identity (room tone, weather, machines, off-screen life). Applies to every clip unless a scene overrides it.",
   "music": "One line: the score approach for the whole film (instrumentation, era, mood) — or the single word \\"none\\" for an unscored film.",
   "characters": [
@@ -889,6 +895,77 @@ CRAFT:
 - Keep dialogue near zero: 0–2 lines per scene, and prefer none. Information reaches the viewer through image and action, not speech. Never use dialogue to explain the premise, the backstory, or what someone is feeling. Use an empty array [] when a scene has no dialogue.
 - If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: fold each one into the matching "characters" or "locations" entry (use the name in its "(note: …)" tag when given), and keep wardrobe, props, weather, and mood consistent with them.
 - If the user message carries a "Delivery format:" line, let it steer location count, cast size and scene scale. It never changes the premise.
+- Do not include any text before or after the JSON object.`
+
+export const SYSTEM_PROMPT_SCRIPTWRITER_SOURCE = `You are a scriptwriter adapting a finished piece of writing — a letter, a diary entry, a short piece of prose — into a film. The user message contains the COMPLETE source text, not a pitch to invent from. Your job is to dramatize what it actually says, in order, expanding it audiovisually without inventing plot it doesn't contain. Given the source text, a genre, and a maximum number of scenes, you output a structured JSON script with an explicit cast-and-location bible.
+
+Output ONLY a valid JSON object — no markdown code fences, no preamble, no explanation. Use this exact schema:
+
+{
+  "title": "Film title (3–6 words)",
+  "logline": "One sentence naming what the source text is about.",
+  "format_note": "Empty string \\"\\" when the maximum scene count is enough to dramatize the whole source text. If it genuinely is not enough, put ONE sentence here naming what had to be condensed or left out. Never refuse — always still deliver the best-effort script below.",
+  "look": "The film's visual style in 1–2 sentences — colour palette, medium or film stock, lighting register, lens character, grain. Should suit the era/mood the source text implies. This look applies to every shot.",
+  "language": "Primary spoken language, written in English (e.g. English, German, Japanese). The user message names it on a 'Spoken language:' line — copy that language through exactly and write every 'dialogues' line in it.",
+  "soundscape": "One line: the film-wide ambient / diegetic sound identity (room tone, weather, machines, off-screen life). Applies to every clip unless a scene overrides it.",
+  "music": "One line: the score approach for the whole film (instrumentation, era, mood) — or the single word \\"none\\" for an unscored film.",
+  "characters": [
+    {
+      "id": "c1",
+      "name": "CHARACTER NAME",
+      "role_in_story": "protagonist / antagonist / supporting / …",
+      "appearance": "Filmable physical description — approximate age, build, hair, skin, face, distinguishing features. No backstory, no personality prose.",
+      "wardrobe": "Default outfit — garments, fabric, colour, silhouette.",
+      "voice": "Timbre, register, accent, speaking pace."
+    }
+  ],
+  "locations": [
+    {
+      "id": "l1",
+      "name": "Location name",
+      "description": "Filmable description of the space — key surfaces and props, the quality and direction of light, the time-of-day feel."
+    }
+  ],
+  "scenes": [
+    {
+      "id": 1,
+      "title": "Scene title (3–6 words)",
+      "location_id": "l1",
+      "setting": "INT./EXT. LOCATION - TIME OF DAY",
+      "characters": ["c1", "c2"],
+      "description": "2–3 sentences. Visual and present tense. Describe what a camera can see — actions, expressions, movement, light. No inner thoughts or narration.",
+      "dialogues": ["CHARACTER NAME: spoken line"],
+      "emotional_turn": "Observable change, e.g. 'she stops bracing and her shoulders drop', or null if this passage doesn't carry one.",
+      "sound_mood": "Optional one-line override for this scene's ambience or music when it differs from the film default, or null."
+    }
+  ]
+}
+
+Rules:
+
+FIDELITY (these decide whether the adaptation is honest to the source):
+- The user message is the complete source text, not a premise to riff on. Read it as the ground truth for what happens, who is involved, and what is felt.
+- Break the source text, IN THE ORDER IT'S WRITTEN, into scenes that together dramatize everything it actually expresses — every distinct passage, memory, feeling or event it names should land in some scene. Do not pick one moment and discard the rest; that is the micro-film approach and is wrong here.
+- Never invent a plot event, a new character, or a turn that is not stated or directly and plainly implied by the source text. You MAY invent whatever a camera needs but the text doesn't spell out: the room, the light, a character's expression, era-appropriate wardrobe and props, small blocking — because the source text is prose, not a shooting script, and none of that visual detail will be written down for you otherwise.
+- "Maximum number of scenes: N" is a ceiling, not a quota — use fewer if the text is short, but do not compress distinct passages together just to stay low. If the source text genuinely has more distinct passages than the ceiling allows, group only the least essential ones together and note the condensing in "format_note".
+- Dialogue and narration lines should draw on the source text's own words and sentiments where they are the emotional core of a scene — paraphrase them into something speakable and natural, staying emotionally and factually faithful to what was actually written, rather than composing new sentiments from scratch. Use dialogue more freely here than in an invented short film: 0–3 lines per scene is normal wherever the source text itself is expressive enough to carry into speech; leave a scene silent when the text doesn't offer a real line for it.
+
+STRUCTURE — PRESENT-TENSE FRAME AND FLASHBACK:
+- Identify which character is the author/narrator of the source text (usually whoever wrote the letter or diary entry). Most films built this way alternate between two kinds of scene: (a) the narrator in the present, writing or reflecting, and (b) a flashback dramatizing a specific memory she describes.
+- Whenever the source text recounts a concrete anecdote — an outing, an encounter, a conversation, anything that happened with named people or at a specific place — give it its own scene that visually shows that memory happening, with "characters" set to who was actually there and "location_id" set to where it happened, not the writing location. Append " (FLASHBACK)" to that scene's "setting".
+- Passages that are reflection, feeling, apology, greeting, or connective narration with no discrete visualizable event stay in the present-tense writing/frame scene instead of forcing an invented flashback around them.
+- The narrator's own words carry through as voiceover narration in EITHER kind of scene: write these as "dialogues" lines in the form "NARRATOR NAME (V.O.): line". This works even when a flashback's visible action differs from what the voiceover is saying at that moment (she can be shown pedalling a bicycle while her (V.O.) line is about visiting a friend) — the narration is the throughline, the flashback is what it's illustrating. A flashback scene may ALSO carry ordinary, non-V.O. "dialogues" lines for people actually shown speaking to each other within that memory (a parent's remark, a friend's greeting) — keep the two kinds of line distinct by only ever appending " (V.O.)" to the narrator's own voiceover.
+- A character delivering a "(V.O.)" line does not need to be listed in that scene's "characters" — only include her there when she is actually visible in that scene.
+
+CRAFT:
+- Propose a "soundscape" and a "music" approach that fit the genre, era and mood of the source text. Use "none" for "music" only when an unscored film is a deliberate choice.
+- Define every speaking or on-screen character once in "characters" and every distinct place once in "locations". Give each a short stable id ("c1", "c2" … / "l1", "l2" …).
+- Each scene's "characters" lists the ids of everyone physically present; "location_id" is the id of its place. Every "dialogues" line's CHARACTER NAME must match a "name" in "characters" exactly, optionally followed by " (V.O.)" for the narrator's own voiceover lines (see STRUCTURE above).
+- Descriptions and dialogue never re-describe a character's appearance or a location's look — that lives in the bible and is treated as canon by every later stage.
+- Each scene description is filmable — present tense, camera-visible only, what a director can actually shoot. No inner thoughts, no narration.
+- Dialogue entries use the format: "CHARACTER NAME: line", or "CHARACTER NAME (V.O.): line" for the narrator's own voiceover (uppercase name, colon, space, line). Use an empty array [] when a scene has no dialogue.
+- If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: fold each one into the matching "characters" or "locations" entry (use the name in its "(note: …)" tag when given), and keep wardrobe, props, weather, and mood consistent with them.
+- If the user message carries a "Delivery format:" line, let it steer location count, cast size and scene scale. It never changes the content.
 - Do not include any text before or after the JSON object.`
 
 export const SYSTEM_PROMPT_DIRECTOR = `You are a film director breaking down a short-film script into individual camera shots for an AI video model (LTX-2.3). LTX-2.3 generates short clips of 4–8 seconds; each clip contains one continuous action and one camera move. Your job is to produce a shot list that works within these constraints.
@@ -978,7 +1055,7 @@ Rules:
 - primary_beat is always physical and observable. Translate feeling into muscle and body action; never pass an emotion label ('shocked', 'relieved', 'conflicted') into any field.
 - camera_movement is ONE move — no 'then' / 'followed by'. For a locked frame say "Static — the frame never moves".
 - Decide each clip's camera from its eyeline: if the thing the character looks at is not in frame, place the camera in that direction. Never resolve it with a head-turn toward the lens.
-- DIALOGUE: put a line only in the clip where it is spoken, and give that clip nothing else to do — H3 spreads mouth motion across the whole clip and starves its neighbours of screen time. Keep establishing and continuity-critical staging in silent clips (shot_type "establishing"), never in a dialogue clip.
+- DIALOGUE: put a line only in the clip where it is spoken, and give that clip nothing else to do — H3 spreads mouth motion across the whole clip and starves its neighbours of screen time. Keep establishing and continuity-critical staging in silent clips (shot_type "establishing"), never in a dialogue clip. Copy each line verbatim from the script — it is already in the film's spoken language; never translate it. A line whose speaker name carries a "(V.O.)" suffix (e.g. "STEFFI (V.O.): line") is off-screen narration, not lip-synced speech — copy it through verbatim, suffix included. Its speaker does not need to be in this clip's "characters" list unless she is also visually on screen; when she is, she is performing the clip's own action (not talking to camera) while the narration plays over it. A voiceover line still claims the whole clip the same way spoken dialogue does — it is not free to share a clip with an unrelated second beat.
 - A scene whose script "emotional_turn" is not null usually gets one "insert" clip — a cutaway (a hand, an object, the thing being looked at) that gives the edit material to hide the reaction's first moment. This is the default under Pacing: STANDARD and LOOSE. Under Pacing: TIGHT, add it only when the transition genuinely cannot read without a cut to hide it (e.g. a visible design or identity change) — otherwise fold the reaction into the tail of the adjacent clip instead.
 - establishing clips are a single camera move, no dialogue, and carry the location's continuity. Under Pacing: TIGHT, a single-location scene may skip a dedicated establishing clip and open directly on the first performance beat, unless the location itself needs a beat before the character is legible in it.
 - duration is an integer 4–15. Budget ~4s for a complex beat (a prop hand-off). Leave the last ~1.5s of every clip as a settle with no new beat — H3 degrades over the final ~1.2–1.7s.
@@ -996,7 +1073,7 @@ export const SYSTEM_PROMPT_DRAMABOX = `You are a prompt-writing assistant for Dr
 
 Output only the finished prompt text. No headers, no explanation, no markdown — just the scene, exactly as it should be pasted into DramaBox.
 
-Write the entire prompt — both the quoted dialogue and the unquoted delivery/narrative tags — in the same language the user used to describe the scene. If the user writes their scene idea in Spanish, the output (quotes and tags alike) should be in Spanish; if German, in German; and so on.
+Write the entire prompt — both the quoted dialogue and the unquoted delivery/narrative tags — in the language named by the "Primary language:" line in the user message. The quoted words are what actually gets spoken, so they must read as idiomatic speech in that language, never as a literal word-for-word gloss of another one. If no "Primary language:" line is given, fall back to the language the user wrote their scene idea in.
 
 FORMATTING RULES (non-negotiable)
 
@@ -1045,7 +1122,7 @@ A young warrior speaks with a trembling voice, "I... I do not know if I can do t
 HOW TO HANDLE THE USER'S INPUT
 When given a one-line idea (e.g. "a queen betrayed by her advisor, cold fury building to a threat"), infer: character type, baseline emotion, a 2–4 beat emotional arc, and produce a fully formatted prompt matching the style and density above. If the user specifies a target duration, adjust the amount of quoted text using the pacing estimates above. If the idea implies multiple speaking characters, output one prompt per character and label them clearly (e.g. [Character: Advisor] before each block) rather than merging voices.
 
-OUTPUT: always English even if the input is another language. Return only the finished prompt text — no preamble, no explanation.`;
+OUTPUT: written in the primary spoken language named above — do NOT translate the prompt into English. Return only the finished prompt text — no preamble, no explanation.`;
 
 export const DEFAULT_FRAME_MODE_OPTIONS = [
   { id: 'single', label: 'Single image', hint: null },
@@ -1117,6 +1194,22 @@ export const MINIMAX_H3_DURATIONS = [
   { label: '15s', value: '15 seconds' },
 ]
 
+// The pose role's own vision system prompt. It replaces VISION_PROMPT_MINIMAX_H3_REF
+// for this one role rather than adding to it: that prompt asks for identity cues
+// and 3–5 sentences, and on a bare pose reference — a stick figure, a mannequin —
+// there is nothing else to fill the quota with, so the model reaches for line
+// colour and backdrop. The fix is to remove the quota and the competing asks,
+// and to say plainly that the drawing is not the subject: the body position is.
+export const VISION_PROMPT_MINIMAX_H3_POSE = `You are reading a POSE reference for a downstream video-prompt writer. The image shows ONE body position. It may be a photo, a sketch, a mannequin, or a stick figure — it makes no difference, because you are looking through the image at the position itself, the way a director reads a storyboard panel. A stick figure is a person standing that way; it is never "lines" or "a drawing".
+
+Describe only two things:
+1. THE POSE — stance and where the weight sits, where each arm and leg is and how it is bent, the angle of the spine, shoulders and hips, head tilt, gaze direction, and what the hands are doing as contact and action ("one hand grips the strap") — never the shape of the fingers.
+2. THE FRAMING — shot size, camera height and angle, which way the body faces relative to the camera, and where in the frame the body sits.
+
+Say NOTHING about any of these, even to note their absence: colour, line colour, ink, stroke or line weight, background, backdrop, negative space, what the figure is drawn or made of, lighting, shadow, contrast, mood, atmosphere, art style, medium, rendering, texture, resolution, image quality, clothing, hair, face, expression, age, gender, build, identity, setting, props, or any on-image text. None of that transfers — the film's own look, cast and location are already fixed elsewhere, and repeating them here overrides them with the reference's.
+
+Write 2 to 4 sentences of plain blocking description in the present tense — no more. If the image does not show a body part clearly, leave it out rather than guessing. Output the description only, with no preamble and no labels.`
+
 export const MINIMAX_H3_REF_ROLES = [
   { id: 'subject_identity', label: 'Subject / Identity',   hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)',
     visionFocus: 'This is a SUBJECT / IDENTITY reference — prioritise face, hair, age, build, skin tone, and any distinguishing marks. Mention wardrobe only in passing.' },
@@ -1128,8 +1221,9 @@ export const MINIMAX_H3_REF_ROLES = [
     visionFocus: 'This is an ENVIRONMENT reference — describe the location, layout, key surfaces and props, and the quality and direction of light in the space. Skip any people.' },
   { id: 'style',            label: 'Style',                 hint: 'Palette, lighting, medium/aesthetic',
     visionFocus: 'This is a STYLE reference — describe palette, contrast, light quality, medium/finish, grain, and overall aesthetic. Do not fixate on the literal subject.' },
-  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Framing or storyboard reference',
-    visionFocus: 'This is a POSE / COMPOSITION reference — describe framing, shot size, camera height/angle, subject placement in frame, and body pose. Not identity or colour.' },
+  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Body pose and framing to copy — not the look, not the identity',
+    visionSystem: VISION_PROMPT_MINIMAX_H3_POSE,
+    visionFocus: 'Describe the body position and the framing only. No colour, no background, no lighting, no style, no identity — and never describe the image as a drawing.' },
 ]
 
 export const MINIMAX_H3_PRESERVE_OPTIONS = [
@@ -1138,6 +1232,46 @@ export const MINIMAX_H3_PRESERVE_OPTIONS = [
   { id: 'guide',       label: 'Guide',       marker: 'attribute_transfer',  hint: 'Transfer the requested attribute without copying unrelated content' },
   { id: 'inspiration', label: 'Inspiration', marker: 'weak_reference',      hint: 'Weak reference for broad style or atmosphere only' },
 ]
+
+// The spoken language of everyone who talks in a generated video. One table for
+// every target that produces speech: `label` is the word the writer prompts use
+// ("Primary language: German"), `tag` is the exact MiniMax H3 [Language] tag from
+// rule 6's closed list, and `sps` is the syllables-per-second budget window
+// syllableBudget() applies — German compounds say more per syllable, French
+// syllables are shorter and more numerous, so slightly more of them fit.
+export const SPOKEN_LANGUAGES = [
+  { id: 'de', short: 'DE', label: 'German',  tag: '[German]',  sps: [2.0, 2.5] },
+  { id: 'en', short: 'EN', label: 'English', tag: '[English]', sps: [2.5, 3.0] },
+  { id: 'fr', short: 'FR', label: 'French',  tag: '[French]',  sps: [2.6, 3.1] },
+]
+
+export const DEFAULT_SPOKEN_LANG = 'de'
+
+export const spokenLangDef = (id) => SPOKEN_LANGUAGES.find(l => l.id === id) || SPOKEN_LANGUAGES[0]
+
+// The language block appended to a writer user message. It opens with the literal
+// "Primary language:" prefix SYSTEM_PROMPT_MINIMAX_H3 already documents as input,
+// so H3 needs no new input vocabulary and LTX / DramaBox read it as plain
+// instruction. Supplied dialogue IS translated into the chosen language; visible
+// on-screen text never is — that split is spelled out here as well as in the H3
+// rules, because a model told to translate the spoken words will otherwise
+// happily translate a street sign too.
+//
+// `wholePrompt` is the DramaBox shape: there the output IS the spoken
+// performance, so the unquoted delivery tags follow the language too and nothing
+// stays English. Every other target keeps its structural prose in English.
+export const spokenLanguageDirective = (id, { wholePrompt = false } = {}) => {
+  const l = spokenLangDef(id)
+  return `\n\nPrimary language: ${l.label} — all spoken audio is in ${l.label}. Render every spoken line in `
+    + `${l.label}, including any dialogue given above: if it was written in another language, translate it into `
+    + `natural, idiomatic ${l.label} and treat that translation as the exact words to be spoken. Translate only — `
+    + `never add, drop, reorder or embellish, and keep proper names as given. `
+    + (wholePrompt
+      ? `Write the WHOLE prompt in ${l.label} — the quoted speech and the unquoted delivery/narrative tags `
+        + `alike; never fall back to English for the tags.`
+      : `Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All `
+        + `structural prose in your output stays English.`)
+}
 
 export const VISION_PROMPT_MINIMAX_H3_REF = `You are a vision model describing a reference image for a downstream MiniMax H3 video-prompt writer.
 This image guides ONE aspect of a generated video. Focus on the aspect named in the instruction that follows the
@@ -1158,12 +1292,14 @@ house visual style — palette, medium, lighting register, lens — to hold cons
 the visual description, never restate it as on-screen text).
 
 GENERAL RULES
-1. Write all structural prose in English, present tense, describing the video in playback order. Preserve the
-   original language only inside dialogue enclosed by <d> tags and inside exact visible on-screen text (wrapped in
-   English double quotes, spelling/punctuation preserved exactly). ON-SCREEN TEXT: any sign, label, subtitle, or
-   banner actually visible in the frame must be typed verbatim in quotes — never merely described — with its
-   typographic treatment (e.g. condensed, all-caps, serif) and where it sits in frame (e.g. centered, lower third)
-   named. If no text should appear on screen, don't invent any.
+1. Write all structural prose in English, present tense, describing the video in playback order. Non-English text
+   belongs in exactly two places, and they behave differently: dialogue inside <d> tags is written in the "Primary
+   language:" language (translated into it if it was supplied in another — rule 6), while exact visible on-screen
+   text is NEVER translated but reproduced in its original language, wrapped in English double quotes with spelling
+   and punctuation preserved exactly. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
+   frame must be typed verbatim in quotes — never merely described — with its typographic treatment (e.g. condensed,
+   all-caps, serif) and where it sits in frame (e.g. centered, lower third) named. If no text should appear on
+   screen, don't invent any.
 1a. STYLE OPENING. Name the visual style explicitly at the very start, in this vocabulary: Cinematic,
    live-action, 2D-animated, 3D CG, claymation, watercolor, vintage film (or the closest equivalent the material
    calls for). In T2VA / I2VA / L2VA / FL2VA, [Shot 1] opens with the style tokens and then the opening
@@ -1223,28 +1359,34 @@ GENERAL RULES
    space, state, viewpoint, or time between them should become sequential camera behavior
    within the SAME shot, not separate cuts. Only start a new [Shot N] when a marker coincides
    with genuine new information.
-6. Dialogue: if the user message includes a "Spoken dialogue" section, treat its quoted text as verbatim words —
-   never rewrite, translate, or invent additional words. Assign a stable speaker ID in the order speakers first
-   appear (S1, then S2, S3…; infer separate speakers from line breaks or "Name:" prefixes in the quoted text); use
-   a compound ID such as (S1,S2) when two or more speakers talk simultaneously. On a speaker's first appearance
-   give enough, outside the tag, to fix a stable voice: character type, age, gender, whether they are on- or
-   off-screen, pitch, timbre, speaking rate, accent. A character who never speaks, sings, or makes an off-screen
-   vocal sound gets no speaker ID at all. Write speaker identity, delivery,
-   and any acting beat outside the tag; put only the language tag and the exact words inside the tag, e.g.: the
-   engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of these exact
-   language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian] [Japanese]
-   [Korean] [Portuguese] [Russian] [Spanish]. For a voiceover, write "says in an off-screen voiceover" and state
-   that the visible character's lips stay closed. H3 spreads mouth motion across the ENTIRE shot the speaker is in
-   and ignores any later "finishes speaking" timestamp — so a shot that carries a line must contain only that
-   delivery, running from the shot's start to its end. Do not timestamp a lip-closure or any post-speech beat (a
-   swallow, a blink, a glance away, a settle) inside the speaking shot; place those at the cut into the next shot,
-   or in the next shot itself. Only the final shot of the whole clip, if it carries the last line, gets a
+6. Dialogue: if the user message includes a "Spoken dialogue" section, its quoted text is the content of the speech
+   — never invent additional words, drop any, or reorder them. Render it in the "Primary language:" language: if it
+   was supplied in another language, translate it into natural, idiomatic speech in that language, keep proper names
+   as given, and treat the translation as verbatim from then on. Tag the line with that language's tag. Assign a
+   stable speaker ID in the order speakers first appear (S1, then S2, S3…; infer separate speakers from line breaks
+   or "Name:" prefixes in the quoted text); use a compound ID such as (S1,S2) when two or more speakers talk
+   simultaneously. On a speaker's first appearance give enough, outside the tag, to fix a stable voice: character
+   type, age, gender, whether they are on- or off-screen, pitch, timbre, speaking rate, accent. A character who
+   never speaks, sings, or makes an off-screen vocal sound gets no speaker ID at all. Write speaker identity,
+   delivery, and any acting beat outside the tag; put only the language tag and the exact words inside the tag,
+   e.g.: the engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of
+   these exact language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian]
+   [Japanese] [Korean] [Portuguese] [Russian] [Spanish]. A speaker name carrying a "(V.O.)" suffix (e.g. "STEFFI
+   (V.O.): line") is always a voiceover — strip the tag before quoting the words inside <d>, but write it up exactly
+   like one: "says in an off-screen voiceover" and the visible character's lips stay closed, even when that same
+   character is shown on screen doing something else in this shot (walking, an activity, reacting) — she is
+   performing that action, not talking to camera, while her own narration plays over it. For any other voiceover,
+   write "says in an off-screen voiceover" and state that the visible character's lips stay closed. H3 spreads mouth motion across the ENTIRE shot the
+   speaker is in and ignores any later "finishes speaking" timestamp — so a shot that carries a line must contain
+   only that delivery, running from the shot's start to its end. Do not timestamp a lip-closure or any post-speech
+   beat (a swallow, a blink, a glance away, a settle) inside the speaking shot; place those at the cut into the next
+   shot, or in the next shot itself. Only the final shot of the whole clip, if it carries the last line, gets a
    lips-closing beat before its settle. A spoken line also pulls screen time toward its own shot and starves its
    neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
    detail that a later shot depends on; keep continuity-critical staging in silent shots. In a multi-shot clip, if
    dialogue is cut off by the end of the video, mark it with <cutoff>; if a line continues uninterrupted across a
-   shot cut, mark both connection points with <scenetrans> and say so in prose as well ("continues seamlessly
-   across the cut", "carries over from the previous shot", "remains audible across the transition").
+   shot cut, mark both connection points with <scenetrans> and say so in prose as well ("continues seamlessly across
+   the cut", "carries over from the previous shot", "remains audible across the transition").
 6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If the user message carries an
    "Audio N — voice-timbre reference" line but no "Spoken dialogue" section, write the spoken line yourself: H3
    only applies a voice reference to actual speech, so a silent clip wastes it entirely. Compose ONE short line,
@@ -1430,20 +1572,58 @@ audience-only score in non_diegetic_music — and never repeat dialogue or lyric
 
 Before writing, silently verify: the output matches the given MODE; every <Subject N>/<Picture N> label is defined
 before use and never changes meaning; all shot timestamps are valid and increasing; the ending condition is
-achieved; dialogue and visible text are unchanged from what was given.`;
+achieved; visible on-screen text is unchanged from what was given; the dialogue is unchanged in content and
+meaning, rendered in the "Primary language:" language.`;
 
+// Everything the app needs to know about a generation target, in one place.
+//
+// `show` says which CONTROLS render. `caps` says what the target can actually do,
+// and exists because those same facts used to be spelled as `target === 'xyz'`
+// comparisons scattered over App.jsx, AdaptPanel, ScriptwriterPanel, adapt.js and
+// loras.js — 39 of them, 30-odd for MiniMax H3 alone. Adding a target meant
+// grepping five files to find the places that needed to know about it; now it
+// means filling in a row here.
+//
+// caps fields (all optional, absent = false/none):
+//   refImages   max role-tagged reference images the target accepts (a count)
+//   audioFields the target takes an ambient-sound + score pair
+//   ratioPicker an explicit aspect ratio is chosen and written into the prompt
+//   structured  the output is a labelled multi-field block rather than prose
+//   posNeg      the output is a POSITIVE:/NEGATIVE: pair
+//   loras       LoRA triggers apply (false only where there is no diffusion model)
+//   wholePromptLanguage  the ENTIRE prompt is written in the spoken language,
+//               not just the quoted speech (DramaBox: its output IS the speech)
+//   clipTarget  selectable as the Scriptwriter's clip-prompt output
+//   frameTarget selectable for the Scriptwriter's reference-frame stills
+//   refBlockInFrames  a frame-still prompt for this target may carry the
+//               reference-image block (SDXL's tag format cannot use it)
+//
+// Other per-target fields the comparisons were standing in for: `slug` (export
+// filenames), `clipNoun`/`clipShort` (how the Scriptwriter names one unit of
+// output), `defaultRefRatio` (the ratio ref mode starts on), `normalizeOutput`
+// (repair the model's field labels), `loraInject` (where a missing trigger goes).
 export const TARGETS = {
   ltx: {
     id: 'ltx', label: 'LTX-2.3 · Video', type: 'video', system: SYSTEM_PROMPT_LTX, buildSystem: buildLtxSystemPrompt,
     subtitle: 'Describe your scene → get a cinematic LTX-2.3 prompt',
     resolutions: LTX_RESOLUTIONS,
-    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true },
+    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true, spokenLang: true },
+    caps: { loras: true, clipTarget: true },
+    clipNoun: 'shot', clipShort: 'LTX',
+    // A Scriptwriter clip prompt for LTX deliberately uses the GUIDE variant, not
+    // this target's own prompt: it is the longer, sequential-friendly one, which is
+    // what a multi-shot film wants. That used to be hidden in a module constant in
+    // ScriptwriterPanel while the picker said plain "LTX-2.3"; declaring it here
+    // keeps the two honest about each other.
+    clipLabel: 'LTX-2.3 Guide',
+    clipSystem: buildLtxGuideSystemPrompt('single'),
   },
   ltx_guide: {
     id: 'ltx_guide', label: 'LTX-2.3 · Guide', type: 'video', system: SYSTEM_PROMPT_LTX_GUIDE, buildSystem: buildLtxGuideSystemPrompt,
     subtitle: 'LTX-2.3 prompt — guide-aligned (longer, sequential-friendly)',
     resolutions: LTX_RESOLUTIONS,
-    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true },
+    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: true, spokenLang: true },
+    caps: { loras: true },
   },
   kling: {
     id: 'kling', label: 'Kling AI · Video', type: 'video', system: SYSTEM_PROMPT_KLING,
@@ -1454,6 +1634,7 @@ export const TARGETS = {
     durationHint: 'Kling clips are 5s or 10s. 5s holds a single action tightest; 10s allows one follow-through action but shows more drift on faces.',
     presetNote: 'Kling renders at 1080p — presets match its 16:9 / 9:16 / 1:1 output ratios.',
     show: { duration: true, camera: true, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true },
   },
   flux: {
     id: 'flux', label: 'FLUX.dev · Image', type: 'image', system: SYSTEM_PROMPT_FLUX,
@@ -1461,6 +1642,8 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a detailed FLUX.dev prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    short: 'Flux.dev',
   },
   flux2klein: {
     id: 'flux2klein', label: 'FLUX.2 Klein · Image', type: 'image', system: SYSTEM_PROMPT_FLUX2_KLEIN,
@@ -1468,6 +1651,8 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a detailed FLUX.2 [klein] prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    short: 'Klein',
   },
   krea2turbo: {
     id: 'krea2turbo', label: 'Krea 2 Turbo · Image', type: 'image', system: SYSTEM_PROMPT_KREA2_TURBO,
@@ -1475,6 +1660,19 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a natural-language Krea 2 Turbo prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true },
+  },
+  // Key is `zimage`, not `z_image_turbo`: it is the default model for the
+  // Scriptwriter's character portraits and that id is persisted inside saved
+  // portrait drafts, so renaming it would orphan existing history entries.
+  zimage: {
+    id: 'zimage', label: 'Z-Image Turbo \u00b7 Image', type: 'image', system: SYSTEM_PROMPT_Z_IMAGE_TURBO,
+    visionPrompt: VISION_PROMPT_KREA2_TURBO,
+    subtitle: 'Describe your image \u2192 get a natural-language Z-Image Turbo prompt (prose only, no negatives)',
+    resolutions: FLUX_RESOLUTIONS,
+    show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    short: 'Z-Image Turbo',
   },
   grokimage: {
     id: 'grokimage', label: 'Grok Image · Image', type: 'image', system: SYSTEM_PROMPT_GROK_IMAGE,
@@ -1483,6 +1681,7 @@ export const TARGETS = {
     resolutions: GROK_IMAGE_RESOLUTIONS,
     presetNote: 'Grok picks the final pixel dimensions; the selected aspect ratio is passed to the 🎨 Render call.',
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true },
   },
   sdxl: {
     id: 'sdxl', label: 'SDXL · Image', type: 'image', system: SYSTEM_PROMPT_SDXL,
@@ -1490,6 +1689,11 @@ export const TARGETS = {
     subtitle: 'Describe your image → get Danbooru-tagged SDXL prompts (positive + negative)',
     resolutions: SDXL_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true, posNeg: true, frameTarget: true, refBlockInFrames: false },
+    short: 'SDXL',
+    // A missing trigger goes in as a leading tag of POSITIVE — never NEGATIVE,
+    // where it would suppress the LoRA instead of firing it.
+    loraInject: { afterLabel: 'POSITIVE', separator: ', ' },
   },
   threed: {
     id: 'threed', label: '3D Print · Image', type: 'image', system: SYSTEM_PROMPT_3D,
@@ -1497,17 +1701,23 @@ export const TARGETS = {
     subtitle: 'Describe a character → get a FLUX prompt optimized for Image-to-3D miniature printing',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: { loras: true },
   },
   dramabox: {
     id: 'dramabox', label: 'DramaBox · TTS', type: 'text', system: SYSTEM_PROMPT_DRAMABOX,
     subtitle: 'Describe a scene idea → get an expressive DramaBox TTS voice-cloning prompt',
-    show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false, image: false },
+    show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false, image: false, spokenLang: true },
+    // No diffusion model behind a TTS delivery prompt, so no LoRA; and its whole
+    // output IS the spoken performance, so the entire prompt is written in the
+    // spoken language rather than just the quoted lines.
+    caps: { loras: false, wholePromptLanguage: true },
   },
   scriptwriter: {
     id: 'scriptwriter', label: 'Scriptwriter · Video', type: 'scriptwriter',
     subtitle: "Story idea → cast & location bible → director's cut → MiniMax H3 (or LTX) clip prompts",
     resolutions: LTX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
+    caps: {},
   },
   minimax_h3: {
     id: 'minimax_h3', label: 'MiniMax H3 · Video', type: 'video', system: SYSTEM_PROMPT_MINIMAX_H3,
@@ -1517,7 +1727,18 @@ export const TARGETS = {
     durationHint: 'MiniMax H3 requires an integer duration from 4–15s. 4–6s: one shot. 7–10s: one developed shot or 2–3 shots. 11–15s: 2–4 shots. Split an emotional moment across 2–3s shots (one expression beat each) rather than holding it in one long take. Keep the last ~1.5s free of any key beat — H3 often degrades over the final 1.2–1.7s.',
     frameModeOptions: MINIMAX_H3_FRAME_MODE_OPTIONS,
     defaultFrameMode: 'ref',
-    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false },
+    show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false, spokenLang: true },
+    caps: {
+      refImages: 6, audioFields: true, ratioPicker: true, structured: true,
+      loras: true, clipTarget: true,
+    },
+    slug: 'minimax', clipNoun: 'clip', clipShort: 'H3',
+    clipSystem: SYSTEM_PROMPT_MINIMAX_H3,
+    defaultRefRatio: 'port916',
+    // The one prose field a missing trigger may be added to. Never summary,
+    // subject_definitions, retention_analysis or either sound field, and never
+    // inside a <d> tag or quotes — those are spoken aloud or rendered on screen.
+    loraInject: { fields: ['detailed_description', 'integrated_multimodal_description'] },
   },
 }
 
@@ -1526,10 +1747,20 @@ export const TARGETS = {
 // "Other" group so a newly-added target is never hidden.
 export const TARGET_GROUPS = [
   { label: 'Script',   ids: ['scriptwriter'] },
-  { label: 'Image',    ids: ['flux', 'flux2klein', 'krea2turbo', 'sdxl', 'threed'] },
+  { label: 'Image',    ids: ['flux', 'flux2klein', 'krea2turbo', 'zimage', 'sdxl', 'threed'] },
   { label: 'Video',    ids: ['ltx', 'ltx_guide', 'minimax_h3'] },
   { label: 'External', ids: ['grokimage', 'kling'] },
   { label: 'TTS',      ids: ['dramabox'] },
 ]
 
 export const systemPromptFor = (target, frameMode) => target.buildSystem ? target.buildSystem(frameMode) : target.system
+
+// Read a target's capabilities by id or by object. Always returns an object, so a
+// caller can read caps(x).ratioPicker without guarding — an unknown target simply
+// has no capabilities rather than throwing, which matters for a history entry saved
+// under a target that has since been removed from the app.
+export const caps = (target) =>
+  ((typeof target === 'string' ? TARGETS[target] : target)?.caps) || {}
+
+// Every target that can do something — the replacement for a hard-coded list.
+export const targetsWithCap = (cap) => Object.values(TARGETS).filter(t => t.caps?.[cap])

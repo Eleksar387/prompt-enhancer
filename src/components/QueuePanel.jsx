@@ -1,4 +1,5 @@
-import { TARGETS } from '../constants'
+import { memo } from 'react'
+import { TARGETS, spokenLangDef } from '../constants'
 
 // Pill-button style shared by the toolbar and per-item action buttons — matches
 // the History panel's Export/Import/Clear/Restore/✕ buttons in App.jsx.
@@ -27,19 +28,21 @@ function QueueCard({ item, busy, runningId, onRun, onRemove }) {
     </div>
   )
 
-  // Full Auto Scriptwriter job — its snapshot is { refImages, voiceRefs, genre, mature, hint },
-  // nothing like the main-pipeline shape (no target/model/scene).
+  // Full Auto Scriptwriter job — its snapshot is { refImages, voiceRefs, genre,
+  // mature, hint, pacing, spokenLang }, nothing like the main-pipeline shape (no
+  // target/model/scene).
   if (item.kind === 'scriptwriter-auto') {
     const s = item.snapshot || {}
     const genreLabel = !s.genre || s.genre === 'auto' ? 'genre: AI picks' : s.genre
     const refCount = Array.isArray(s.refImages) ? s.refImages.length : 0
     const voiceCount = Array.isArray(s.voiceRefs) ? s.voiceRefs.length : 0
+    const langLabel = spokenLangDef(s.spokenLang).label
     return (
       <div style={{ background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
         {header}
         <div style={{ fontSize: 13.5, color: status.color, fontWeight: 600, marginBottom: 4 }}>{status.text}</div>
         <div style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', marginBottom: 4 }}>
-          🎬 Full Auto Film · {genreLabel}{s.mature ? ' · NSFW' : ''} · {refCount} reference image{refCount === 1 ? '' : 's'}{voiceCount ? ` · ${voiceCount} voice reference${voiceCount === 1 ? '' : 's'}` : ''}
+          🎬 Full Auto Film · {genreLabel} · {langLabel}{s.mature ? ' · NSFW' : ''} · {refCount} reference image{refCount === 1 ? '' : 's'}{voiceCount ? ` · ${voiceCount} voice reference${voiceCount === 1 ? '' : 's'}` : ''}
         </div>
         {s.hint && <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>“{s.hint}”</div>}
         {item.status === 'error' && item.error && (
@@ -73,7 +76,7 @@ function QueueCard({ item, busy, runningId, onRun, onRemove }) {
 // Collapsible panel of pending "generate later" items — styled after the
 // History panel it sits below. Purely presentational: all state and the
 // actual run/persist logic live in App.jsx.
-export default function QueuePanel({ queue, open, onToggleOpen, busy, runningId, onRun, onRemove, onProcessAll, onStop, onClear }) {
+function QueuePanel({ queue, open, onToggleOpen, busy, runningId, onRun, onRemove, onProcessAll, onStop, onClear }) {
   return (
     <div style={{ marginTop: 28, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -104,3 +107,7 @@ export default function QueuePanel({ queue, open, onToggleOpen, busy, runningId,
     </div>
   )
 }
+
+// Memoized — see the `queueActions` bundle in App.jsx, which keeps the callbacks
+// identity-stable so this holds.
+export default memo(QueuePanel)

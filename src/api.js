@@ -1,28 +1,27 @@
+import { makeLocalStore } from './localStore'
+
 export const CFG_KEY = 'ollama-enhancer-config'
 export const DEFAULT_CFG = { base: 'https://api.x.ai/v1', apiKey: '', temperature: 0.7, maxTokens: 4096, imageModel: 'grok-imagine-image-2.0', videoModel: 'grok-imagine-video-1.5', geminiKey: '', geminiImageModel: 'gemini-2.5-flash-image' }
 
+const cfgStore = makeLocalStore(CFG_KEY, { defaults: DEFAULT_CFG })
+
+// The shared store, plus the one thing only this config has: a key or base URL in
+// .env overrides the saved value on every load, and the provider's base URL is
+// derived from the key's prefix when .env doesn't name one.
 export function loadCfg() {
   const envKey  = import.meta.env.VITE_API_KEY  || ''
   const envBase = import.meta.env.VITE_API_BASE || ''
   const derivedBase = envBase
     || (envKey.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : '')
     || (envKey.startsWith('xai-')    ? 'https://api.x.ai/v1'          : '')
-  let saved = {}
-  try {
-    const raw = localStorage.getItem(CFG_KEY)
-    if (raw) saved = JSON.parse(raw)
-  } catch {}
   return {
-    ...DEFAULT_CFG,
-    ...saved,
+    ...cfgStore.load(),
     ...(envKey      ? { apiKey: envKey }      : {}),
     ...(derivedBase ? { base:  derivedBase }  : {}),
   }
 }
 
-export function saveCfg(cfg) {
-  try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)) } catch {}
-}
+export const saveCfg = cfgStore.save
 
 function toOpenAIContent(userContent) {
   if (typeof userContent === 'string') return userContent

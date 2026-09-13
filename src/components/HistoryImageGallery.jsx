@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
 import { MINIMAX_H3_REF_ROLES } from '../constants'
 import { DRAG_MIME, setDragImage, resolveDragImage } from '../imageDrag'
 
@@ -154,7 +154,66 @@ function ImageInfoPanel({ img, onSaveCaption, onClose }) {
   )
 }
 
-export default function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption }) {
+// One thumbnail. Memoized because the grid renders up to CAP of them and the
+// only thing that changes per keystroke elsewhere in the app is nothing at all —
+// `img` comes from a memoized collectImages() and every callback is stable, so a
+// tile re-renders only when it is the one whose info panel opened or closed.
+const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart }) {
+  const pick = onPick ? async () => {
+    const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
+    if (!resolved) return
+    onPick({
+      ...resolved,
+      // Only a per-reference caption/role carries meaning to another
+      // reference slot; a frame/render description does not.
+      caption: img.slot === 'ref' ? img.caption : '',
+      role: img.slot === 'ref' ? img.role : null,
+      note: img.slot === 'ref' ? img.note : '',
+    })
+  } : undefined
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => onDragStart(e, img)}
+      onClick={pick}
+      title={`${img.fileName}${img.render ? ' · Grok render' : ''}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
+      style={{
+        position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
+        border: `1px solid ${selected ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+        outline: selected ? '2px solid var(--pe-accent-line)' : 'none',
+        background: 'var(--pe-surface)',
+        cursor: onPick ? 'pointer' : 'grab',
+      }}
+    >
+      <img
+        src={img.url}
+        alt={img.fileName}
+        draggable={false}
+        loading="lazy"
+        decoding="async"
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }}
+      />
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggleInfo(img.key) }}
+        title="Read / edit the vision description"
+        style={{
+          position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: '50%',
+          border: 'none', cursor: 'pointer', fontSize: 12, fontStyle: 'italic', fontWeight: 700,
+          fontFamily: 'Georgia, "Times New Roman", serif', lineHeight: '18px',
+          padding: 0, textAlign: 'center', background: selected ? 'var(--pe-accent-ink)' : 'rgba(8,8,16,0.72)', color: '#fff',
+        }}
+      >i</button>
+      {(img.role || img.render) && (
+        <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 9, lineHeight: '13px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {img.render || roleLabel(img.role)}
+        </span>
+      )}
+    </div>
+  )
+})
+
+function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption }) {
   const [open, setOpen] = useState(false)
   const [infoFor, setInfoFor] = useState(null)  // img.key of the open info panel
   const touchedRef = useRef(false)
@@ -173,12 +232,10 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
       console.warn(`[HistoryImageGallery] BUG: ${stats.objWithBase64} stored image object(s) but 0 collected`)
   }, [stats])
 
-  // No history at all — stay out of the way entirely.
-  if (images.length === 0 && stats.entries === 0) return null
-
-  const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
-
-  const onDragStart = (e, img) => {
+  // Stable so the memoized tiles below actually stay put: there can be 60 of
+  // them, each previously carrying freshly-allocated onClick/onDragStart
+  // closures, re-created whenever anything in App re-rendered.
+  const onDragStart = useCallback((e, img) => {
     // Only the blob URL travels — the drop target resolves bytes via resolveDragImage().
     setDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     try {
@@ -186,7 +243,13 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
       e.dataTransfer.setData('text/plain', img.fileName || 'image')
       e.dataTransfer.effectAllowed = 'copy'
     } catch { /* older browsers */ }
-  }
+  }, [])
+  const toggleInfo = useCallback((key) => setInfoFor(k => (k === key ? null : key)), [])
+
+  // No history at all — stay out of the way entirely.
+  if (images.length === 0 && stats.entries === 0) return null
+
+  const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
 
   const shown = images.slice(0, CAP)
   const infoImg = infoFor ? shown.find(i => i.key === infoFor) : null
@@ -216,55 +279,8 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
             {shown.map((img) => (
-              <div
-                key={img.key}
-                draggable
-                onDragStart={(e) => onDragStart(e, img)}
-                onClick={onPick ? async () => {
-                  const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
-                  if (!resolved) return
-                  onPick({
-                    ...resolved,
-                    // Only a per-reference caption/role carries meaning to another
-                    // reference slot; a frame/render description does not.
-                    caption: img.slot === 'ref' ? img.caption : '',
-                    role: img.slot === 'ref' ? img.role : null,
-                    note: img.slot === 'ref' ? img.note : '',
-                  })
-                } : undefined}
-                title={`${img.fileName}${img.render ? ' · Grok render' : ''}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
-                style={{
-                  position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
-                  border: `1px solid ${infoFor === img.key ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
-                  outline: infoFor === img.key ? '2px solid var(--pe-accent-line)' : 'none',
-                  background: 'var(--pe-surface)',
-                  cursor: onPick ? 'pointer' : 'grab',
-                }}
-              >
-                <img
-                  src={img.url}
-                  alt={img.fileName}
-                  draggable={false}
-                  loading="lazy"
-                  decoding="async"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }}
-                />
-                <button
-                  onClick={(e) => { e.stopPropagation(); setInfoFor(k => k === img.key ? null : img.key) }}
-                  title="Read / edit the vision description"
-                  style={{
-                    position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: '50%',
-                    border: 'none', cursor: 'pointer', fontSize: 12, fontStyle: 'italic', fontWeight: 700,
-                    fontFamily: 'Georgia, "Times New Roman", serif', lineHeight: '18px',
-                    padding: 0, textAlign: 'center', background: infoFor === img.key ? 'var(--pe-accent-ink)' : 'rgba(8,8,16,0.72)', color: '#fff',
-                  }}
-                >i</button>
-                {(img.role || img.render) && (
-                  <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 9, lineHeight: '13px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {img.render || roleLabel(img.role)}
-                  </span>
-                )}
-              </div>
+              <Tile key={img.key} img={img} selected={infoFor === img.key}
+                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} />
             ))}
           </div>
           {infoImg && (
@@ -281,3 +297,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint, onSaveC
     </div>
   )
 }
+
+// Memoized: the gallery only depends on the history array and stable callbacks,
+// so it stops repainting its grid every time an unrelated field in App changes.
+export default memo(HistoryImageGallery)

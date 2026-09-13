@@ -3,20 +3,25 @@ import { flushSync } from 'react-dom'
 import JSZip from 'jszip'
 import { callOllama, isCloud } from '../api'
 import {
-  SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
-  buildLtxGuideSystemPrompt,
-  SYSTEM_PROMPT_FLUX, SYSTEM_PROMPT_FLUX2_KLEIN, SYSTEM_PROMPT_SDXL,
-  SYSTEM_PROMPT_Z_IMAGE_TURBO, VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
-  SYSTEM_PROMPT_MINIMAX_H3, MINIMAX_H3_RESOLUTIONS,
-  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
+  // The writer and director prompts this panel drives directly. The per-target
+  // prompts (clip writers, frame-still writers) are NOT imported any more — they
+  // come from the target table via clipSystem / FRAME_SYSTEM, so adding a target
+  // does not mean adding an import here.
+  SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_SCRIPTWRITER_SOURCE, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
+  VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
+  MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
   aspectParts, aspectSceneHint, aspectFramingHint,
   SCRIPTWRITER_NSFW_LINE, SCRIPTWRITER_NSFW_VISION_LINE,
+  SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
+  TARGETS, caps, targetsWithCap,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash, mapWithConcurrency } from '../utils'
+import { lorasByIds, loraInstruction, withLoraTriggers } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
 import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
+import LoraPanel from './LoraPanel'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
 
@@ -109,28 +114,43 @@ const ghostBtn = {
   background: 'var(--pe-surface)', color: 'var(--pe-ink-3)', fontSize: 12.5, cursor: 'pointer',
 }
 
-const FRAME_TARGETS = [
-  { id: 'flux',       label: 'Flux.dev' },
-  { id: 'flux2klein', label: 'Klein'    },
-  { id: 'zimage',     label: 'Z-Image Turbo' },
-  { id: 'sdxl',       label: 'SDXL'    },
-]
-const FRAME_SYSTEM = {
-  flux: SYSTEM_PROMPT_FLUX,
-  flux2klein: SYSTEM_PROMPT_FLUX2_KLEIN,
-  zimage: SYSTEM_PROMPT_Z_IMAGE_TURBO,
-  sdxl: SYSTEM_PROMPT_SDXL,
-}
-const SHOT_SYSTEM_PROMPT = buildLtxGuideSystemPrompt('single')
+// Image targets a reference-frame still (or a character portrait) can be generated
+// for. Labels and system prompts come from the target table — `caps.frameTarget`
+// marks a target as offered here — so adding one is a table edit rather than an
+// edit to this file. Only the display ORDER lives here, the same way TARGET_GROUPS
+// orders the main rail, and anything marked frameTarget but missing from the order
+// is swept in at the end so a newly-added target is never silently hidden.
+//
+// Z-Image Turbo is the default here (see PORTRAIT_DEFAULT_TARGET below) and is a
+// registered target like the rest, so nothing about it is special-cased any more.
+const FRAME_TARGET_ORDER = ['flux', 'flux2klein', 'zimage', 'sdxl']
+export const FRAME_TARGETS = [
+  ...FRAME_TARGET_ORDER,
+  ...targetsWithCap('frameTarget').map(t => t.id).filter(id => !FRAME_TARGET_ORDER.includes(id)),
+].map(id => {
+  const t = TARGETS[id]
+  return caps(t).frameTarget ? { id, label: t.short || t.label.split(' \u00b7 ')[0] } : null
+}).filter(Boolean)
+
+export const FRAME_SYSTEM = Object.fromEntries(
+  FRAME_TARGETS.map(f => [f.id, TARGETS[f.id].system]))
+
+// What a character portrait is generated with unless the user picks otherwise. Its
+// id is persisted in saved portrait drafts, so it is named once here.
+export const PORTRAIT_DEFAULT_TARGET = 'zimage'
+
+// Which writer produces a clip prompt, per the target table (`clipSystem`).
+const clipSystemFor = (id) => TARGETS[id]?.clipSystem
 
 // Phase 3 output model — one global choice for the whole run. Chosen on the
 // script-review screen so the Director (phase 2) can specialise for it.
-const PROMPT_TARGETS = [
-  { id: 'minimax_h3', label: 'MiniMax H3' },
-  { id: 'ltx',        label: 'LTX-2.3'    },
-]
-const PROMPT_TARGET_LABEL = { ltx: 'LTX-2.3', minimax_h3: 'MiniMax H3' }
 const DEFAULT_PROMPT_TARGET = 'minimax_h3'
+
+// Clip-prompt targets, from the table (`caps.clipTarget`), default first.
+export const PROMPT_TARGETS = targetsWithCap('clipTarget')
+  .map(t => ({ id: t.id, label: t.clipLabel || t.short || t.label.split(' \u00b7 ')[0] }))
+  .sort((a, b) => (a.id === DEFAULT_PROMPT_TARGET ? -1 : b.id === DEFAULT_PROMPT_TARGET ? 1 : 0))
+const PROMPT_TARGET_LABEL = Object.fromEntries(PROMPT_TARGETS.map(t => [t.id, t.label]))
 const DEFAULT_ASPECT_RATIO = 'land169'   // 16:9 landscape — film default
 
 // Resolve the aspect-ratio state id to its MINIMAX_H3_RESOLUTIONS entry (used as
@@ -148,6 +168,7 @@ const REF_LINK_TYPES = [
   { id: 'location',  label: 'Location',  role: 'environment',      preserve: 'guide'       },  // transfer the room, don't pixel-lock
   { id: 'style',     label: 'Style',     role: 'style',            preserve: 'inspiration' },
   { id: 'prop',      label: 'Prop',      role: 'product_object',   preserve: 'strong'      },
+  { id: 'pose',      label: 'Pose',      role: 'pose_composition', preserve: 'guide'       },  // staging only — the look comes from the script
 ]
 const linkTypeDef  = (id) => REF_LINK_TYPES.find(t => t.id === id) || null
 const roleDef      = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id) || MINIMAX_H3_REF_ROLES[0]
@@ -417,6 +438,61 @@ const blankShot = (neighbor, isH3now, script) => {
   }
 }
 
+// Pure "what's missing and where" half of the dialogue-coverage fix — see
+// fillDialogueGaps (inside the component, below) for the LLM half that
+// actually writes each missing clip. Verified against a real run (a
+// sourceMode letter adaptation): SYSTEM_PROMPT_DIRECTOR_H3's DIALOGUE rule
+// already says "copy each line verbatim", but that only governs how to
+// format a line the model decides to place — nothing requires that EVERY
+// scene dialogue/narration line end up in some clip. Under "fewest clips"
+// pressure (a scene with several V.O. lines needs that many dedicated
+// clips, since a voiceover line "claims the whole clip" per the same rule)
+// the model resolves the conflict by silently dropping lines instead of
+// adding clips — 12 of 17 scene lines were missing in the entry that
+// surfaced this. Same lesson as isMergeEligible/mergeShotPair above it in
+// this file: prompt wording alone ("verbatim") wasn't enough, so this closes
+// the gap deterministically instead of relying on more prose.
+//
+// Returns one entry per scene that has at least one uncovered line:
+// { sceneId, anchor, lines }. `anchor` is the shot index this scene's
+// missing lines should be inserted after — the LAST shot carrying that
+// scene_id in the current list, not forced into scene-contiguous order, so a
+// scene that gets cross-cut with another (a frame narrative cutting back to
+// a flashback and back) still gets its line placed where that scene last
+// actually appears. A scene that contributed no shots at all anchors after
+// the nearest earlier scene that did, or -1 (insert at the very start).
+const normDialogue = (s) => String(s || '').trim().replace(/\s+/g, ' ')
+
+export const findMissingDialogue = (shots, script) => {
+  const scenes = script?.scenes || []
+  const list = Array.isArray(shots) ? shots : []
+  if (!scenes.length || !list.length) return []
+  const lastIdxByScene = new Map()
+  list.forEach((s, i) => lastIdxByScene.set(String(s.scene_id), i))
+  const gaps = []
+  scenes.forEach((scene, sceneIdx) => {
+    const lines = (Array.isArray(scene?.dialogues) ? scene.dialogues : []).filter(d => d && String(d).trim())
+    if (!lines.length) return
+    const covered = new Set(
+      list
+        .filter(s => String(s.scene_id) === String(scene.id))
+        .flatMap(s => Array.isArray(s.dialogue) ? s.dialogue.map(normDialogue) : [])
+    )
+    const missing = lines.filter(l => !covered.has(normDialogue(l)))
+    if (!missing.length) return
+    let anchor = lastIdxByScene.get(String(scene.id))
+    if (anchor === undefined) {
+      anchor = -1
+      for (let j = sceneIdx - 1; j >= 0; j--) {
+        const a = lastIdxByScene.get(String(scenes[j].id))
+        if (a !== undefined) { anchor = a; break }
+      }
+    }
+    gaps.push({ sceneId: scene.id, anchor, lines: missing })
+  })
+  return gaps
+}
+
 const PACING_OPTIONS = [
   { id: 'tight',    label: 'Tight'    },
   { id: 'standard', label: 'Standard' },
@@ -434,14 +510,23 @@ export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
   history = [],
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
+  // The LoRA library is owned by App.jsx (shared with the standalone workspace
+  // and persisted there); this panel only reads it and edits it through the
+  // callback. Which style LoRAs a film uses is local state below.
+  loras = [], onSaveLoras = null,
   // Full Auto: `autoJob` is a queued job spec ({ refImages, voiceRefs, genre, mature,
-  // hint, pacing } plus a per-start `runId` — see startedAutoRuns) to
+  // hint, pacing, spokenLang, loraIds } plus a per-start `runId` — see startedAutoRuns) to
   // run headlessly on mount — see the mount effect below. `onAutoJobDone`
   // reports { ok, error? } back to App.jsx once phase reaches 'done' (or a
   // phase fails). `onQueueAutoJob` queues a new job from the Full Auto input
   // screen. `queueProps` is the same prop shape App.jsx feeds QueuePanel,
   // reused here (filtered) for the embedded Full Auto queue view.
   autoJob = null, onAutoJobDone = null, onQueueAutoJob = null, queueProps = null,
+  // The SAME "⚙ Admin" toggle in App.jsx's sticky header — passed down rather
+  // than kept as separate local state so there is only ever one Admin switch
+  // in the whole app, not a second one a user can miss or confuse with the
+  // first. See reviewPhase1/reviewPhase2 below for what it does here.
+  adminMode = false,
 }) {
   const sessionId = useRef(initialState?.id || generateId())
   const visModel = visionModel || writerModel
@@ -464,6 +549,22 @@ export default function ScriptwriterPanel({
   // a queued Full Auto job) keeps whatever it was saved with.
   const [mature, setMature] = useState(initialState?.mature ?? false)
   const nsfwLine = mature ? SCRIPTWRITER_NSFW_LINE : ''
+  // Guided-mode only: treat `idea` as a complete source text (a letter, a
+  // diary entry) to dramatize faithfully rather than a one-line pitch to
+  // invent from — swaps the Phase 1 writer prompt and raises the scene cap.
+  const [sourceMode, setSourceMode] = useState(initialState?.sourceMode ?? false)
+  const sceneCap = sourceMode ? 15 : 5
+  // Admin mode (the `adminMode` prop, same switch as App.jsx's header button):
+  // Phase 1 / Phase 2 pause right before they send and let the exact system +
+  // user message be read and edited first. Built fresh here rather than
+  // reusing App.jsx's useAdminReview, which is keyed to one target's prompt —
+  // the Scriptwriter has three distinct phases, each its own system prompt.
+  // Phase 3 fires one call per clip in parallel; those stay console-inspectable
+  // (window.__peLastH3Messages) plus the existing per-clip "✦ Rewrite" button,
+  // rather than N editable review panels. Never used for a Full Auto run —
+  // see the autoActive checks at each pause site.
+  const [reviewPhase1, setReviewPhase1] = useState(null)   // { system, user, refs } | null
+  const [reviewPhase2, setReviewPhase2] = useState(null)   // { system, user, refs } | null
   const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 1)
   // Normalise on load so restored / older / model-broken entries self-repair
   // (the c1/l1 ids the whole ref-attachment path depends on).
@@ -489,6 +590,18 @@ export default function ScriptwriterPanel({
   const [promptTarget, setPromptTarget] = useState(initialState?.promptTarget || DEFAULT_PROMPT_TARGET)
   const [aspectRatio, setAspectRatio]   = useState(initialState?.aspectRatio ?? initialState?.h3Ratio ?? DEFAULT_ASPECT_RATIO)
   const [pacing, setPacing]             = useState(initialState?.pacing || 'standard')
+  // Active *style* LoRAs for this film. Character LoRAs are deliberately NOT
+  // activated here: they are bound to a cast member in the bible and resolved
+  // per clip (see lorasForShot), so a two-lead film never sprays both leads'
+  // triggers over every shot.
+  const [activeLoraIds, setActiveLoraIds] = useState(() =>
+    Array.isArray(initialState?.loraIds) ? initialState.loraIds : [])
+  // The language the cast speaks. This picker SEEDS the film: Phase 1 is told to
+  // write its dialogue in it and `script.language` is set from it. From then on
+  // `script.language` (hand-editable in the script view, and what all four
+  // langLine sites read) is the authority — that is how a language outside these
+  // three, say Japanese, stays reachable.
+  const [spokenLangId, setSpokenLangId] = useState(initialState?.spokenLang || DEFAULT_SPOKEN_LANG)
   // Transient per-entity portrait/still generator state (the resulting image is
   // persisted as a refImages entry, not here). Key: "c1" | "l1".
   const [portraitDraft, setPortraitDraft] = useState({})
@@ -532,7 +645,7 @@ export default function ScriptwriterPanel({
 
   const reset = () => {
     sessionId.current = generateId()
-    setPhase('input'); setIdea(''); setGenre('auto'); setSceneCount(1)
+    setPhase('input'); setIdea(''); setGenre('auto'); setSourceMode(false); setSceneCount(1)
     setScript(null); setDirectorsCut(null); setFinalPrompts([]); setFramePrompts([])
     setPromptTarget(DEFAULT_PROMPT_TARGET); setAspectRatio(DEFAULT_ASPECT_RATIO); setPacing('standard'); setPortraitDraft({})
     setError(''); setRawFallback(''); setCopied(null); setCopiedAll(false)
@@ -659,7 +772,7 @@ export default function ScriptwriterPanel({
     const d = linkTypeDef(linkType)
     const cs = script?.characters || [], ls = script?.locations || []
     const linkId =
-      ((linkType === 'character' || linkType === 'wardrobe') && cs.length === 1) ? cs[0].id
+      ((linkType === 'character' || linkType === 'wardrobe' || linkType === 'pose') && cs.length === 1) ? cs[0].id
       : (linkType === 'location' && ls.length === 1) ? ls[0].id
       : ''
     return { ...im, linkType, linkId, role: d?.role || im.role, preserve: d?.preserve || im.preserve }
@@ -689,7 +802,7 @@ export default function ScriptwriterPanel({
       // garment, a style ref only palette/light, etc. Untyped refs (pre-bible) use
       // the general scriptwriter vision prompt.
       const focus = im.role ? (roleDef(im.role).visionFocus || '') : ''
-      const sys = im.role ? VISION_PROMPT_MINIMAX_H3_REF : VISION_PROMPT_SCRIPTWRITER
+      const sys = im.role ? (roleDef(im.role).visionSystem || VISION_PROMPT_MINIMAX_H3_REF) : VISION_PROMPT_SCRIPTWRITER
       const noteBit = im.note && im.note.trim()
         ? ` The user's note on how it will be used: "${im.note.trim()}".`
         : ''
@@ -734,6 +847,32 @@ export default function ScriptwriterPanel({
     return updated
   }
 
+  // The film's spoken language: the hand-editable script field wins once a film
+  // exists, the picker is the seed before that. Used for the Scriptwriter's own
+  // Phase-1 instruction; Phases 2 and 3 read script.language directly.
+  const pickedLangLabel = spokenLangDef(spokenLangId).label
+  const filmLangLabel = (script?.language || '').trim() || pickedLangLabel
+  const spokenLangLine = (label) =>
+    `\nSpoken language: ${label} — write every "dialogues" line in natural, idiomatic ${label}`
+    + `, and set "language" to "${label}".`
+
+  const activeLoras = lorasByIds(loras, activeLoraIds)
+  const toggleLora = (id) => setActiveLoraIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  const loraById = (id) => (loras || []).find(l => l.id === id) || null
+
+  // Which LoRA triggers one clip carries: every active style LoRA, plus the
+  // bound LoRA of each cast member actually in that clip. `subject` carries the
+  // character's name so the instruction can say where the token belongs.
+  const lorasForShot = (shot) => {
+    const scene = script?.scenes?.find(sc => String(sc.id) === String(shot?.scene_id))
+    const ids = Array.isArray(shot?.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
+    const bound = (script?.characters || [])
+      .filter(c => ids.includes(c.id) && c.lora)
+      .map(c => { const l = loraById(c.lora); return l ? { ...l, subject: c.name } : null })
+      .filter(Boolean)
+    return [...activeLoras, ...bound]
+  }
+
   // --- history payload assembly (shared by all four save sites) -----------
   const basePayload = (phaseName, refsOverride) => {
     const refs = refsOverride || refImages
@@ -741,8 +880,8 @@ export default function ScriptwriterPanel({
       id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
-      idea: idea.trim(), genre, mature, sceneCount, phase: phaseName,
-      promptTarget, aspectRatio, pacing,
+      idea: idea.trim(), genre, mature, sourceMode, sceneCount, phase: phaseName,
+      promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds,
       // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
       // the user's hint appended after it (see buildAutoIdea) — a plain
       // 80-char truncation of `idea` (as the History card does) always shows
@@ -776,15 +915,37 @@ export default function ScriptwriterPanel({
         return
       }
     }
-    setPhase('scripting')
     const genreHint = genre === 'auto' ? 'Infer a suitable genre from the story idea.' : `Genre: ${genre}`
     const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}\nMaximum number of scenes: ${sceneCount}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\nMaximum number of scenes: ${sceneCount}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const phase1System = sourceMode ? SYSTEM_PROMPT_SCRIPTWRITER_SOURCE : SYSTEM_PROMPT_SCRIPTWRITER
+    // DEV-only prompt inspection, independent of Admin mode below — lets a prod
+    // (or non-admin) run be checked too. Open the browser console
+    // (npm run dev) and read window.__peLastPhase1Message.
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      window.__peLastPhase1Message = { system: phase1System, user: userMsg }
+    }
+    // Full Auto (autoActive) always sends straight through — an admin pause
+    // there would hang the queued job, since nothing would ever click Send.
+    if (adminMode && !autoActive) {
+      setReviewPhase1({ system: phase1System, user: userMsg, refs })
+      return
+    }
+    await sendPhase1(phase1System, userMsg, refs)
+  }
+  // The actual Phase 1 call + result handling — split out of runPhase1 so
+  // Admin mode can hold the assembled message for review/edit first and call
+  // this only once the user clicks Send (see reviewPhase1 above).
+  const sendPhase1 = async (system, userMsg, refs) => {
+    setPhase('scripting')
     try {
-      const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.7, { format: 'json' })
-      const data = normalizeScript(parseJSON(text))
+      const { text } = await callOllama(writerModel, userMsg, system, cfg, 0.7, { format: 'json' })
+      // Force the picked language in: a model that ignored the instruction and
+      // wrote "English" here would otherwise carry that wrong value through
+      // every later phase via script.language.
+      const data = { ...normalizeScript(parseJSON(text)), language: pickedLangLabel }
       setScript(data)
       setPhase('script')
       commitHistory({ ...basePayload('script', refs), script: data, directorsCut: null, finalPrompts: null })
@@ -810,13 +971,13 @@ export default function ScriptwriterPanel({
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
     const userMsg =
-      `Story idea: ${idea.trim()}\n${genreHint}${formatLine}${nsfwLine}\n\n`
+      `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(filmLangLabel)}${formatLine}${nsfwLine}\n\n`
       + `You already wrote this script (title, bible and all scenes):\n${JSON.stringify(script, null, 2)}${refBlock}\n\n`
       + `Rewrite ONLY scene ${scene.id}${scene.title ? ` ("${scene.title}")` : ''}. `
       + `Give a fresh version of the same story beat — you may change the action, blocking or dialogue — but keep it consistent with the surrounding scenes, reuse the existing characters and locations by their exact names, and keep the same scene "id". `
       + `Output only valid JSON: {"scenes":[ <the one rewritten scene object, exactly the same fields as before> ]}.`
     try {
-      const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.85, { format: 'json' })
+      const { text } = await callOllama(writerModel, userMsg, sourceMode ? SYSTEM_PROMPT_SCRIPTWRITER_SOURCE : SYSTEM_PROMPT_SCRIPTWRITER, cfg, 0.85, { format: 'json' })
       const raw = parseJSON(text)
       const arr = Array.isArray(raw?.scenes) ? raw.scenes : raw?.scene ? [raw.scene] : (raw && raw.title == null && raw.id != null ? [raw] : [])
       const fresh = arr[0]
@@ -841,8 +1002,6 @@ export default function ScriptwriterPanel({
       `Re-run the Director's Cut? This replaces the current clip breakdown${finalPrompts.length ? ' and the generated prompts' : ''}.\n\nTo keep them, use the steps at the top to move forward instead.`
     )) return
     setError(''); setRawFallback('')
-    setFinalPrompts([])
-    setPhase('directing')
     const isH3 = promptTarget === 'minimax_h3'
     // Describe any linked-but-undescribed references first (like runPhase1 /
     // runPhase3) so the Director sees the full numbered reference list and can
@@ -854,7 +1013,7 @@ export default function ScriptwriterPanel({
         // A refusal means a reference image is the problem — stop here rather
         // than folding a missing caption into the Director call anyway. Any
         // other captioning failure keeps the pre-existing best-effort behavior.
-        if (e?.isRefusal) { setError(e.message); setPhase('script'); return }
+        if (e?.isRefusal) { setError(e.message); return }
       }
     }
     const refBlock = assembleRefBlock(refs, REF_HEADING_DIRECTOR, script)
@@ -864,8 +1023,29 @@ export default function ScriptwriterPanel({
     const framingHint = aspectFramingHint(aspectRes(aspectRatio))
     const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
     const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const phase2System = isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR
+    // See the note by window.__peLastPhase1Message above — same idea, one
+    // phase later. This is the one to check when a scene the script clearly
+    // wrote (a flashback, say) isn't showing up right in the clip breakdown:
+    // it's the actual JSON the Director received.
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      window.__peLastPhase2Message = { system: phase2System, user: userMsg }
+    }
+    // See the matching gate in runPhase1 — a Full Auto run must never pause.
+    if (adminMode && !autoActive) {
+      setReviewPhase2({ system: phase2System, user: userMsg, refs, isH3 })
+      return
+    }
+    await sendPhase2(phase2System, userMsg, refs, isH3)
+  }
+  // The actual Phase 2 call + result handling — split out of runPhase2 so
+  // Admin mode can hold the assembled message for review/edit first (see
+  // reviewPhase2 above).
+  const sendPhase2 = async (system, userMsg, refs, isH3) => {
+    setFinalPrompts([])
+    setPhase('directing')
     try {
-      const { text } = await callOllama(writerModel, userMsg, isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR, cfg, 0.7, { format: 'json' })
+      const { text } = await callOllama(writerModel, userMsg, system, cfg, 0.7, { format: 'json' })
       const data = normalizeDirectorsCut(parseJSON(text), script)
       // The Director's per-clip reference_images → the shot.refs pin the chips
       // and Phase 3 already consume. Same list + order as assembleRefBlock.
@@ -902,6 +1082,14 @@ export default function ScriptwriterPanel({
             i++
           }
         }
+      }
+      // Deterministic reconciliation — every H3 run, not just Full Auto tight
+      // pacing: the DIALOGUE rule's "copy verbatim" wording alone doesn't
+      // reliably keep every scene line in the clip list (see findMissingDialogue
+      // above). A refusal here propagates out to the catch below, same as the
+      // merge pass just above.
+      if (isH3) {
+        data.shots = await fillDialogueGaps(data.shots, refs)
       }
       if (import.meta.env.DEV && typeof window !== 'undefined') {
         window.__peLastDirectorRefs = data.shots.map(s => ({ shot: s.shot_number, refs: s.refs }))
@@ -940,7 +1128,7 @@ export default function ScriptwriterPanel({
       if (c?.name) present.add(c.name.toLowerCase())
     }
     return captioned.filter(im => {
-      if (im.linkType !== 'character' && im.linkType !== 'wardrobe') return true  // env / style / prop stay global
+      if (im.linkType !== 'character' && im.linkType !== 'wardrobe' && im.linkType !== 'pose') return true  // env / style / prop stay global
       if (!im.linkId) return true                                                 // unlinked face ref — can't narrow it
       const c = (script?.characters || []).find(x => x.id === im.linkId)
       return present.has(im.linkId) || (c?.name && present.has(c.name.toLowerCase()))
@@ -1008,7 +1196,10 @@ export default function ScriptwriterPanel({
     const chars = script?.characters || []
     const byChar = (id) => voiceRefs.find(v => v.characterId === id && v.base64)
     const named = [...new Set(dialogues
-      .map(d => String(d).split(':')[0].trim())
+      // Strip a trailing "(V.O.)" (or any parenthetical) so a narrator's
+      // voiceover line still matches her bible name — and her voice-timbre
+      // reference, if one is attached.
+      .map(d => String(d).split(':')[0].trim().replace(/\s*\([^)]*\)\s*$/, '').trim())
       .filter(n => n && n.length < 40))]
     const hits = named
       .map(n => chars.find(c => c.name && slug(c.name) === slug(n)))
@@ -1063,6 +1254,8 @@ export default function ScriptwriterPanel({
         const name = refEntityName(im, script)
         const use = name
           ? (im.linkType === 'location' ? `the "${name}" environment` : im.linkType === 'wardrobe' ? `the wardrobe worn by ${name}` : `plays ${name}`)
+          : im.linkType === 'pose'
+          ? `the body pose and framing to copy${im.note && im.note.trim() ? ` — ${im.note.trim()}` : ''}`
           : (im.note && im.note.trim() ? im.note.trim() : linkTypeDef(im.linkType)?.label || 'reference')
         line += `\n   Requested use of this reference: ${use}`
         return line
@@ -1071,7 +1264,16 @@ export default function ScriptwriterPanel({
     } else {
       head = 'MODE: T2VA'
       const chars = Array.isArray(shot.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
-      const bibleChars = (script?.characters || []).filter(c => chars.includes(c.id))
+      // A "(V.O.)" narrator may not be visible in this shot (she's narrating a
+      // memory of something she didn't witness), so `chars` alone can miss her
+      // bible entry — pull her in too, just for the voice/appearance context
+      // below, without touching `shot.characters` itself (that stays the
+      // Director's own on-screen/reference-image decision).
+      const voNames = dialogues.map(d => (/^(.+?)\s*\(V\.O\.\)\s*:/i.exec(d) || [])[1]).filter(Boolean)
+      const voIds = voNames
+        .map(n => (script?.characters || []).find(c => c.name && slug(c.name) === slug(n))?.id)
+        .filter(Boolean)
+      const bibleChars = (script?.characters || []).filter(c => chars.includes(c.id) || voIds.includes(c.id))
       const loc = (script?.locations || []).find(l => l.id === (shot.location_id || scene?.location_id))
       const cLines = bibleChars.map(c => `- ${c.name}: ${(c.appearance || '').trim()}${c.wardrobe ? ` Wardrobe: ${c.wardrobe.trim()}` : ''}`)
       block = [
@@ -1103,12 +1305,13 @@ export default function ScriptwriterPanel({
   // The phase-3 user message for one shot — H3 (Ref2VA/T2VA) or LTX. Shared by
   // the full run and the per-clip "Rewrite" button on the video-prompts screen.
   const buildShotPromptMsg = (shot, refs, ratio) => {
-    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + nsfwLine
+    const loraPart = loraInstruction(lorasForShot(shot), promptTarget)
+    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + loraPart + nsfwLine
     const action = shot.visual_action || shot.primary_beat || ''
     const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
     const framingHint = aspectFramingHint(ratio)
     const aspectLine = `Aspect ratio: ${aspectParts(ratio).token || '16:9'}${framingHint ? `\n${framingHint}` : ''}\n\n`
-    return `${aspectLine}Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}${nsfwLine}`
+    return `${aspectLine}Target duration: ${shot.duration || 4} seconds\n\nBasic scene description:\n${action}\n\nRequested camera moves (incorporate these):\n- ${shot.camera_movement}\n- ${shot.camera_framing}\n\nStyle / mood: ${shot.lighting_mood}${ltxRefBlock}${loraPart}${nsfwLine}`
   }
 
   const runPhase3 = async () => {
@@ -1140,28 +1343,34 @@ export default function ScriptwriterPanel({
     setFinalPrompts(initial)
     setPhase('prompting')
 
-    const systemPrompt = isH3 ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
+    const systemPrompt = clipSystemFor(promptTarget)
     const ratio = aspectRes(aspectRatio)
     const results = new Array(shots.length)
     const userMsgs = shots.map((shot) => buildShotPromptMsg(shot, refs, ratio))
     if (import.meta.env.DEV && typeof window !== 'undefined') {
+      // system is the same for every shot (one writer prompt per target) —
+      // repeated per row anyway so each entry is self-contained to inspect.
       window.__peLastH3Messages = shots.map((s, i) => ({
-        shot: s.shot_number, mode: (/^MODE:\s*(\w+)/.exec(userMsgs[i]) || [])[1] || null, msg: userMsgs[i],
+        shot: s.shot_number, mode: (/^MODE:\s*(\w+)/.exec(userMsgs[i]) || [])[1] || null,
+        system: systemPrompt, msg: userMsgs[i],
       }))
     }
-    // Clip calls fire in parallel (below) — once sent, a refusal on one clip
-    // can't un-send another's already-in-flight request. What we CAN stop is
-    // treating the result as a normal finished film: a refusal means this
-    // script's own content is the problem, not a one-off model hiccup, so it
-    // should never quietly land on the 'done' screen reporting ok.
+    // Clip calls fire with bounded concurrency (below) — once sent, a refusal
+    // on one clip can't un-send another's already-in-flight request. What we
+    // CAN stop is treating the result as a normal finished film: a refusal
+    // means this script's own content is the problem, not a one-off model
+    // hiccup, so it should never quietly land on the 'done' screen reporting
+    // ok. The cap (rather than firing all clips at once) matters once a
+    // source-text film's raised scene ceiling pushes clip counts well past
+    // the usual 8–14 — see the "Preserve source text" toggle above.
     let refusal = null
-    const proms = shots.map((shot, i) => {
+    await mapWithConcurrency(shots, 6, (shot, i) => {
       const userMsg = userMsgs[i]
       const isRefShot = /^MODE:\s*Ref2VA/.test(userMsg)
       return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
         .then(({ text: raw, usage }) => {
           if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
-          const text = isH3 ? normalizeH3Prompt(raw, isRefShot) : raw
+          const text = withLoraTriggers(isH3 ? normalizeH3Prompt(raw, isRefShot) : raw, lorasForShot(shot), promptTarget)
           setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text }
         })
@@ -1171,7 +1380,6 @@ export default function ScriptwriterPanel({
           results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text: '' }
         })
     })
-    await Promise.all(proms)
     if (refusal) {
       // Stop here instead of advancing to 'done' — land back on the
       // Director's-Cut screen (where clips can be inspected/removed/rewritten)
@@ -1229,6 +1437,8 @@ export default function ScriptwriterPanel({
         setMature(!!autoJob.mature)
         setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
+        setSpokenLangId(autoJob.spokenLang || DEFAULT_SPOKEN_LANG)
+        setActiveLoraIds(Array.isArray(autoJob.loraIds) ? autoJob.loraIds : [])
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
       })
@@ -1449,6 +1659,108 @@ export default function ScriptwriterPanel({
     return renumberShots([...shots.slice(0, i), merged, ...shots.slice(i + 2)])
   }
 
+  // The LLM half of the dialogue-coverage fix — findMissingDialogue (module
+  // scope, above) finds WHERE a line is missing; this writes the one clip
+  // that delivers it. Mirrors mergeShotPair's shape: same shot-list-as-
+  // context message, same Director system prompt, scoped to one narrow
+  // question. After the call returns, "dialogue" is FORCED back to the exact
+  // original line regardless of what the model wrote there — the same
+  // belt-and-suspenders reasoning as withLoraTriggers repairing a mangled
+  // token: the prompt already asks for verbatim and that alone isn't
+  // reliable enough to trust for an "exactly" requirement.
+  const writeDialogueClip = async ({ scene, neighbor, line }, shots, refsForCall, capd) => {
+    const isVO = /\(V\.O\.\)\s*:/i.test(line)
+    const refBlock = assembleRefBlock(refsForCall || refImages, REF_HEADING_DIRECTOR, script)
+    const lookLine = script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
+    const langLine = script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
+    const sceneName = scene?.title || String(scene?.id ?? '')
+    const task =
+      `The script also contains the following line in scene "${sceneName}", which none of the clips above currently deliver: ${JSON.stringify(line)}\n\n`
+      + `Write ONE NEW clip whose entire job is to deliver this exact line. Reproduce it VERBATIM, character for character, as the clip's sole "dialogue" entry — never paraphrase, shorten, translate, or drop any part of it. `
+      + (isVO
+        ? `It is off-screen narration (a "(V.O.)" line): the on-screen action does not need to depict what the line describes — simple continuity business (a physical action, a gesture, a held reaction) that fits the scene is enough. `
+        : '')
+      + `Place it in scene "${sceneName}"${neighbor ? `, right after clip ${neighbor.shot_number}` : ' at the start of the film'}. `
+      + `Keep "scene_id": ${JSON.stringify(scene?.id)}.`
+    const userMsg =
+      `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${nsfwLine}${refBlock}\n\n`
+      + `You already broke this script into the following clips:\n${JSON.stringify(shots, null, 2)}\n\n`
+      + `${task} `
+      + `Output only valid JSON: {"shots":[ <the one new clip, exactly the same fields as the others> ]}.`
+    const { text } = await callOllama(writerModel, userMsg, SYSTEM_PROMPT_DIRECTOR_H3, cfg, 0.6, { format: 'json' })
+    const raw = parseJSON(text)
+    const arr = Array.isArray(raw?.shots) ? raw.shots : raw?.shot ? [raw.shot] : Array.isArray(raw) ? raw : []
+    const fresh = (normalizeDirectorsCut({ shots: arr }, script).shots || [])[0]
+    if (!fresh) throw new Error('The model did not return a clip.')
+    const { reference_images, ...freshRest } = fresh
+    const picked = resolveRefSelection(reference_images, capd)
+    return {
+      ...freshRest,
+      scene_id: scene?.id ?? freshRest.scene_id,
+      scene_title: scene?.title ?? freshRest.scene_title,
+      dialogue: [line],
+      shot_number: 0,
+      duration: fresh.duration || 6,
+      ...(picked ? { refs: picked } : {}),
+    }
+  }
+
+  // Degrades gracefully rather than losing the line outright: used only when
+  // writeDialogueClip's call errors (bad JSON, network) — a refusal is NOT
+  // caught here, it propagates and stops the run, same policy as everywhere
+  // else a writer-model refusal can surface (see "Content refusals" in
+  // CLAUDE.md) — a fallback would risk quietly masking a real content issue.
+  const fallbackDialogueClip = ({ scene, neighbor, line }) => ({
+    ...blankShot(neighbor, true, script),
+    scene_id: scene?.id ?? neighbor?.scene_id,
+    scene_title: scene?.title ?? neighbor?.scene_title,
+    shot_type: 'performance',
+    primary_beat: 'Delivers a line of narration; no other beat in this clip.',
+    dialogue: [line],
+    duration: 6,
+    notes: 'auto-inserted to preserve a source dialogue line — the write-up call for it failed; needs a human pass.',
+  })
+
+  // Runs after Phase 2 parses the Director's response (H3 only — LTX's shot
+  // schema has no "dialogue" field to reconcile). One clip-writing call per
+  // missing line, bounded like Phase 3's per-clip calls (a dense source-text
+  // letter can produce a dozen-plus gaps at once). Insertions are grouped by
+  // anchor and spliced back in a single pass, preserving both scene order
+  // (gaps/jobs are built by walking script.scenes in order) and each scene's
+  // own line order.
+  const fillDialogueGaps = async (shots, refsForCall) => {
+    const gaps = findMissingDialogue(shots, script)
+    if (!gaps.length) return shots
+    const jobs = []
+    for (const gap of gaps) {
+      const scene = script?.scenes?.find(s => String(s.id) === String(gap.sceneId))
+      const neighbor = shots[gap.anchor] || shots[gap.anchor + 1] || null
+      for (const line of gap.lines) jobs.push({ gap, scene, neighbor, line })
+    }
+    const capd = (refsForCall || refImages || []).filter(im => im.caption && im.caption.trim())
+    const written = new Array(jobs.length)
+    await mapWithConcurrency(jobs, 6, async (job, idx) => {
+      try {
+        written[idx] = await writeDialogueClip(job, shots, refsForCall, capd)
+      } catch (e) {
+        if (e?.isRefusal) throw e
+        written[idx] = fallbackDialogueClip(job)
+      }
+    })
+    const byAnchor = new Map()
+    jobs.forEach((job, idx) => {
+      const list = byAnchor.get(job.gap.anchor) || []
+      list.push(written[idx])
+      byAnchor.set(job.gap.anchor, list)
+    })
+    const result = [...(byAnchor.get(-1) || [])]
+    shots.forEach((s, i) => {
+      result.push(s)
+      if (byAnchor.has(i)) result.push(...byAnchor.get(i))
+    })
+    return renumberShots(result)
+  }
+
   // Manual trigger — "⇄ Merge" button on the Director's-Cut screen. The user
   // picks the pair; a mismatched pair (different scene/location/cast, or
   // either carries dialogue) gets a confirm prompt rather than a hard block,
@@ -1515,7 +1827,7 @@ export default function ScriptwriterPanel({
       }
     }
     const ratio = aspectRes(aspectRatio)
-    const systemPrompt = isH3now ? SYSTEM_PROMPT_MINIMAX_H3 : SHOT_SYSTEM_PROMPT
+    const systemPrompt = clipSystemFor(promptTarget)
     try {
       const userMsg = buildShotPromptMsg(shot, refs, ratio)
       const { text: raw, usage } = await callOllama(writerModel, userMsg, systemPrompt, cfg, 0.85)
@@ -1523,7 +1835,7 @@ export default function ScriptwriterPanel({
       // never runs on it. A refused clip must not be saved as if it were a
       // real prompt (this used to happen silently here).
       if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
-      const text = isH3now ? normalizeH3Prompt(raw, /^MODE:\s*Ref2VA/.test(userMsg)) : raw
+      const text = withLoraTriggers(isH3now ? normalizeH3Prompt(raw, /^MODE:\s*Ref2VA/.test(userMsg)) : raw, lorasForShot(shot), promptTarget)
       let saved = null
       setFinalPrompts(prev => {
         const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
@@ -1609,16 +1921,23 @@ export default function ScriptwriterPanel({
     const shot = directorsCut.shots[shotIdx]
     const target = framePrompts[shotIdx].frames[frameKey].target
     const framePos = frameKey === 'first' ? 'start (first)' : frameKey === 'mid' ? 'middle' : 'end (last)'
-    // SDXL's writer is tag-based — a prose continuity block confuses it, so skip it there.
-    const refBlock = target === 'sdxl' ? '' : assembleRefBlock(refImages, REF_HEADING_LITE, script)
+    // A tag-based writer (SDXL) is confused by a prose continuity block, so its table
+    // row opts out with refBlockInFrames: false. Anything that does not say otherwise
+    // gets the block — including Z-Image Turbo, which has no table row at all — which
+    // is exactly what the old `target !== 'sdxl'` test did.
+    const refBlock = (caps(target).refBlockInFrames ?? true)
+      ? assembleRefBlock(refImages, REF_HEADING_LITE, script)
+      : ''
     const action = shot.visual_action || shot.primary_beat || ''
-    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${action}\nTarget aspect ratio: ${aspectToken(aspectRatio)} — compose for this frame shape.\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}`
+    const shotLoras = lorasForShot(shot)
+    const userMsg = `Generate a still image prompt for the ${framePos} frame of a ${shot.duration || 4}-second video clip.\n\nShot ${shot.shot_number} — ${shot.scene_title}\nCamera framing: ${shot.camera_framing}\nLighting/mood: ${shot.lighting_mood}\nVisual action: ${action}\nTarget aspect ratio: ${aspectToken(aspectRatio)} — compose for this frame shape.\n\nThis is the ${framePos} of the clip. Describe the exact visual state at this moment as a still image.${refBlock}${loraInstruction(shotLoras, target)}`
 
     setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
       ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], loading: true, error: '' } }
     }))
     try {
-      const { text } = await callOllama(writerModel, userMsg, FRAME_SYSTEM[target], cfg, 0.7)
+      const { text: raw } = await callOllama(writerModel, userMsg, FRAME_SYSTEM[target], cfg, 0.7)
+      const text = withLoraTriggers(raw, shotLoras, target)
       setFramePrompts(prev => prev.map((fp, i) => i !== shotIdx ? fp : {
         ...fp, frames: { ...fp.frames, [frameKey]: { ...fp.frames[frameKey], text, loading: false } }
       }))
@@ -1818,22 +2137,26 @@ export default function ScriptwriterPanel({
     const types = isChar ? ['character', 'wardrobe'] : ['location']
     return (refImages || []).find(im => types.includes(im.linkType) && refBelongsTo(im, key, isChar ? 'character' : 'location'))
   }
-  const patchPortrait = (key, patch) => setPortraitDraft(prev => ({ ...prev, [key]: { target: 'zimage', text: '', loading: false, error: '', ...prev[key], ...patch } }))
+  const patchPortrait = (key, patch) => setPortraitDraft(prev => ({ ...prev, [key]: { target: PORTRAIT_DEFAULT_TARGET, text: '', loading: false, error: '', ...prev[key], ...patch } }))
   const startPortrait = (key) => patchPortrait(key, {})
 
   const generatePortraitPrompt = async (key) => {
     const found = entityByKey(key)
     if (!found) return
     const { kind, ent } = found
-    const target = portraitDraft[key]?.target || 'zimage'
+    const target = portraitDraft[key]?.target || PORTRAIT_DEFAULT_TARGET
     const look = script?.look?.trim() ? `\nFilm look (match palette and lighting): ${script.look.trim()}` : ''
+    // A character plate is exactly where that character's own LoRA belongs.
+    const entLora = kind === 'character' && ent.lora ? loraById(ent.lora) : null
+    const portraitLoras = [...activeLoras, ...(entLora ? [{ ...entLora, subject: ent.name }] : [])]
+    const loraPart = loraInstruction(portraitLoras, target)
     const userMsg = kind === 'character'
       ? `Generate a CHARACTER REFERENCE PORTRAIT for a film — a clean identity plate, not a dramatic shot. Front view, eye level, neutral relaxed expression, direct to camera, plain mid-grey seamless background, soft even key light, framed head to waist. No text, no props, no hard shadows, no motion blur.\n\nCharacter: ${ent.name}\nAppearance: ${(ent.appearance || '').trim()}\nWardrobe: ${(ent.wardrobe || '').trim()}${look}`
       : `Generate an ESTABLISHING STILL of a film location — eye-level, natural lens, no people, no text. It will be used as an environment reference.\n\nLocation: ${ent.name}\n${(ent.description || '').trim()}${look}`
     patchPortrait(key, { loading: true, error: '' })
     try {
-      const { text } = await callOllama(writerModel, userMsg, FRAME_SYSTEM[target] || FRAME_SYSTEM.zimage, cfg, 0.6)
-      patchPortrait(key, { text, loading: false })
+      const { text: raw } = await callOllama(writerModel, userMsg + loraPart, FRAME_SYSTEM[target] || FRAME_SYSTEM[PORTRAIT_DEFAULT_TARGET], cfg, 0.6)
+      patchPortrait(key, { text: withLoraTriggers(raw, portraitLoras, target), loading: false })
     } catch (e) {
       patchPortrait(key, { loading: false, error: e.message })
     }
@@ -1847,7 +2170,7 @@ export default function ScriptwriterPanel({
     setComfyFrame({ key: ck, state: 'sending', error: '' })
     try {
       await sendShot({
-        positive: d.text, negative: '', target: d.target || 'zimage',
+        positive: d.text, negative: '', target: d.target || PORTRAIT_DEFAULT_TARGET,
         duration: 4, frameMode: 'single',
         shot: 0, scene: `${found.kind} ${found.ent.name}`, frame: 'portrait',
         images: { first: '', mid: '', last: '', ref: [] },
@@ -2163,7 +2486,7 @@ export default function ScriptwriterPanel({
           <div style={{ marginTop: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
               {FRAME_TARGETS.map(t => (
-                <button key={t.id} onClick={() => patchPortrait(key, { target: t.id })} style={btn((d.target || 'zimage') === t.id)}>{t.label}</button>
+                <button key={t.id} onClick={() => patchPortrait(key, { target: t.id })} style={btn((d.target || PORTRAIT_DEFAULT_TARGET) === t.id)}>{t.label}</button>
               ))}
               <button onClick={() => generatePortraitPrompt(key)} disabled={d.loading}
                 style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)', background: 'var(--pe-accent-bg)' }}>
@@ -2221,7 +2544,7 @@ export default function ScriptwriterPanel({
     : 2
   const STEP_PHASE = ['script', 'dircut', 'done']
 
-  const isLoading = ['scripting', 'directing', 'prompting'].includes(phase)
+  const isLoading = ['scripting', 'directing', 'prompting'].includes(phase) || !!reviewPhase1 || !!reviewPhase2
   const isH3 = promptTarget === 'minimax_h3'
   const H3_DURATIONS = [4, 5, 6, 7, 8, 10, 12, 15]
   const LTX_DURATIONS = [4, 8, 12, 16, 20]
@@ -2230,6 +2553,31 @@ export default function ScriptwriterPanel({
   const focusBorder = (e) => { e.target.style.borderColor = 'var(--pe-accent)' }
   const blurBorder  = (e) => { e.target.style.borderColor = 'var(--pe-line)' }
   const navBtn = { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }
+
+  // Admin mode (the header's "⚙ Admin" switch, App.jsx): renders right under
+  // the button that would otherwise have sent straight to the AI, not up at
+  // the top of the screen — the point is to review the message you're about
+  // to send without losing your place in the workflow.
+  const renderAdminReview = (label, review, setReview, send) => review && (
+    <div style={{ marginTop: 10, padding: '14px 16px', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-accent-ink)', marginBottom: 10 }}>
+        ⚙ Admin — review before {label} sends
+      </div>
+      <label style={{ ...lbl, marginBottom: 4 }}>System prompt</label>
+      <textarea value={review.system} onChange={e => setReview(r => ({ ...r, system: e.target.value }))}
+        rows={8} spellCheck={false}
+        style={{ ...field({ resize: 'vertical', fontFamily: 'var(--pe-mono)', fontSize: 12.5, marginBottom: 10, width: '100%' }) }} />
+      <label style={{ ...lbl, marginBottom: 4 }}>User message</label>
+      <textarea value={review.user} onChange={e => setReview(r => ({ ...r, user: e.target.value }))}
+        rows={10} spellCheck={false}
+        style={{ ...field({ resize: 'vertical', fontFamily: 'var(--pe-mono)', fontSize: 12.5, marginBottom: 10, width: '100%' }) }} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => { const r = review; setReview(null); send(r) }}
+          style={{ ...ghostBtn, color: 'var(--pe-accent-ink)', borderColor: 'var(--pe-accent-line)' }}>✦ Send to AI</button>
+        <button onClick={() => setReview(null)} style={ghostBtn}>Cancel</button>
+      </div>
+    </div>
+  )
 
   return (
     <div>
@@ -2334,10 +2682,17 @@ export default function ScriptwriterPanel({
             <>
               <div style={{ marginBottom: 14 }}>
                 <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Story Idea</label>
-                <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={4} disabled={isLoading}
-                  placeholder="e.g. A retired deep-sea diver finds a mysterious package washed ashore — and recognizes the handwriting on it as her own."
+                <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={sourceMode ? 10 : 4} disabled={isLoading}
+                  placeholder={sourceMode
+                    ? 'Paste the full source text here — a letter, a diary entry, a short piece of prose. The film will dramatize it scene by scene, in order.'
+                    : 'e.g. A retired deep-sea diver finds a mysterious package washed ashore — and recognizes the handwriting on it as her own.'}
                   style={{ ...field({ resize: 'vertical' }) }}
                   onFocus={focusBorder} onBlur={blurBorder} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12.5, color: 'var(--pe-ink-3)', cursor: isLoading ? 'default' : 'pointer' }}>
+                  <input type="checkbox" checked={sourceMode} disabled={isLoading}
+                    onChange={e => { const v = e.target.checked; setSourceMode(v); if (!v) setSceneCount(c => Math.min(c, 5)) }} />
+                  This is a finished text (letter, diary, story) — dramatize its actual content rather than inventing
+                </label>
               </div>
               <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div>
@@ -2351,12 +2706,20 @@ export default function ScriptwriterPanel({
                   </div>
                 </div>
                 <div>
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Language <span style={{ textTransform: 'none', letterSpacing: 0 }}>(spoken)</span></label>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {SPOKEN_LANGUAGES.map(l => (
+                      <button key={l.id} type="button" onClick={() => setSpokenLangId(l.id)} disabled={isLoading} title={l.label} style={btn(spokenLangId === l.id)}>{l.short}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
                   <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes (max)</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
                       style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
                     <span style={{ fontSize: 15, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
-                    <button onClick={() => setSceneCount(v => Math.min(5, v + 1))} disabled={isLoading || sceneCount >= 5}
+                    <button onClick={() => setSceneCount(v => Math.min(sceneCap, v + 1))} disabled={isLoading || sceneCount >= sceneCap}
                       style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
                   </div>
                 </div>
@@ -2371,13 +2734,23 @@ export default function ScriptwriterPanel({
                 </div>
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 20px', lineHeight: 1.5, maxWidth: 560 }}>
-                This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
-                1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
-                "Scenes (max)" is a ceiling, not a target — a single continuous moment becomes one scene even if you raise it.
+                {sourceMode ? (
+                  <>This dramatizes your source text scene by scene, in the order it's written — nothing is invented that the text doesn't say or clearly imply, though the visuals, blocking and performance are built out for camera.
+                  "Scenes (max)" is a ceiling: raise it enough to cover the whole text; scenes still only split on a genuine break (a new passage, a time jump, a location change), not just to fill the count.</>
+                ) : (
+                  <>This writes a <strong>very short film</strong> (~45 s–3 min): one premise, one turn, one ending — it opens already inside the moment, not before it.
+                  1–2 scenes in a single location is the tightest form; more scenes mean more time and usually a second location.
+                  "Scenes (max)" is a ceiling, not a target — a single continuous moment becomes one scene even if you raise it.</>
+                )}
               </p>
+              <LoraPanel
+                loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
+                onToggle={toggleLora} onSaveLoras={onSaveLoras}
+                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'} />
               <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
                 {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
               </button>
+              {renderAdminReview('Phase 1 (Script)', reviewPhase1, setReviewPhase1, (r) => sendPhase1(r.system, r.user, r.refs))}
             </>
           ) : (
             <div>
@@ -2403,6 +2776,14 @@ export default function ScriptwriterPanel({
                 </div>
               </div>
               <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Language <span style={{ textTransform: 'none', letterSpacing: 0 }}>(what the cast speaks)</span></label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {SPOKEN_LANGUAGES.map(l => (
+                    <button key={l.id} type="button" onClick={() => setSpokenLangId(l.id)} disabled={isLoading} title={l.label} style={btn(spokenLangId === l.id)}>{l.short}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 20 }}>
                 <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {PACING_OPTIONS.map(p => (
@@ -2414,8 +2795,12 @@ export default function ScriptwriterPanel({
                   same-scene locomotion clips. Loose = more reaction &amp; insert clips.
                 </div>
               </div>
+              <LoraPanel
+                loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
+                onToggle={toggleLora} onSaveLoras={onSaveLoras}
+                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'} />
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing })}
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, spokenLang: spokenLangId, loraIds: activeLoraIds })}
                 disabled={refImages.length === 0 || isLoading || captioning}
                 style={genBtn(refImages.length === 0 || isLoading || captioning)}>
                 + Add to Queue (Full Auto)
@@ -2487,7 +2872,16 @@ export default function ScriptwriterPanel({
                 style={{ ...field({ resize: 'vertical' }) }} onFocus={focusBorder} onBlur={blurBorder} />
             </div>
             <div style={{ width: 160 }}>
-              <label style={lbl}>Language</label>
+              <label style={lbl}>Language <span style={{ textTransform: 'none', letterSpacing: 0 }}>(spoken)</span></label>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+                {SPOKEN_LANGUAGES.map(l => (
+                  <button key={l.id} type="button" title={l.label}
+                    onClick={() => { setSpokenLangId(l.id); updateFilmField('language', l.label) }}
+                    style={{ ...btn((script.language || '').trim().toLowerCase() === l.label.toLowerCase()), padding: '4px 10px' }}>{l.short}</button>
+                ))}
+              </div>
+              {/* Free text stays the authority — type any language the three
+                  buttons don't cover and none of them highlights. */}
               <input value={script.language || ''} onChange={e => updateFilmField('language', e.target.value)}
                 style={field()} onFocus={focusBorder} onBlur={blurBorder} />
             </div>
@@ -2555,6 +2949,11 @@ export default function ScriptwriterPanel({
             </div>
           </div>
 
+          <LoraPanel
+            loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
+            onToggle={toggleLora} onSaveLoras={onSaveLoras}
+            hint={'(style LoRAs for every clip — bind a character LoRA to its character below)'} />
+
           {/* Cast bible */}
           {Array.isArray(script.characters) && (
             <div style={{ marginBottom: 16 }}>
@@ -2577,6 +2976,17 @@ export default function ScriptwriterPanel({
                   <label style={lbl}>Voice</label>
                   <input value={c.voice || ''} onChange={e => updateCharacter(ci, 'voice', e.target.value)}
                     style={field()} onFocus={focusBorder} onBlur={blurBorder} />
+                  {(loras || []).some(l => l.kind === 'character' && l.trigger.trim()) && (
+                    <>
+                      <label style={{ ...lbl, marginTop: 6 }}>Character LoRA <span style={{ textTransform: 'none', letterSpacing: 0 }}>(its trigger rides only the clips this character is in)</span></label>
+                      <select value={c.lora || ''} onChange={e => updateCharacter(ci, 'lora', e.target.value)} style={field()}>
+                        <option value="">— none —</option>
+                        {(loras || []).filter(l => l.kind === 'character' && l.trigger.trim()).map(l => (
+                          <option key={l.id} value={l.id}>{l.name.trim() || l.trigger.trim()}</option>
+                        ))}
+                      </select>
+                    </>
+                  )}
                   {renderPortrait(c.id)}
                 </div>
               ))}
@@ -2699,6 +3109,7 @@ export default function ScriptwriterPanel({
               : sceneBusy !== null ? '✦ Rewriting a scene…'
               : directorsCut ? "↻ Re-run Director's Cut" : "→ Director's Cut"}
           </button>
+          {renderAdminReview("Phase 2 (Director's Cut)", reviewPhase2, setReviewPhase2, (r) => sendPhase2(r.system, r.user, r.refs, r.isH3))}
           {directorsCut && phase === 'script' && (
             <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
               <button onClick={() => navigateTo('dircut')} disabled={navBusy()} style={navBtn}>→ Director's Cut (keep current)</button>

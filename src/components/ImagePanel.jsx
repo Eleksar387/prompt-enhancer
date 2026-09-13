@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash, shrinkToJpeg } from '../utils'
 import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
 
-export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
+function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
   const [image, setImage]           = useState(null)
   const [targetRes, setTargetRes]   = useState(presets[1] ? presets[1].id : presets[0].id)
   const [cropOpen, setCropOpen]     = useState(false)
@@ -272,3 +272,9 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
     </div>
   )
 }
+
+// Memoized: every prop App passes is stable across renders (a useState setter,
+// a resolution table from constants.js, a string, or the seed object that only
+// changes when a history thumbnail is picked), so this panel — which holds a
+// decoded preview and does canvas work — stops re-rendering on unrelated state.
+export default memo(ImagePanel)

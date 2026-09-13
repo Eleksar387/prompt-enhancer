@@ -7,21 +7,14 @@
 //    with, and the input/ filenames of those images) to the Prompt Enhancer
 //    Bridge custom node pack, so a workflow can read it without copy-paste.
 
+import { makeLocalStore } from './localStore'
+
 export const COMFY_CFG_KEY = 'prompt-enhancer-comfy-config'
 export const DEFAULT_COMFY_CFG = { url: 'http://127.0.0.1:8188', slot: 'default' }
 
-export function loadComfyCfg() {
-  let saved = {}
-  try {
-    const raw = localStorage.getItem(COMFY_CFG_KEY)
-    if (raw) saved = JSON.parse(raw)
-  } catch {}
-  return { ...DEFAULT_COMFY_CFG, ...saved }
-}
-
-export function saveComfyCfg(cfg) {
-  try { localStorage.setItem(COMFY_CFG_KEY, JSON.stringify(cfg)) } catch {}
-}
+const comfyStore = makeLocalStore(COMFY_CFG_KEY, { defaults: DEFAULT_COMFY_CFG })
+export const loadComfyCfg = comfyStore.load
+export const saveComfyCfg = comfyStore.save
 
 export async function uploadImage(base64, fileName, mediaType, comfyUrl) {
   const base = (comfyUrl || '').replace(/\/+$/, '')
