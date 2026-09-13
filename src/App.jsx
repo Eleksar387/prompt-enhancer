@@ -1356,7 +1356,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: scriptwriterMode ? 'minmax(0,1fr)' : '360px minmax(0, 900px) minmax(420px, 760px)', gap: 28, padding: 24, alignItems: 'start', justifyContent: 'center', maxWidth: scriptwriterMode ? 1080 : 2200, margin: '0 auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '360px minmax(0, 900px) minmax(420px, 760px)', gap: 28, padding: 24, alignItems: 'start', justifyContent: 'center', maxWidth: 2200, margin: '0 auto' }}>
 
       {/* ================= LEFT RAIL ================= */}
       <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 12, padding: 20 }}>
