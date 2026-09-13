@@ -2623,40 +2623,13 @@ export default function ScriptwriterPanel({
   )
 
   return (
-    <div>
-      {/* Phase stepper — dots for finished steps are clickable (jump back or
-          forward without re-running the AI) */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24 }}>
-        {STEPS.map((step, i) => {
-          const target = STEP_PHASE[i]
-          const canJump = phase !== target && !navBusy() && stepReachable(target)
-          return (
-          <div key={step} style={{ display: 'flex', alignItems: 'center' }}>
-            <div
-              onClick={canJump ? () => navigateTo(target) : undefined}
-              title={canJump ? `Go to ${step}` : undefined}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: canJump ? 'pointer' : 'default' }}>
-              <div style={{
-                width: 22, height: 22, borderRadius: '50%', border: '2px solid',
-                borderColor: i <= stepIdx ? 'var(--pe-accent)' : canJump ? 'var(--pe-accent-line)' : 'var(--pe-line)',
-                background: i < stepIdx ? 'var(--pe-accent)' : i === stepIdx ? 'var(--pe-accent-bg)' : 'transparent',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13.5, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: 700, flexShrink: 0,
-              }}>
-                {i < stepIdx ? '✓' : i + 1}
-              </div>
-              <span style={{ fontSize: 13, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: i === stepIdx ? 600 : 400, textDecoration: canJump ? 'underline' : 'none', textUnderlineOffset: 3 }}>
-                {step}
-              </span>
-            </div>
-            {i < STEPS.length - 1 && (
-              <div style={{ width: 32, height: 1, background: i < stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)', margin: '0 8px' }} />
-            )}
-          </div>
-          )
-        })}
-      </div>
-
+    <>
+    {/* Left half of the center column: the input workspace — reference images,
+        voice refs, and the Phase-1 idea/genre form. Stays in place across
+        phases (refs/voice are editable through dircut) the same way an image
+        panel stays put on every other target while its result appears in the
+        third column. */}
+    <div style={{ gridColumn: '2', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {/* Reuse an image from a past generation as a reference (same block as the
           other targets; picking adds it to the reference images below) */}
       {!['prompting', 'done'].includes(phase) && (
@@ -2665,20 +2638,6 @@ export default function ScriptwriterPanel({
           onPick={addRefFromHistory}
           pickHint="adds it as a reference image (link it to a character, wardrobe, location, style or prop below)"
         />
-      )}
-
-      {/* Error */}
-      {error && (
-        <div style={{ marginBottom: 16, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>
-          {error}
-          {rawFallback && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 6 }}>Raw LLM output:</div>
-              <textarea readOnly value={rawFallback} rows={6}
-                style={{ ...field({ background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical' }) }} />
-            </div>
-          )}
-        </div>
       )}
 
       {/* Reference images — editable up to the video-prompt phase, read-only after */}
@@ -2858,6 +2817,59 @@ export default function ScriptwriterPanel({
                   />
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+
+    {/* Right half: the results column — stepper + error, then whichever
+        phase's review screen is current (script bible, director's cut,
+        final prompts). Mirrors every other target's layout: the workspace
+        stays in the compose column, the output goes in the third column. */}
+    <div style={{ gridColumn: '3', display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+      {/* Phase stepper — dots for finished steps are clickable (jump back or
+          forward without re-running the AI) */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {STEPS.map((step, i) => {
+          const target = STEP_PHASE[i]
+          const canJump = phase !== target && !navBusy() && stepReachable(target)
+          return (
+          <div key={step} style={{ display: 'flex', alignItems: 'center' }}>
+            <div
+              onClick={canJump ? () => navigateTo(target) : undefined}
+              title={canJump ? `Go to ${step}` : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: canJump ? 'pointer' : 'default' }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', border: '2px solid',
+                borderColor: i <= stepIdx ? 'var(--pe-accent)' : canJump ? 'var(--pe-accent-line)' : 'var(--pe-line)',
+                background: i < stepIdx ? 'var(--pe-accent)' : i === stepIdx ? 'var(--pe-accent-bg)' : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 13.5, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: 700, flexShrink: 0,
+              }}>
+                {i < stepIdx ? '✓' : i + 1}
+              </div>
+              <span style={{ fontSize: 13, color: i <= stepIdx ? 'var(--pe-accent-ink)' : canJump ? 'var(--pe-accent-ink)' : 'var(--pe-line)', fontWeight: i === stepIdx ? 600 : 400, textDecoration: canJump ? 'underline' : 'none', textUnderlineOffset: 3 }}>
+                {step}
+              </span>
+            </div>
+            {i < STEPS.length - 1 && (
+              <div style={{ width: 32, height: 1, background: i < stepIdx ? 'var(--pe-accent)' : 'var(--pe-line)', margin: '0 8px' }} />
+            )}
+          </div>
+          )
+        })}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{ padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>
+          {error}
+          {rawFallback && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 6 }}>Raw LLM output:</div>
+              <textarea readOnly value={rawFallback} rows={6}
+                style={{ ...field({ background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical' }) }} />
             </div>
           )}
         </div>
@@ -3265,7 +3277,7 @@ export default function ScriptwriterPanel({
                 )}
               </div>
               {expanded && <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={lbl}>Camera Framing</label>
                   <input value={shot.camera_framing || ''} onChange={e => updateShot(si, 'camera_framing', e.target.value)}
@@ -3644,5 +3656,6 @@ export default function ScriptwriterPanel({
         </div>
       )}
     </div>
+    </>
   )
 }

@@ -1359,7 +1359,7 @@ export default function App() {
       <div style={{ display: 'grid', gridTemplateColumns: '360px minmax(0, 900px) minmax(420px, 760px)', gap: 28, padding: 24, alignItems: 'start', justifyContent: 'center', maxWidth: 2200, margin: '0 auto' }}>
 
       {/* ================= LEFT RAIL ================= */}
-      <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 12, padding: 20 }}>
+      <div style={{ gridColumn: '1', display: 'flex', flexDirection: 'column', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 12, padding: 20 }}>
 
       {/* Target */}
       <div style={{ marginBottom: 18 }}>
@@ -1450,8 +1450,11 @@ export default function App() {
       </div>{/* ================= END LEFT RAIL ================= */}
 
       {/* ================= CENTER · COMPOSE ================= */}
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-
+      {/* For the scriptwriter, ScriptwriterPanel itself is the grid child — it
+          returns two top-level halves (its own input workspace tagged
+          gridColumn:'2', its results screen tagged gridColumn:'3') so the
+          results half lands in the same column as the History panel below,
+          instead of both halves being nested inside one column-2 wrapper. */}
       {scriptwriterMode ? (
         <ScriptwriterPanel
           key={scriptwriterKey}
@@ -1471,7 +1474,8 @@ export default function App() {
           queueProps={{ queue: queue.items, busy: queue.busy, runningId: queue.runningId, ...queueActions }}
           adminMode={admin.mode}
         />
-      ) : (<>
+      ) : (
+      <div style={{ gridColumn: '2', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
 
       {/* Output count */}
       <div style={{ marginBottom: 18 }}>
@@ -1805,11 +1809,12 @@ export default function App() {
         <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>{globalError}</div>
       )}
 
-      </>)}
-      </div>{/* ================= END CENTER · COMPOSE ================= */}
+      </div>
+      )}
+      {/* ================= END CENTER · COMPOSE ================= */}
 
       {/* ================= RIGHT · OUTPUT ================= */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+      <div style={{ gridColumn: '3', display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
 
       {!scriptwriterMode && results.length === 0 && !caption && !globalError && (
         <div style={{ background: 'var(--pe-surface)', border: '1px dashed var(--pe-line)', borderRadius: 12, padding: '28px 24px', color: 'var(--pe-ink-3)', fontSize: 15, lineHeight: 1.6 }}>
