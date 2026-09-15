@@ -63,8 +63,11 @@ describe('App renders', () => {
     })
     const html = renderToStaticMarkup(<App />)
     expect(html).toContain('Prompt Enhancer')
-    expect(html).toContain('Anna')          // the LoRA chips render
-    expect(html).toContain('MJ')
+    expect(html).toContain('MJ')            // style-kind LoRA chip renders
+    // 'Anna' (character-kind) is deliberately NOT a LoraPanel chip here: the
+    // default landing state is MiniMax H3 in ref mode, where a character LoRA
+    // is assigned per-reference-image instead (MinimaxRefPanel.jsx) — and
+    // with zero reference images loaded, there is nowhere for it to render yet.
   })
 
   it('renders when every stored value is corrupt', () => {

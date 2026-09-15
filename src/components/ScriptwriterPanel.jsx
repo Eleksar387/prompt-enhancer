@@ -293,6 +293,26 @@ const normalizeH3Prompt = (raw, isRef) => {
   return t
 }
 
+// System prompt for "🔊 Attach voice reference" — a narrow, low-temperature
+// patch call used instead of a full ✦ Rewrite when the only thing that
+// changed is which voice-timbre reference(s) a clip carries. A full rewrite
+// re-writes the whole clip from scratch at temp 0.85, which can drift the
+// visual description for the sake of what should be a boilerplate audio
+// pointer; this call is given the clip's own already-generated text verbatim
+// and told to change nothing else. H3's audio input takes up to two separate
+// voice-timbre samples (Audio 1 / Audio 2), one per speaking subject.
+const VOICE_PATCH_SYSTEM = `You edit ONE existing MiniMax H3 video-generation prompt to attach, update, or remove its voice-timbre reference(s). You are given the clip's current, already-finished prompt text below — reproduce it exactly, word for word, section for section, EXCEPT for the Audio-reference addition/update/removal described here. Do not rewrite, rephrase, shorten, or otherwise touch anything else in it, even if you would phrase it differently.
+
+You are given one or two voice-timbre references to attach, labelled "Audio 1" and (if present) "Audio 2". Make the text's Audio references match this set EXACTLY: update any that already match a given one, add any that are missing, and remove any "<Audio N>" reference already in the text that is NOT in the given set (renumber the remaining ones contiguously as Audio 1, Audio 2 if a removal leaves a gap). If neither Audio 1 nor Audio 2 is given, remove every existing Audio reference from the text entirely (all three of the spots below).
+
+Two possible formats — use whichever the given text is already in:
+- Six-field format (starts with "subject_definitions:"): each Audio N gets one line at the end of the subject_definitions section: "<Audio N> is the voice-timbre reference for <Subject k> (Sk)." — pick k as the subject who speaks that reference's dialogue, reusing that subject's number exactly as already used elsewhere in the text (never invent a new one, never point two different Audio N lines at the same subject). If the summary section's opening bracketed marker doesn't already include "audio reference", add it (joined with " + ") when at least one Audio reference remains, or remove it when none do. Each Audio N gets one line at the end of retention_analysis: "<Audio N>: reference - " plus a short reason.
+- Three-field format (starts with "integrated_multimodal_description:"): weave one short clause per Audio reference into integrated_multimodal_description, right where that speaking character is introduced or first shown speaking, noting their voice is guided by a voice-timbre reference — timbre, pitch and delivery only, never its original wording or a transcript.
+
+In both formats, each reference is described only as: never transcribe or guess at its original wording — reference ONLY its timbre, pitch and delivery for the speaking subject.
+
+Output ONLY the complete corrected prompt text. No preamble, no commentary, no code fence, no explanation of what you changed.`
+
 // The H3 Director's per-clip `reference_images` — 1-based numbers into the
 // numbered "Reference images" block (= the captioned refs in array order) —
 // resolved to refKey[]. Returns null when the field is absent (clip stays on
@@ -1219,17 +1239,32 @@ export default function ScriptwriterPanel({
     ? shot.dialogue.filter(d => d && d.trim())
     : (Array.isArray(scene?.dialogues) ? scene.dialogues.filter(d => d && d.trim()) : [])
 
-  // Which voice reference (if any) applies to a shot. Only a shot that actually
-  // carries dialogue gets one: the sample guides how an existing line sounds, it
-  // never authorises inventing one, so a clip the Director left silent is left
-  // alone. Resolution order - the "Name:" prefix on a dialogue line, then a
-  // single-cast shot, then a lone unlinked sample used as the default voice. An
-  // ambiguous shot (two speakers, each with their own sample) gets none: H3
-  // takes one voice reference per clip, so guessing would be worse than silence.
-  const voiceForShot = (shot, scene, dialogues) => {
-    if (!voiceRefs.length || !dialogues.length) return null
+  // MiniMax H3's audio input takes up to two separate voice-timbre samples
+  // (ref_audio_0 / ref_audio_1 — <Audio 1> / <Audio 2> in the schema), so a
+  // shot can carry TWO voice references, not just one.
+  const MAX_VOICES_PER_SHOT = 2
+
+  // Which voice reference(s) (0–2) apply to a shot. Only a shot that actually
+  // carries dialogue gets any: a sample guides how an existing line sounds, it
+  // never authorises inventing one, so a clip the Director left silent stays
+  // silent. `shot.voiceCharacterIds` is an explicit pin — an array of bible
+  // character ids set via the "Voice references for this clip" chips (`[]` =
+  // deliberately none) — and wins outright when present. Otherwise,
+  // auto-resolution in order: the "Name:" prefix on each dialogue line, then
+  // every cast member who actually has a linked sample, then any unlinked
+  // ("default voice") samples. Whenever a step would need to guess which TWO
+  // of three-or-more candidates to send, it sends none instead — pin the set
+  // by hand rather than have the app guess wrong.
+  const voicesForShot = (shot, scene, dialogues) => {
+    if (!voiceRefs.length || !dialogues.length) return []
     const chars = script?.characters || []
     const byChar = (id) => voiceRefs.find(v => v.characterId === id && v.base64)
+    if (Array.isArray(shot?.voiceCharacterIds)) {
+      return shot.voiceCharacterIds
+        .map(id => { const v = byChar(id); return v ? { ...v, speaker: chars.find(c => c.id === id)?.name || '' } : null })
+        .filter(Boolean)
+        .slice(0, MAX_VOICES_PER_SHOT)
+    }
     const named = [...new Set(dialogues
       // Strip a trailing "(V.O.)" (or any parenthetical) so a narrator's
       // voiceover line still matches her bible name — and her voice-timbre
@@ -1241,16 +1276,50 @@ export default function ScriptwriterPanel({
       .filter(Boolean)
       .map(c => ({ v: byChar(c.id), name: c.name }))
       .filter(x => x.v)
-    if (hits.length === 1) return { ...hits[0].v, speaker: hits[0].name }
-    if (hits.length > 1) return null
+    if (hits.length >= 1 && hits.length <= MAX_VOICES_PER_SHOT) return hits.map(h => ({ ...h.v, speaker: h.name }))
+    if (hits.length > MAX_VOICES_PER_SHOT) return []
     const cast = (shot.characters?.length ? shot.characters : scene?.characters) || []
-    if (cast.length === 1) {
-      const v = byChar(cast[0])
-      if (v) return { ...v, speaker: chars.find(c => c.id === cast[0])?.name || '' }
-    }
+    const castHits = cast
+      .map(id => ({ v: byChar(id), name: chars.find(c => c.id === id)?.name || '' }))
+      .filter(x => x.v)
+    if (castHits.length >= 1 && castHits.length <= MAX_VOICES_PER_SHOT) return castHits.map(h => ({ ...h.v, speaker: h.name }))
+    if (castHits.length > MAX_VOICES_PER_SHOT) return []
     const loose = voiceRefs.filter(v => !v.characterId && v.base64)
-    if (loose.length === 1) return { ...loose[0], speaker: '' }
-    return null
+    if (loose.length >= 1 && loose.length <= MAX_VOICES_PER_SHOT) return loose.map(v => ({ ...v, speaker: '' }))
+    return []
+  }
+
+  // Toggle one voice reference on/off for a clip, capped at MAX_VOICES_PER_SHOT.
+  // First edit seeds an explicit set from whatever is currently effective (the
+  // auto set), mirroring toggleShotRef/shotRefs for image references.
+  const toggleShotVoice = (si, characterId) => {
+    const shot = directorsCut?.shots?.[si]
+    if (!shot || shotBusy !== null || promptBusy !== null) return
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const base = Array.isArray(shot.voiceCharacterIds)
+      ? shot.voiceCharacterIds
+      : voicesForShot(shot, scene, shotDialogues(shot, scene))
+          .map(v => v.characterId)
+          .filter(Boolean)
+    let next
+    if (base.includes(characterId)) next = base.filter(id => id !== characterId)
+    else if (base.length >= MAX_VOICES_PER_SHOT) return   // already 2 pinned — drop one first
+    else next = [...base, characterId]
+    const nextCut = { ...directorsCut, shots: directorsCut.shots.map((s, i) => i === si ? { ...s, voiceCharacterIds: next } : s) }
+    setDirectorsCut(nextCut)
+    persistState(undefined, undefined, nextCut)
+  }
+
+  // Drop the pinned set — back to the auto default.
+  const resetShotVoice = (si) => {
+    if (shotBusy !== null || promptBusy !== null) return
+    const nextCut = { ...directorsCut, shots: directorsCut.shots.map((s, i) => {
+      if (i !== si || !Array.isArray(s.voiceCharacterIds)) return s
+      const { voiceCharacterIds, ...rest } = s
+      return rest
+    }) }
+    setDirectorsCut(nextCut)
+    persistState(undefined, undefined, nextCut)
   }
 
   // One H3 user message per shot. Emits MODE: Ref2VA (with a role-tagged reference
@@ -1268,12 +1337,15 @@ export default function ScriptwriterPanel({
       ? `\n\nSpoken dialogue (verbatim — this clip carries only this delivery):\n${dialogues.join('\n')}`
       : ''
 
-    // H3 takes one voice reference per clip, so this is always "Audio 1" no
-    // matter how many the film carries overall. Labelled exactly as the Ref2VA
-    // section of SYSTEM_PROMPT_MINIMAX_H3 expects to read it.
-    const voice = voiceForShot(shot, scene, dialogues)
-    const voiceLine = voice
-      ? `Audio 1 — voice-timbre reference (marker: reference): file "${voice.fileName}"${voice.speaker ? ` — the voice of ${voice.speaker}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words are the dialogue given below and nothing else.\n\n`
+    // H3 takes up to two voice references per clip (ref_audio_0 / ref_audio_1),
+    // numbered "Audio 1" / "Audio 2" independently of the image references —
+    // labelled exactly as the Ref2VA section of SYSTEM_PROMPT_MINIMAX_H3
+    // expects to read them.
+    const voices = voicesForShot(shot, scene, dialogues)
+    const voiceLine = voices.length
+      ? voices.map((voice, vi) =>
+          `Audio ${vi + 1} — voice-timbre reference (marker: reference): file "${voice.fileName}"${voice.speaker ? ` — the voice of ${voice.speaker}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words are the dialogue given below and nothing else.`
+        ).join('\n\n') + '\n\n'
       : ''
 
     const action = (shot.primary_beat || shot.visual_action || '').trim()
@@ -1556,6 +1628,11 @@ export default function ScriptwriterPanel({
         scene_title: shot.scene_title,
         duration: fresh.duration || shot.duration || (isH3now ? 7 : 4),
         ...(picked ? { refs: picked } : (Array.isArray(shot.refs) ? { refs: shot.refs } : {})),
+        // A regenerated shot's dialogue can change, but a hand-pinned voice
+        // selection is a deliberate choice about WHO speaks with WHICH
+        // sample — the Director's JSON has no field for it, so it must be
+        // carried over explicitly or it silently reverts to auto.
+        ...(Array.isArray(shot.voiceCharacterIds) ? { voiceCharacterIds: shot.voiceCharacterIds } : {}),
       }
       const nextCut = { ...cut, shots: cut.shots.map((s, i) => i === si ? merged : s) }
       setDirectorsCut(nextCut)
@@ -1688,6 +1765,9 @@ export default function ScriptwriterPanel({
     const mergedRefs = Array.isArray(a.refs) || Array.isArray(b.refs)
       ? [...new Set([...(a.refs || []), ...(b.refs || [])])]
       : undefined
+    const mergedVoices = Array.isArray(a.voiceCharacterIds) || Array.isArray(b.voiceCharacterIds)
+      ? [...new Set([...(a.voiceCharacterIds || []), ...(b.voiceCharacterIds || [])])].slice(0, MAX_VOICES_PER_SHOT)
+      : undefined
     const merged = {
       ...freshRest,
       shot_number: a.shot_number,
@@ -1695,6 +1775,7 @@ export default function ScriptwriterPanel({
       scene_title: a.scene_title,
       duration: Math.min(15, fresh.duration || ((Number(a.duration) || 0) + (Number(b.duration) || 0)) || 7),
       ...(picked ? { refs: picked } : (mergedRefs ? { refs: mergedRefs } : {})),
+      ...(mergedVoices ? { voiceCharacterIds: mergedVoices } : {}),
     }
     return renumberShots([...shots.slice(0, i), merged, ...shots.slice(i + 2)])
   }
@@ -1887,6 +1968,50 @@ export default function ScriptwriterPanel({
       })
       if (saved) commitHistory({
         ...basePayload('done', refs),
+        script, directorsCut,
+        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null })),
+        framePrompts: serializeFramePrompts(framePrompts),
+      })
+    } catch (e) {
+      setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: false, error: e.message } : p))
+    } finally {
+      setPromptBusy(null)
+    }
+  }
+
+  // Attach/update this clip's voice-timbre reference(s) WITHOUT a full
+  // ✦ Rewrite — a narrow, low-temperature patch call (VOICE_PATCH_SYSTEM)
+  // given the clip's existing text verbatim and told to change only the Audio
+  // references. H3 only; a clip with no resolvable voice reference never
+  // shows the button that calls this (see the Video-Prompts screen).
+  const attachVoiceReference = async (idx) => {
+    if (promptBusy !== null || shotBusy !== null || !directorsCut?.shots?.[idx]) return
+    const shot = directorsCut.shots[idx]
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const dialogues = shotDialogues(shot, scene)
+    const voices = voicesForShot(shot, scene, dialogues)
+    const existing = finalPrompts[idx]?.text || ''
+    if (!voices.length || !existing.trim()) return
+    setPromptBusy(idx); setError('')
+    setExpandedPrompts(prev => new Set(prev).add(idx))
+    setFinalPrompts(prev => prev.map((p, i) => i === idx ? { ...p, loading: true, error: '' } : p))
+    const voiceLines = voices.map((voice, vi) =>
+      `Audio ${vi + 1}: file "${voice.fileName}"${voice.speaker ? ` — the voice of ${voice.speaker}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words stay exactly whatever dialogue the current text already carries.`
+    ).join('\n')
+    const userMsg = `Voice-timbre reference(s) to attach:\n${voiceLines}\n\nCurrent prompt text for this clip:\n${existing}`
+    try {
+      const { text: raw, usage } = await callOllama(writerModel, userMsg, VOICE_PATCH_SYSTEM, cfg, 0.2)
+      if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
+      const isRefFlag = /^\s*subject_definitions\s*:/i.test(existing) || /^\s*subject_definitions\s*:/i.test(raw)
+      const text = withLoraTriggers(normalizeH3Prompt(raw, isRefFlag), lorasForShot(shot), promptTarget)
+      let saved = null
+      setFinalPrompts(prev => {
+        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
+        saved = next
+        return next
+      })
+      if (saved) commitHistory({
+        ...basePayload('done', refImages),
         script, directorsCut,
         finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null })),
         framePrompts: serializeFramePrompts(framePrompts),
@@ -2315,13 +2440,15 @@ export default function ScriptwriterPanel({
     const isH3now = promptTarget === 'minimax_h3'
     if (!isH3now || !shot) return `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot?.duration || 4}s`
     const hScene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
-    const clipVoice = voiceForShot(shot, hScene, shotDialogues(shot, hScene))
+    const clipVoices = voicesForShot(shot, hScene, shotDialogues(shot, hScene))
     return [
       `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot.duration || 7}s · ${refs.length ? 'Ref2VA' : 'T2VA'}`,
       refs.length
         ? `  Load references: ${refs.map(im => `${refEntityName(im, script) || im.note || roleLabel(im.role)} (${roleLabel(im.role)}, ${preserveLabel(im.preserve)})`).join('; ')}`
         : '  No references — text-to-video',
-      clipVoice ? `  Load voice reference: ${clipVoice.fileName}${clipVoice.speaker ? ` (${clipVoice.speaker})` : ''}` : '',
+      clipVoices.length
+        ? `  Load voice reference${clipVoices.length > 1 ? 's' : ''}: ${clipVoices.map(v => `${v.fileName}${v.speaker ? ` (${v.speaker})` : ''}`).join('; ')}`
+        : '',
     ].filter(Boolean).join('\n')
   }
   const clipRefsFor = (i) => {
@@ -2417,10 +2544,10 @@ export default function ScriptwriterPanel({
           // Same clip, same resolution the prompt text was built from, so the
           // manifest never disagrees with what the prompt actually asked for.
           const vScene = script?.scenes?.find(s => String(s.id) === String(shot?.scene_id))
-          const vv = (isH3now && shot) ? voiceForShot(shot, vScene, shotDialogues(shot, vScene)) : null
-          const voice = (vv && voiceFileById.get(vv.id))
-            ? { file: voiceFileById.get(vv.id), speaker: vv.speaker || '' }
-            : null
+          const vv = (isH3now && shot) ? voicesForShot(shot, vScene, shotDialogues(shot, vScene)) : []
+          const voices = vv
+            .map(v => voiceFileById.get(v.id) ? { file: voiceFileById.get(v.id), speaker: v.speaker || '' } : null)
+            .filter(Boolean)
           const references = (isH3now ? clipRefsFor(i) : [])
             .map(im => {
               const file = refFileByKey.get(refKey(im))
@@ -2437,7 +2564,7 @@ export default function ScriptwriterPanel({
             promptText: p.text || '',
             mode: references.length ? 'Ref2VA' : 'T2VA',
             durationSec: shot?.duration || (isH3now ? 7 : 4),
-            voice,
+            voices,
             outputName: `clip-${pad(p.shotNumber || i + 1)}`,
             references,
           }
@@ -2626,13 +2753,16 @@ export default function ScriptwriterPanel({
     <>
     {/* Left half of the center column: the input workspace — reference images,
         voice refs, and the Phase-1 idea/genre form. Stays in place across
-        phases (refs/voice are editable through dircut) the same way an image
-        panel stays put on every other target while its result appears in the
-        third column. */}
+        phases (refs/voice are editable through 'done' — only 'prompting'
+        itself, Phase 3's batch of writer calls in flight, locks them) the
+        same way an image panel stays put on every other target while its
+        result appears in the third column. */}
     <div style={{ gridColumn: '2', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {/* Reuse an image from a past generation as a reference (same block as the
-          other targets; picking adds it to the reference images below) */}
-      {!['prompting', 'done'].includes(phase) && (
+          other targets; picking adds it to the reference images below). Stays
+          available in phase 'done' too — see "Per-clip reference pinning": a
+          reference can be added/attached to a clip even after Phase 3 has run. */}
+      {phase !== 'prompting' && (
         <HistoryImageGallery
           history={history}
           onPick={addRefFromHistory}
@@ -2640,10 +2770,12 @@ export default function ScriptwriterPanel({
         />
       )}
 
-      {/* Reference images — editable up to the video-prompt phase, read-only after */}
+      {/* Reference images — editable through 'done' (so a reference can still be
+          added/attached to a finished clip); locked only while Phase 3 is
+          actively running (a batch of parallel writer calls already in flight). */}
       <ScriptwriterRefImages
         images={refImages}
-        editable={!['prompting', 'done'].includes(phase)}
+        editable={phase !== 'prompting'}
         status={refCaptionStatus}
         busy={isLoading || captioning}
         max={MAX_REF_IMAGES}
@@ -2663,7 +2795,7 @@ export default function ScriptwriterPanel({
 
       <ScriptwriterVoiceRefs
         voices={voiceRefs}
-        editable={!['prompting', 'done'].includes(phase)}
+        editable={phase !== 'prompting'}
         busy={isLoading || captioning}
         max={MAX_VOICE_REFS}
         characters={script?.characters || []}
@@ -3328,12 +3460,16 @@ export default function ScriptwriterPanel({
                 const captioned = (refImages || []).filter(im => im.caption && im.caption.trim())
                 const active = new Set(shotRefs(shot, scene).map(refKey))
                 const pinned = Array.isArray(shot.refs)
-                const editable = phase === 'dircut' && shotBusy === null && promptBusy === null
+                // Also editable on the finished Video-Prompts screen ('done') —
+                // that's how a reference gets added/attached to a clip after the
+                // fact, without navigating back to Director's Cut.
+                const refsEditable = phase === 'dircut' || phase === 'done'
+                const editable = refsEditable && shotBusy === null && promptBusy === null
                 return (
                   <div style={{ marginBottom: 10, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
                       <label style={{ ...lbl, marginBottom: 0 }}>References attached to this clip</label>
-                      {phase === 'dircut' && pinned && (
+                      {refsEditable && pinned && (
                         <button onClick={() => resetShotRefs(si)} disabled={!editable}
                           style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 7px', cursor: editable ? 'pointer' : 'not-allowed' }}>
                           reset to auto
@@ -3345,7 +3481,7 @@ export default function ScriptwriterPanel({
                     </div>
                     {captioned.length === 0 ? (
                       <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
-                        No described references yet — describe &amp; link one for {characterNames(shot.characters) || 'this clip’s characters'} on the Script screen, or this clip runs as MODE: T2VA from the bible text.
+                        No described references yet — add &amp; describe one for {characterNames(shot.characters) || 'this clip’s characters'} in Reference Images (left), or this clip runs as MODE: T2VA from the bible text.
                       </div>
                     ) : editable ? (
                       <>
@@ -3372,6 +3508,11 @@ export default function ScriptwriterPanel({
                             ? 'Pinned set — only the ticked references go into this clip. The Director pre-selects these (dropping e.g. a face reference where the face is hidden); click a chip to change it, or “reset to auto”.'
                             : 'Auto — every described reference for this clip’s characters. Click a chip to pin an exact set.'}
                         </div>
+                        {phase === 'done' && (
+                          <div style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', marginTop: 4 }}>
+                            This clip’s prompt text above was written with the previous set — click ✦ Rewrite below to regenerate it with your change.
+                          </div>
+                        )}
                       </>
                     ) : active.size ? (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -3388,6 +3529,84 @@ export default function ScriptwriterPanel({
                     ) : (
                       <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
                         None — this clip runs as MODE: T2VA from the bible text.
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* H3: which voice-timbre reference(s) — up to 2 (Audio 1 / Audio 2) —
+                  this clip carries. Only relevant when the clip has dialogue and at
+                  least one bible character has a linked voice sample. */}
+              {isH3 && (() => {
+                const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+                const dialogues = shotDialogues(shot, scene)
+                if (!dialogues.length) return null
+                const candidates = (voiceRefs || []).filter(v => v.base64 && v.characterId)
+                if (!candidates.length) return null
+                const active = new Set(voicesForShot(shot, scene, dialogues).map(v => v.characterId).filter(Boolean))
+                const pinned = Array.isArray(shot.voiceCharacterIds)
+                const refsEditable = phase === 'dircut' || phase === 'done'
+                const editable = refsEditable && shotBusy === null && promptBusy === null
+                const nameOf = (id) => (script?.characters || []).find(c => c.id === id)?.name || id
+                return (
+                  <div style={{ marginBottom: 10, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                      <label style={{ ...lbl, marginBottom: 0 }}>Voice references for this clip</label>
+                      {refsEditable && pinned && (
+                        <button onClick={() => resetShotVoice(si)} disabled={!editable}
+                          style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 7px', cursor: editable ? 'pointer' : 'not-allowed' }}>
+                          reset to auto
+                        </button>
+                      )}
+                      <span style={{ fontSize: 12, marginLeft: 'auto', color: active.size ? 'var(--pe-ok)' : 'var(--pe-ink-3)' }}>
+                        {active.size ? `${active.size} of 2 attached` : 'none'}
+                      </span>
+                    </div>
+                    {editable ? (
+                      <>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {candidates.map((v, vi) => {
+                            const on = active.has(v.characterId)
+                            const atCap = !on && active.size >= MAX_VOICES_PER_SHOT
+                            return (
+                              <button key={vi} onClick={() => toggleShotVoice(si, v.characterId)} disabled={atCap}
+                                title={on ? 'Attached — click to drop it' : atCap ? 'Two voices already attached — drop one first (H3 takes at most two)' : 'Not attached — click to add it to this clip'}
+                                style={{
+                                  fontSize: 12, borderRadius: 4, padding: '2px 8px',
+                                  cursor: atCap ? 'not-allowed' : 'pointer',
+                                  border: `1px solid ${on ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+                                  background: on ? 'var(--pe-accent-bg)' : 'transparent',
+                                  color: atCap ? 'var(--pe-line)' : on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
+                                  textDecoration: on ? 'none' : 'line-through',
+                                }}>
+                                {on ? '✓ ' : ''}{nameOf(v.characterId)}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                          {pinned
+                            ? 'Pinned set — H3 takes at most two voice-timbre samples per clip (ref_audio_0 / ref_audio_1). Click a chip to change it, or “reset to auto”.'
+                            : 'Auto — resolved from who speaks in this clip’s dialogue. Click a chip to pin an exact set (max 2).'}
+                        </div>
+                        {phase === 'done' && (
+                          <div style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', marginTop: 4 }}>
+                            This clip’s prompt text above was written with the previous set — click 🔊 Attach/Update voice or ✦ Rewrite below to fold your change in.
+                          </div>
+                        )}
+                      </>
+                    ) : active.size ? (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {[...active].map((id, vi) => (
+                          <span key={vi} style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '2px 7px' }}>
+                            {nameOf(id)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>
+                        None resolved — {candidates.length > MAX_VOICES_PER_SHOT ? 'more than two candidates speak in this clip; pin which two, or none' : 'multiple characters here have samples and none was auto-picked; pin one or two, or leave silent'}.
                       </div>
                     )}
                   </div>
@@ -3612,6 +3831,21 @@ export default function ScriptwriterPanel({
                       </button>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                         {p.usage && <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>in {p.usage.input_tokens} · out {p.usage.output_tokens} tokens</span>}
+                        {phase === 'done' && !p.loading && isH3 && directorsCut?.shots?.[i] && (() => {
+                          const shot = directorsCut.shots[i]
+                          const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+                          const voices = voicesForShot(shot, scene, shotDialogues(shot, scene))
+                          if (!voices.length) return null
+                          const already = /audio\s*1/i.test(p.text || '')
+                          const label = voices.map(v => v.speaker || v.fileName).join(' + ')
+                          return (
+                            <button onClick={() => attachVoiceReference(i)} disabled={promptBusy !== null || shotBusy !== null}
+                              title={`Attach ${voices.map(v => `"${v.fileName}"`).join(' + ')} as this clip's voice-timbre reference${voices.length > 1 ? 's' : ''} — a small targeted edit, the rest of the prompt is left exactly as is (unlike ✦ Rewrite)`}
+                              style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--pe-line)', background: 'var(--pe-surface)', color: 'var(--pe-ink-2)', fontSize: 13, fontWeight: 600, cursor: (promptBusy !== null || shotBusy !== null) ? 'wait' : 'pointer' }}>
+                              {promptBusy === i ? '🔊 Attaching…' : already ? `🔊 Update voice (${label})` : `🔊 Attach voice (${label})`}
+                            </button>
+                          )
+                        })()}
                         {phase === 'done' && !p.loading && directorsCut?.shots?.[i] && (
                           <button onClick={() => regeneratePrompt(i)} disabled={promptBusy !== null || shotBusy !== null}
                             title="Have the AI write a fresh prompt for this clip"

@@ -112,7 +112,7 @@ export default function AdaptPanel({
           scene: scene || '',
           activeLoraIds: activeLoras.map(l => l.id),
           h3RatioId: adaptRatioId,
-          firstImg: null, midImg: null, lastImg: null, refImages: [], refAudio: null,
+          firstImg: null, midImg: null, lastImg: null, refImages: [], refAudios: [],
         }, { model: effectiveAdaptModel, vision: null, outputCount: 1, caption: null }),
         adaptedFrom: { target: sourceTarget, frameMode: sourceFrameMode, ts: sourceTs ?? null },
       }

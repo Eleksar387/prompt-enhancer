@@ -43,6 +43,9 @@ export const entrySearchText = (h) => {
 export const modelProvider = (m) => {
   const s = (m || '').toLowerCase()
   if (!s) return '—'
+  // MiniMax H3 Manual mode's sentinel model label (src/manualH3.js) — no
+  // provider actually ran, so it must not read as "Ollama".
+  if (s === 'manual') return 'Manual'
   if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
   if (s.includes('grok')) return 'Grok'
   return 'Ollama'

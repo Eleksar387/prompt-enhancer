@@ -8,7 +8,7 @@ import {
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
   DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
-  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
+  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE,
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG,
   systemPromptFor, caps,
 } from './constants'
@@ -21,7 +21,7 @@ import {
   getCaption, putCaption, clearCaptions,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
-import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency } from './utils'
+import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64 } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
@@ -40,14 +40,29 @@ import { useImageSlots } from './hooks/useImageSlots'
 import {
   buildSnapshot as buildWorkspaceSnapshot, snapshotToWorkspace,
   hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode,
+  refAudiosFromSnap,
 } from './workspace'
 import { buildStylePart, buildWriterUserText } from './adapt'
+import { buildManualH3, buildManualSeed } from './manualH3'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   label: `${writer} · T${temp}`,
   temp,
   nudge: VARIANT_NUDGES[i] || '',
 }))
+
+// MiniMax H3 Manual mode (src/manualH3.js) — the seed text dropped straight
+// into the Scene textarea (not just shown as a placeholder) the moment the
+// toggle switches on with nothing typed yet is now built dynamically from the
+// actual configured references by buildManualSeed() (src/manualH3.js), not a
+// fixed example — see the toggle's onClick and scenePlaceholder below. The
+// tag legend below is kept OUT of the seed itself (shown separately) since it
+// would otherwise become literal prose in the assembled prompt.
+const MANUAL_H3_LEGEND_REF =
+  '[Shot N] marks each cut · <Subject N>/<Picture N> per your reference list below · '
+  + '(S1) the first time a subject speaks · [Language] "…" is spoken dialogue'
+const MANUAL_H3_LEGEND_DEFAULT =
+  '[Shot N] marks each cut · (S1) the first time a speaker appears · [Language] "…" is spoken dialogue'
 
 // "Generate for" rail groups, with any ungrouped target swept into a trailing
 // "Other" group so a newly-added TARGETS entry is never silently hidden.
@@ -105,14 +120,24 @@ export default function App() {
   const [negative, setNegative]       = useState('')
   const [dialogue, setDialogue]       = useState('')
   const [delivery, setDelivery]       = useState('')
+  // MiniMax H3 "Manual mode" — write the H3 prompt yourself, zero AI calls.
+  // See src/manualH3.js. manualWarnings are the non-blocking notices from the
+  // last successful assembly (a declared-but-unreferenced tag, etc.).
+  const [manualMode, setManualMode]   = useState(false)
+  const [manualWarnings, setManualWarnings] = useState([])
   // The LoRA library is shared with the Scriptwriter and persisted on every
   // edit; which of them a given generation uses is per-workspace state, so it
   // travels with history and the queue like any other input.
   const [loras, setLoras] = useState(loadLoras)
   const [activeLoraIds, setActiveLoraIds] = useState([])
+  // Which named character an active *character*-kind LoRA's trigger belongs to
+  // (id → name) — only meaningful with 2+ active at once, where the writer
+  // otherwise has no way to tell which trigger goes with which person. Typed
+  // next to that LoRA's chip in LoraPanel; a 'style' LoRA never has one.
+  const [loraSubjects, setLoraSubjects] = useState({})
+  const setLoraSubject = (id, name) => setLoraSubjects(prev => ({ ...prev, [id]: name }))
   const saveLoraLibrary = (list) => { setLoras(list); saveLoras(list) }
   const toggleLora = (id) => setActiveLoraIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  const activeLoras = lorasByIds(loras, activeLoraIds)
   // The language everyone in the video speaks. Lives outside the Dialogue block
   // because a target can need it with no typed dialogue at all (H3 writes a line
   // itself for a voice reference; DramaBox is all speech and shows no Dialogue
@@ -124,6 +149,21 @@ export default function App() {
   // as a set (switching target or frame mode clears all of them), so they live
   // together — see src/hooks/useImageSlots.js.
   const imgs = useImageSlots()
+  // A character-kind LoRA is "active" either via the free chip toggle
+  // (activeLoraIds/loraSubjects — the only mechanism for H3's non-ref frame
+  // modes, which have no reference images, and for every other target) OR by
+  // being assigned directly on a reference image's own card (`im.loraId` —
+  // MinimaxRefPanel.jsx, H3 ref mode only). Union of both, deduped; a
+  // structurally-bound LoRA's `subject` names the image it belongs to
+  // (consumed only by loraInstruction() in src/loras.js, writer-LLM text).
+  const characterLoraIdsFromImages = imgs.refImages.map(im => im.loraId).filter(Boolean)
+  const unionLoraIds = [...new Set([...activeLoraIds, ...characterLoraIdsFromImages])]
+  const activeLoras = lorasByIds(loras, unionLoraIds).map(l => {
+    if (l.kind !== 'character') return l
+    const boundImage = imgs.refImages.find(im => im.loraId === l.id)
+    if (boundImage) return { ...l, subject: `the subject in Image ${imgs.refImages.indexOf(boundImage) + 1}` }
+    return loraSubjects[l.id]?.trim() ? { ...l, subject: loraSubjects[l.id].trim() } : l
+  })
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
@@ -191,9 +231,9 @@ export default function App() {
   const workspace = {
     targetType: t.type, show,
     target, duration, style, creativity, frameMode, negative, scene,
-    dialogue, delivery, spokenLangId, activeLoraIds,
+    dialogue, delivery, spokenLangId, activeLoraIds, loraSubjects, manualMode,
     firstImg: imgs.firstImg, midImg: imgs.midImg, lastImg: imgs.lastImg,
-    h3RatioId, soundscape, music, refImages: imgs.refImages, refAudio: imgs.refAudio,
+    h3RatioId, soundscape, music, refImages: imgs.refImages, refAudios: imgs.refAudios,
     promptLength,
   }
 
@@ -205,10 +245,11 @@ export default function App() {
       target: setTarget, duration: setDuration, style: setStyle, creativity: setCreativity,
       frameMode: setFrameMode, negative: setNegative, scene: setScene,
       dialogue: setDialogue, delivery: setDelivery,
-      spokenLangId: setSpokenLangId, activeLoraIds: setActiveLoraIds,
+      spokenLangId: setSpokenLangId, activeLoraIds: setActiveLoraIds, loraSubjects: setLoraSubjects,
+      manualMode: setManualMode,
       firstImg: imgs.setFirstImg, midImg: imgs.setMidImg, lastImg: imgs.setLastImg,
       h3RatioId: setH3RatioId, soundscape: setSoundscape, music: setMusic,
-      refImages: imgs.setRefImages, refAudio: imgs.setRefAudio,
+      refImages: imgs.setRefImages, refAudios: imgs.setRefAudios,
     }
     for (const [key, value] of Object.entries(values)) setters[key]?.(value)
   }
@@ -441,8 +482,18 @@ export default function App() {
         id: generateId(), base64: data.base64, mediaType: data.mediaType || 'image/jpeg',
         previewUrl: `data:${data.mediaType || 'image/jpeg'};base64,${data.base64}`,
         fileName: data.fileName || 'from-history.jpg',
-        role: MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: '',
+        // Carry over the picked image's own role/note (falls back to the
+        // default role for a non-ref-slot pick, e.g. a render, which has
+        // neither) rather than always resetting to the first role — picking
+        // an image that was previously e.g. a Wardrobe reference should stay
+        // a Wardrobe reference by default. `captions` (role → text map)
+        // travels too, purely so MinimaxRefPanel's Role dropdown can mark
+        // which roles are already described for this exact image; the
+        // content-addressed vision cache is what actually makes generation
+        // reuse that description when the matching role is selected.
+        role: data.role || MINIMAX_H3_REF_ROLES[0].id, preserve: 'strong', note: data.note || '',
         hash: data.hash || imageHash(data.base64),
+        captions: data.captions || {},
       }])
       return
     }
@@ -941,6 +992,7 @@ export default function App() {
     const nextMode = TARGETS[id].defaultFrameMode || 'single'
     setH3RatioId(nextMode === 'ref' ? (TARGETS[id].defaultRefRatio || '') : '')
     setFrameMode(nextMode); setResults([]); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null)
+    setManualMode(false); setManualWarnings([])
   }
 
   // Every vision-model call funnels through here: content-addressed cache
@@ -972,7 +1024,7 @@ export default function App() {
     const s = src || {
       frameMode, scene,
       refImages: imgs.refImages, firstImg: imgs.firstImg, midImg: imgs.midImg,
-      lastImg: imgs.lastImg, refAudio: imgs.refAudio,
+      lastImg: imgs.lastImg, refAudios: imgs.refAudios,
       targetType: t.type, visionPromptSingle: t.visionPrompt, visionModel: effectiveVision,
     }
     const model = s.visionModel || effectiveVision
@@ -995,9 +1047,17 @@ export default function App() {
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
         return line
       }).join('\n\n')
-      const text = s.refAudio
-        ? `${imageBlock}\n\nAudio 1 — voice-timbre reference (marker: reference): file "${s.refAudio.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. If no spoken dialogue is supplied elsewhere in this message, write one short line for that subject yourself so the voice reference has speech to act on.`
-        : imageBlock
+      // H3's audio input takes up to two voice-timbre samples (ref_audio_0 /
+      // ref_audio_1) — one Audio N line per reference, numbered independently
+      // of the image references above. When the user explicitly bound this
+      // audio to one image (MinimaxRefPanel's per-image "Voice" select), name
+      // it so the writer isn't left guessing which subject it belongs to.
+      const audioBlock = (s.refAudios || []).map((a, i) => {
+        const boundIdx = refs.findIndex(im => im.hash && im.hash === a.subjectRef)
+        const boundNote = boundIdx >= 0 ? ` — for the subject in Image ${boundIdx + 1} (${roleLabel(refs[boundIdx].role)})` : ''
+        return `Audio ${i + 1} — voice-timbre reference (marker: reference)${boundNote}: file "${a.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. If no spoken dialogue is supplied elsewhere in this message, write one short line for that subject yourself so the voice reference has speech to act on.`
+      }).join('\n\n')
+      const text = audioBlock ? `${imageBlock}\n\n${audioBlock}` : imageBlock
       return { text, stats }
     }
     let system, content
@@ -1046,7 +1106,7 @@ export default function App() {
   const captionForEntry = (h) => captionImages({
     frameMode: h.frameMode,
     refImages: Array.isArray(h.refImages) ? h.refImages : null,
-    firstImg: h.firstImg, midImg: h.midImg, lastImg: h.lastImg, refAudio: h.refAudio,
+    firstImg: h.firstImg, midImg: h.midImg, lastImg: h.lastImg, refAudios: refAudiosFromSnap(h.refAudio),
     scene: h.scene || '',
     targetType: TARGETS[h.target]?.type,
     visionPromptSingle: TARGETS[h.target]?.visionPrompt,
@@ -1091,6 +1151,36 @@ export default function App() {
   const enhance = async (opts = null) => {
     const hasImg = hasRequiredImages(workspace)
     if (!canGenerateFrom(workspace)) return { ok: false, error: 'nothing to generate' }
+
+    // Manual mode: zero AI calls, needs neither model — short-circuit before
+    // the writer/vision-model guards below. See src/manualH3.js.
+    if (manualMode && target === 'minimax_h3') {
+      abortAllVideos()
+      setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); admin.setPending(false)
+      setManualWarnings([])
+
+      const mode = frameMode === 'last' ? 'L2VA' : frameMode === 'firstlast' ? 'FL2VA'
+        : frameMode === 'ref' ? 'Ref2VA' : imgs.firstImg ? 'I2VA' : 'T2VA'
+      const built = buildManualH3({
+        mode, storyText: scene, soundscape, music, duration,
+        refImages: imgs.refImages, refAudios: imgs.refAudios,
+      })
+      if (!built.ok) {
+        setGlobalError(built.errors.join(' '))
+        return { ok: false, error: built.errors[0] }
+      }
+      setManualWarnings(built.warnings)
+
+      // Same LoRA-trigger repair the AI path applies — pure text manipulation,
+      // not an AI call, and TARGETS.minimax_h3.loraInject.fields already
+      // targets exactly the field names this module emits.
+      const text = withLoraTriggers(built.text, activeLoras, target)
+      setResults([{ label: 'manual', text, saved: text, usage: null, loading: false, error: '' }])
+      const snapshot = buildWorkspaceSnapshot(workspace, { model: 'manual', vision: null, outputCount: 1, caption: null })
+      saveHistory(snapshot, [{ label: 'manual', text }])
+      return { ok: true }
+    }
+
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return { ok: false, error: 'no writer model' } }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return { ok: false, error: 'no vision model' } }
     abortAllVideos()
@@ -1202,9 +1292,15 @@ export default function App() {
     await runWriter(caption, stylePart, lengthPart, hasImgNow)
   }
   const canGenerate = canGenerateFrom(workspace)
+  // MiniMax H3 "Manual mode" (src/manualH3.js) — write the H3 prompt yourself,
+  // zero AI calls. Gates every AI-pipeline-only affordance below it.
+  const manualUI = manualMode && target === 'minimax_h3'
   // No typed scene but images loaded → the writer proposes the scene from them.
-  const proposeMode = isProposeMode(workspace)
-  const buttonLabel = visionBusy ? '👁 Reading images…'
+  // Never true in Manual mode — an empty box there means "not written yet", not
+  // "let the AI invent one".
+  const proposeMode = !manualUI && isProposeMode(workspace)
+  const buttonLabel = manualUI ? '✍ Assemble prompt'
+    : visionBusy ? '👁 Reading images…'
     : writing ? '✦ Writing prompt…'
     : t.type === 'image'
       ? (proposeMode ? '✦ Describe image as prompt' : '✦ Enhance prompt')
@@ -1216,7 +1312,9 @@ export default function App() {
             : '✦ Propose scene from image')
           : '✦ Enhance Prompt')
 
-  const sceneHint = t.type === 'image'
+  const sceneHint = manualUI
+    ? 'MiniMax H3 tag syntax — no AI rewriting, assembled exactly as typed'
+    : t.type === 'image'
     ? (imgs.firstImg ? '(optional — leave blank to describe the reference image)' : '')
     : t.type === 'text'
       ? ''
@@ -1231,7 +1329,12 @@ export default function App() {
               : imgs.firstImg ? '(optional — leave blank to let the writer propose one from the frame)' : ''
 
   const sceneLabel = t.type === 'image' ? 'Image Description' : t.type === 'text' ? 'Scene / Story Idea' : 'Your Scene'
-  const scenePlaceholder = t.type === 'image'
+  // Manual mode drops the matching seed straight into the textarea itself (see
+  // the toggle button below) the moment it's switched on with nothing typed
+  // yet, so this placeholder is only the fallback for if it's cleared again.
+  const scenePlaceholder = manualUI
+    ? buildManualSeed(imgs.refImages, imgs.refAudios)
+    : t.type === 'image'
     ? 'e.g. A weathered fisherman mending nets at dawn, harbor and boats behind him'
     : t.type === 'text'
       ? 'e.g. A queen betrayed by her advisor, cold fury building to a threat'
@@ -1285,7 +1388,59 @@ export default function App() {
   const historyActionsRef = useRef({})
   historyActionsRef.current = {
     restore, removeHistoryEntry, startAdapt, assignEntryProject, clearHistory, exportHistory,
-    saveCaption: (id, text) => updateHistoryEntry(id, { caption: text }).then(() => syncHistoryEntry(id)).catch(() => {}),
+    // Deliberately no .catch(() => {}) on either save — a failure must reach
+    // the caller (the UI's own try/catch) so it can show that the save
+    // actually failed instead of always flashing "✓ saved" regardless.
+    saveCaption: (id, text) => updateHistoryEntry(id, { caption: text }).then(() => syncHistoryEntry(id)),
+    // Writes ONE reference image's caption for ONE role directly onto that
+    // entry's refImages[imageIndex].captions[roleId] (a plain array-index +
+    // map-key update, never a regex match against the old shared
+    // "Image N — role: …" text block) — see "Per-reference LoRA and voice
+    // binding" / the caption-editing notes above for why: parsing that block
+    // to isolate one image's line is what kept breaking across three rounds
+    // of fixes, most recently as a guaranteed silent no-op whenever the
+    // target line didn't parse. This can't no-op (a map-by-index always
+    // writes) and can't touch a sibling index or a sibling role.
+    // `roleId` defaults to the image's own assigned role (or ROLE_NONE) so
+    // HistoryPanel.jsx's plain editor — which never passes a 4th arg — keeps
+    // working unchanged. The legacy flat `refImages[i].caption` field is
+    // never written here (see resolveRefCaption in adapt.js — it's read-only
+    // from this point on, a fallback for an image not yet re-saved).
+    saveRefImageCaption: (id, imageIndex, text, roleId) => {
+      const h = history.find(x => x.id === id)
+      if (!h || !Array.isArray(h.refImages)) return Promise.reject(new Error('entry or reference image not found'))
+      const updated = h.refImages.map((im, i) => {
+        if (i !== imageIndex) return im
+        const key = roleId || im.role || ROLE_NONE
+        return { ...im, captions: { ...(im.captions || {}), [key]: text } }
+      })
+      return updateHistoryEntry(id, { refImages: updated }).then(() => syncHistoryEntry(id))
+    },
+    // Runs the vision model on ONE stored reference image, focused on ONE
+    // role (defaults to the image's own assigned role), and returns the
+    // fresh caption text — does NOT save it itself; the caller (the "🤖
+    // Describe with AI" role picker, gallery only — see galleryActions
+    // below) drops it into the same edit/Save flow as a hand-typed
+    // description, so the user reviews it before it persists via
+    // saveRefImageCaption above, tagged with the same roleId. Fetches the
+    // image's bytes on demand (history rows carry no bytes, only a blob url)
+    // since this runs outside the normal captionImages() pipeline; goes
+    // through the same content-addressed vision cache as a fresh generation
+    // would — describing the same image under two different roles hits two
+    // different cache entries, since the role's focus text is part of the key.
+    describeRefImage: async (id, imageIndex, roleId) => {
+      const h = history.find(x => x.id === id)
+      const im = h?.refImages?.[imageIndex]
+      if (!im || !im.url) throw new Error('reference image not found')
+      if (!effectiveVision) throw new Error('no vision model selected')
+      const base64 = await blobUrlToBase64(im.url)
+      const role = MINIMAX_H3_REF_ROLES.find(r => r.id === (roleId || im.role)) || MINIMAX_H3_REF_ROLES[0]
+      const stats = { fromCache: 0, fresh: 0 }
+      return cachedVision([
+        { type: 'image', source: { type: 'base64', media_type: im.mediaType || 'image/jpeg', data: base64 } },
+        { type: 'text', text: `Describe this reference image as instructed. ${role.visionFocus || ''}`.trim() },
+      ], role.visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, effectiveVision)
+    },
     importFiles: () => importInputRef.current?.click(),
   }
   const historyActions = useMemo(() => ({
@@ -1294,6 +1449,12 @@ export default function App() {
     adapt: (h) => historyActionsRef.current.startAdapt(h),
     assignProject: (id, value) => historyActionsRef.current.assignEntryProject(id, value),
     saveCaption: (id, text) => historyActionsRef.current.saveCaption(id, text),
+    saveRefImageCaption: (id, imageIndex, text, roleId) => historyActionsRef.current.saveRefImageCaption(id, imageIndex, text, roleId),
+    // describeRefImage is deliberately NOT exposed here — the "🤖 Describe
+    // with AI" trigger only lives in the "Reuse image from history" gallery
+    // (galleryActions below), not on a finished history card: re-describing
+    // a reference there wouldn't retroactively rewrite that entry's already-
+    // generated prompt, which reads as broken rather than useful.
     clearAll: () => historyActionsRef.current.clearHistory(),
     exportAll: () => historyActionsRef.current.exportHistory(),
     importFiles: () => historyActionsRef.current.importFiles(),
@@ -1303,10 +1464,17 @@ export default function App() {
   // Same treatment for the image gallery, which renders up to 60 draggable tiles
   // and used to re-run all of them on every unrelated keystroke.
   const galleryActionsRef = useRef({})
-  galleryActionsRef.current = { pickHistoryImage, saveCaption: historyActionsRef.current.saveCaption }
+  galleryActionsRef.current = {
+    pickHistoryImage,
+    saveCaption: historyActionsRef.current.saveCaption,
+    saveRefImageCaption: historyActionsRef.current.saveRefImageCaption,
+    describeRefImage: historyActionsRef.current.describeRefImage,
+  }
   const galleryActions = useMemo(() => ({
     pick: (data) => galleryActionsRef.current.pickHistoryImage(data),
     saveCaption: (id, text) => galleryActionsRef.current.saveCaption(id, text),
+    saveRefImageCaption: (id, imageIndex, text, roleId) => galleryActionsRef.current.saveRefImageCaption(id, imageIndex, text, roleId),
+    describeRefImage: (id, imageIndex, roleId) => galleryActionsRef.current.describeRefImage(id, imageIndex, roleId),
   }), [])
 
   // …and for the queue. This bundle replaces two hand-assembled copies of the
@@ -1333,6 +1501,59 @@ export default function App() {
     reloadModels: () => configActionsRef.current.reloadModels(),
     clearCaptionCache: () => configActionsRef.current.clearCaptionCache(),
   }), [])
+
+  // Frame Mode + the image/reference-input UI, computed once and rendered at
+  // one of two positions below depending on target: for MiniMax H3 they move
+  // to the very top of the compose column (image, its LoRA and its voice all
+  // belong together, before the scene text — see MinimaxRefPanel.jsx); every
+  // other target keeps them at their original position, byte-identical to
+  // before this existed, since exactly one of the two render sites fires.
+  const frameModePicker = show.frameMode ? (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Image Input</label>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {(t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).map(o => (
+          <button key={o.id} onClick={() => switchMode(o.id)} style={btn(frameMode === o.id)}>{o.label}</button>
+        ))}
+      </div>
+      {(() => {
+        const hint = (t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).find(o => o.id === frameMode)?.hint
+        return hint ? <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>{hint}</p> : null
+      })()}
+    </div>
+  ) : null
+
+  const imageInputBlock = showImage ? (
+    <>
+      <HistoryImageGallery history={history} onPick={galleryActions.pick} pickHint={galleryPickHint}
+        onSaveCaption={galleryActions.saveCaption} onSaveRefImageCaption={galleryActions.saveRefImageCaption}
+        onDescribeRefImage={galleryActions.describeRefImage} />
+      {t.type === 'image' || frameMode === 'single' ? (
+        <>
+          {!imgs.firstImg && ratioPicker}
+          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first} />
+        </>
+      ) : frameMode === 'last' ? (
+        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
+      ) : frameMode === 'ref' ? (
+        <>
+          {ratioPicker}
+          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} manualMode={manualUI} />
+        </>
+      ) : frameMode === 'firstmidlast' ? (
+        <>
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
+          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={imgs.setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.mid} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
+        </>
+      ) : (
+        <>
+          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
+          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
+        </>
+      )}
+    </>
+  ) : null
 
   return (
     <div style={{ fontFamily: 'var(--pe-font)', minHeight: '100vh', color: 'var(--pe-ink)' }}>
@@ -1503,7 +1724,14 @@ export default function App() {
         </div>
       )}
 
-      {/* Style */}
+      {/* Frame Mode + image/reference input, moved to the top for MiniMax H3
+          only — a reference image's role, LoRA and voice all belong together,
+          before the scene text (see MinimaxRefPanel.jsx). Every other target
+          keeps this at its original position further down, unchanged. */}
+      {target === 'minimax_h3' && <>{frameModePicker}{imageInputBlock}</>}
+
+      {/* Style — an instruction to the writer LLM, nothing left to instruct in Manual mode */}
+      {!manualUI && (
       <div style={{ marginBottom: 18 }}>
         <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.type === 'image' ? 'Style' : 'Scene Style'}</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1512,8 +1740,10 @@ export default function App() {
           ))}
         </div>
       </div>
+      )}
 
-      {/* Creativity */}
+      {/* Creativity — same reason as Style */}
+      {!manualUI && (
       <div style={{ marginBottom: 18 }}>
         <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.type === 'image' ? 'Image Fidelity' : 'Creativity'}</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1529,8 +1759,10 @@ export default function App() {
               : 'How inventive the proposed motion and atmosphere should be — the first frame itself always stays fixed.'}
         </p>
       </div>
+      )}
 
-      {/* Prompt length */}
+      {/* Prompt length — same reason as Style */}
+      {!manualUI && (
       <div style={{ marginBottom: 18 }}>
         <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Prompt Length</label>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1539,19 +1771,60 @@ export default function App() {
           ))}
         </div>
       </div>
+      )}
 
-      {/* Scene */}
+      {/* Scene — also where the Manual-mode toggle lives, since it decides what
+          this field even means: a hint for the writer, or the literal output text. */}
       <div style={{ marginBottom: 18 }}>
-        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           {sceneLabel}{' '}
           {sceneHint && <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>{sceneHint}</span>}
+          {target === 'minimax_h3' && (
+            <button
+              onClick={() => {
+                const next = !manualMode
+                setManualMode(next)
+                // Drop the seed straight into the field so there's real,
+                // editable text to work from — but only ever onto a blank
+                // field, never over something already typed.
+                if (next && !scene.trim()) {
+                  setScene(buildManualSeed(imgs.refImages, imgs.refAudios))
+                }
+                // Soundscape is required in Manual mode (nothing invents it —
+                // see the assembler's validation) — seed a neutral starting
+                // value the same way, only over a blank field, so the very
+                // first "Assemble prompt" click doesn't fail on an empty
+                // required field the user hasn't been asked to fill in yet.
+                if (next && !soundscape.trim()) {
+                  setSoundscape('Quiet room tone.')
+                }
+              }}
+              title="Write the H3 prompt yourself, in H3's own tag syntax — no AI rewriting, no vision/writer calls"
+              style={{ ...btn(manualMode), marginLeft: 'auto', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}
+            >
+              ✍ Write it yourself
+            </button>
+          )}
         </label>
-        <textarea ref={sceneTextareaRef} value={scene} onChange={e => setScene(e.target.value)} placeholder={scenePlaceholder} rows={4}
-          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '12px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s' }}
+        <textarea ref={sceneTextareaRef} value={scene} onChange={e => setScene(e.target.value)} placeholder={scenePlaceholder} rows={manualUI ? 10 : 4}
+          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '12px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.6, transition: 'border-color 0.15s', fontFamily: manualUI ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit' }}
           onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
+        {manualUI && (
+          <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6, lineHeight: 1.5 }}>
+            Tags: {frameMode === 'ref' ? MANUAL_H3_LEGEND_REF : MANUAL_H3_LEGEND_DEFAULT}
+          </div>
+        )}
+        {manualUI && manualWarnings.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {manualWarnings.map((w, i) => (
+              <div key={i} style={{ fontSize: 13, color: 'var(--pe-warn)', lineHeight: 1.5 }}>⚠ {w}</div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Avoid */}
+      {/* Avoid — an instruction to the writer LLM, nothing left to instruct in Manual mode */}
+      {!manualUI && (
       <div style={{ marginBottom: 18 }}>
         <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           Avoid <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — things to keep out of the result, e.g. "text, watermark", or a likely mistake to correct, e.g. "blue car", "horse in background")</span>
@@ -1560,6 +1833,7 @@ export default function App() {
           style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
           onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
       </div>
+      )}
 
       {/* Camera */}
       {show.camera && (
@@ -1604,15 +1878,20 @@ export default function App() {
         </div>
       )}
 
-      {/* LoRA triggers */}
+      {/* LoRA triggers — character-kind chips hide here specifically in H3 ref
+          mode, where a character LoRA is instead assigned directly on its
+          reference image's own card (MinimaxRefPanel); every other frame mode
+          and every other target still has no other place to set one. */}
       {targetTakesLoras(target) && (
         <LoraPanel
-          loras={loras} activeIds={activeLoraIds} editable={!isLoading}
-          onToggle={toggleLora} onSaveLoras={saveLoraLibrary} />
+          loras={loras} activeIds={activeLoraIds} kinds={refMode ? ['style'] : null} editable={!isLoading}
+          onToggle={toggleLora} onSaveLoras={saveLoraLibrary}
+          subjects={loraSubjects} onSubjectChange={setLoraSubject} />
       )}
 
-      {/* Spoken language */}
-      {show.spokenLang && (
+      {/* Spoken language — nothing left to drive it in Manual mode; the user
+          tags [Language] "…" directly in their own typed prose. */}
+      {show.spokenLang && !manualUI && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Spoken Language <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(the language everyone in the video speaks — dialogue you type is translated into it)</span>
@@ -1625,8 +1904,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Dialogue */}
-      {show.dialogue && (
+      {/* Dialogue — in Manual mode, dialogue goes straight into the typed prose
+          as [Language] "…" (rule 6/6a), so this separate field is inert. */}
+      {show.dialogue && !manualUI && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Dialogue <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — spoken aloud; needs 8s+ for more than a few words)</span>
@@ -1658,7 +1938,9 @@ export default function App() {
       {tcaps.audioFields && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Ambient Sound <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)</span>
+            Ambient Sound <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>
+              {manualUI ? '(required in Manual mode — nothing invents this; type "silence" for none)' : '(optional — overall_soundscape: ambience, physical sounds; leave blank to let the writer invent it)'}
+            </span>
           </label>
           <textarea value={soundscape} onChange={e => setSoundscape(e.target.value)} placeholder="e.g. steady ventilation hum, quiet servo motors, a soft mechanical click" rows={2}
             style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px', color: 'var(--pe-ink)', fontSize: 14, resize: 'vertical', outline: 'none', lineHeight: 1.5, transition: 'border-color 0.15s' }}
@@ -1672,51 +1954,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Frame mode */}
-      {show.frameMode && (
-        <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Image Input</label>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {(t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).map(o => (
-              <button key={o.id} onClick={() => switchMode(o.id)} style={btn(frameMode === o.id)}>{o.label}</button>
-            ))}
-          </div>
-          {(() => {
-            const hint = (t.frameModeOptions || DEFAULT_FRAME_MODE_OPTIONS).find(o => o.id === frameMode)?.hint
-            return hint ? <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>{hint}</p> : null
-          })()}
-        </div>
-      )}
-
-      {/* Image panels */}
-      {showImage && (
-        <HistoryImageGallery history={history} onPick={galleryActions.pick} pickHint={galleryPickHint}
-          onSaveCaption={galleryActions.saveCaption} />
-      )}
-      {showImage && (t.type === 'image' || frameMode === 'single' ? (
-        <>
-          {!imgs.firstImg && ratioPicker}
-          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first} />
-        </>
-      ) : frameMode === 'last' ? (
-        <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
-      ) : frameMode === 'ref' ? (
-        <>
-          {ratioPicker}
-          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audio={imgs.refAudio} onAudioChange={imgs.setRefAudio} />
-        </>
-      ) : frameMode === 'firstmidlast' ? (
-        <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
-          <ImagePanel key={`${target}-mid`} label="Mid Frame" hint="(clip passes through here)" onChange={imgs.setMidImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.mid} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
-        </>
-      ) : (
-        <>
-          <ImagePanel key={`${target}-first`} label="First Frame" hint="(clip starts here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
-          <ImagePanel key={`${target}-last`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setLastImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.last} />
-        </>
-      ))}
+      {/* Frame Mode + image/reference input — every target except MiniMax H3;
+          H3 renders the same two blocks near the top instead, see below. */}
+      {target !== 'minimax_h3' && <>{frameModePicker}{imageInputBlock}</>}
 
       {/* ComfyUI handoff: input-folder copy, plus the slot the per-result send targets */}
       {((showImage && currentImages().length > 0) || results.some(r => r.text)) && (

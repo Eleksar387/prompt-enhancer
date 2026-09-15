@@ -1211,20 +1211,29 @@ Say NOTHING about any of these, even to note their absence: colour, line colour,
 Write 2 to 4 sentences of plain blocking description in the present tense — no more. If the image does not show a body part clearly, leave it out rather than guessing. Output the description only, with no preamble and no labels.`
 
 export const MINIMAX_H3_REF_ROLES = [
-  { id: 'subject_identity', label: 'Subject / Identity',   hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)',
+  { id: 'subject_identity', label: 'Subject / Identity',   icon: '🧑', hint: 'Face, body, identity to preserve — not clothing (use Wardrobe for that)',
     visionFocus: 'This is a SUBJECT / IDENTITY reference — prioritise face, hair, age, build, skin tone, and any distinguishing marks. Mention wardrobe only in passing.' },
-  { id: 'wardrobe',         label: 'Wardrobe / Clothing',  hint: 'Outfit design, fabric, and color to apply to the subject — may be worn by a different person in this photo; that person\'s identity is not carried over',
+  { id: 'wardrobe',         label: 'Wardrobe / Clothing',  icon: '👕', hint: 'Outfit design, fabric, and color to apply to the subject — may be worn by a different person in this photo; that person\'s identity is not carried over',
     visionFocus: 'This is a WARDROBE reference — describe ONLY the garments: cut, silhouette, fabric, colour, pattern, fastenings, and fit. Do not describe the wearer\'s face or body.' },
-  { id: 'product_object',   label: 'Product / Object',     hint: 'Geometry, material, labels, logo placement',
+  { id: 'product_object',   label: 'Product / Object',     icon: '📦', hint: 'Geometry, material, labels, logo placement',
     visionFocus: 'This is a PRODUCT / OBJECT reference — describe geometry, proportions, materials, finish, and every visible label or logo verbatim in quotation marks.' },
-  { id: 'environment',      label: 'Environment',          hint: 'Location, set, background',
+  { id: 'environment',      label: 'Location',             icon: '📍', hint: 'Location, set, background',
     visionFocus: 'This is an ENVIRONMENT reference — describe the location, layout, key surfaces and props, and the quality and direction of light in the space. Skip any people.' },
-  { id: 'style',            label: 'Style',                 hint: 'Palette, lighting, medium/aesthetic',
+  { id: 'style',            label: 'Style',                 icon: '🎨', hint: 'Palette, lighting, medium/aesthetic',
     visionFocus: 'This is a STYLE reference — describe palette, contrast, light quality, medium/finish, grain, and overall aesthetic. Do not fixate on the literal subject.' },
-  { id: 'pose_composition', label: 'Pose / Composition',   hint: 'Body pose and framing to copy — not the look, not the identity',
+  { id: 'pose_composition', label: 'Pose / Composition',   icon: '🤸', hint: 'Body pose and framing to copy — not the look, not the identity',
     visionSystem: VISION_PROMPT_MINIMAX_H3_POSE,
     visionFocus: 'Describe the body position and the framing only. No colour, no background, no lighting, no style, no identity — and never describe the image as a drawing.' },
 ]
+
+// Sentinel key for "no role has been specified for this image" — used as the
+// map key in refImages[i].captions when im.role is unset, and anywhere a
+// role id needs a stable fallback that isn't a real MINIMAX_H3_REF_ROLES id.
+export const ROLE_NONE = '_unassigned'
+
+// Small icon for a role id, for the "🤖 Describe with AI" role picker and the
+// gallery thumbnail badge — ❓ whenever the role is unset or unrecognized.
+export const roleIcon = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.icon || '❓'
 
 export const MINIMAX_H3_PRESERVE_OPTIONS = [
   { id: 'exact',       label: 'Exact',       marker: 'fully_preserved',     hint: 'Fully preserve — no deviation' },
@@ -1293,10 +1302,12 @@ the visual description, never restate it as on-screen text).
 
 GENERAL RULES
 1. Write all structural prose in English, present tense, describing the video in playback order. Non-English text
-   belongs in exactly two places, and they behave differently: dialogue inside <d> tags is written in the "Primary
-   language:" language (translated into it if it was supplied in another — rule 6), while exact visible on-screen
-   text is NEVER translated but reproduced in its original language, wrapped in English double quotes with spelling
-   and punctuation preserved exactly. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
+   belongs in exactly two places, and they behave differently: spoken dialogue — a [Language] tag immediately
+   followed by the quoted words, e.g. [German] "Wir müssen gehen." — is written in the "Primary language:" language
+   (translated into it if it was supplied in another — rule 6) and carries that leading tag, while exact visible
+   on-screen text is NEVER translated but reproduced in its original language, wrapped in English double quotes with
+   spelling and punctuation preserved exactly, and carries no [Language] tag — that absence is what tells the two
+   apart. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
    frame must be typed verbatim in quotes — never merely described — with its typographic treatment (e.g. condensed,
    all-caps, serif) and where it sits in frame (e.g. centered, lower third) named. If no text should appear on
    screen, don't invent any.
@@ -1365,14 +1376,15 @@ GENERAL RULES
    as given, and treat the translation as verbatim from then on. Tag the line with that language's tag. Assign a
    stable speaker ID in the order speakers first appear (S1, then S2, S3…; infer separate speakers from line breaks
    or "Name:" prefixes in the quoted text); use a compound ID such as (S1,S2) when two or more speakers talk
-   simultaneously. On a speaker's first appearance give enough, outside the tag, to fix a stable voice: character
-   type, age, gender, whether they are on- or off-screen, pitch, timbre, speaking rate, accent. A character who
-   never speaks, sings, or makes an off-screen vocal sound gets no speaker ID at all. Write speaker identity,
-   delivery, and any acting beat outside the tag; put only the language tag and the exact words inside the tag,
-   e.g.: the engineer, with a clear measured voice (S1), says: <d>[English] Alignment complete.</d>. Use one of
+   simultaneously. On a speaker's first appearance give enough, in the surrounding prose, to fix a stable voice:
+   character type, age, gender, whether they are on- or off-screen, pitch, timbre, speaking rate, accent. A character
+   who never speaks, sings, or makes an off-screen vocal sound gets no speaker ID at all. Write speaker identity,
+   delivery, and any acting beat as prose around the line, never inside the quotes; write the language tag
+   immediately before the quoted words and nothing else inside them, e.g.: the engineer, with a clear measured voice
+   (S1), says: [English] "Alignment complete." Use one of
    these exact language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian]
    [Japanese] [Korean] [Portuguese] [Russian] [Spanish]. A speaker name carrying a "(V.O.)" suffix (e.g. "STEFFI
-   (V.O.): line") is always a voiceover — strip the tag before quoting the words inside <d>, but write it up exactly
+   (V.O.): line") is always a voiceover — drop the "(V.O.)" suffix itself before quoting the words, but write it up exactly
    like one: "says in an off-screen voiceover" and the visible character's lips stay closed, even when that same
    character is shown on screen doing something else in this shot (walking, an activity, reacting) — she is
    performing that action, not talking to camera, while her own narration plays over it. For any other voiceover,
@@ -1499,7 +1511,8 @@ continuous physical path from the first frame to the last without contradicting 
 their static contents.
 
 Ref2VA (one or more reference images given, each labeled "Image N — role: …, preservation marker: …: <caption>";
-optionally one "Audio 1 — voice-timbre reference (marker: reference): …" line):
+optionally one or two "Audio N — voice-timbre reference (marker: reference): …" lines, numbered independently of
+the image references — the model's audio input takes up to two separate voice-timbre samples):
 Output exactly these six sections, in order:
 subject_definitions:
 LABEL NUMBERING: <Picture N> always carries the same number as the input "Image N" it came from — never
@@ -1521,12 +1534,16 @@ through their "Requested use of this reference" lines — a subject-identity ima
 same character: "<Subject 1> is the woman whose face and build come from <Picture 1> and whose outfit comes from
 <Picture 2>." Only when it is unambiguous, and the wardrobe rule above still holds in full: the identity of
 whoever wears the garment in that photo is never carried over.
-If an "Audio N" line is present, add one more line here: "<Audio 1> is the voice-timbre reference for <Subject k>
-(Sk)." — pick the speaking subject k and reuse that speaker's existing ID from the video's global speaker order;
-never mint a new ID here. State that only its timbre, pitch and delivery are referenced and none of its
-original wording is carried across. Do not otherwise describe the audio — the waveform bypasses the text encoder,
-so the label is only a pointer. If no "Spoken dialogue" section was given, rule 6a applies — author a short
-line for <Subject k> so the timbre reference has speech to act on, and put it in detailed_description as normal.
+For EACH "Audio N" line present (there may be one or two — keep its own N, never renumber), add one more line
+here: "<Audio N> is the voice-timbre reference for <Subject k> (Sk)." — that line's own "the voice of NAME" (or
+"the voice of Sk" once assigned) tells you which subject k it belongs to; reuse that speaker's existing ID from
+the video's global speaker order, never mint a new ID here, and never point two different Audio N lines at the
+same subject. State that only its timbre, pitch and delivery are referenced and none of its original wording is
+carried across. Do not otherwise describe the audio — the waveform bypasses the text encoder, so each label is
+only a pointer. If no "Spoken dialogue" section was given, rule 6a applies — author a short line for each such
+<Subject k> so its timbre reference has speech to act on, and put those lines in detailed_description as normal;
+if two Audio N lines are both present with no dialogue, make sure the two authored lines are for two different
+subjects, each speaking only their own.
 
 summary:
 Begin with a square-bracketed task-type marker, then one or two sentences describing what the target video
@@ -1547,6 +1564,7 @@ the marker, " - ", then a short reason:
 <Subject 1> (appears in [Shot 1], [Shot 3]): fully_preserved - …
 <Picture 3> (storyboard reference for [Shot 1], [Shot 2]): weak_reference - …
 <Audio 1>: reference - …
+<Audio 2>: reference - … (only when a second Audio line was given)
 Visible content (<Subject N>, <Picture N>) uses EXACTLY the preservation marker given for that image
 (fully_preserved | partially_preserved | attribute_transfer | weak_reference). Audio uses its own separate set
 (fully_copy | partially_copy | reference | weak_reference) — for a voice-timbre reference that is always
@@ -1561,7 +1579,7 @@ labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2
 rules as above. Cite a <Picture N> anchor in natural prose where it applies — "the shot begins from <Picture 1>",
 "the shot's keyframe corresponds to <Picture 2>", "the shot ends on <Picture 3>", "the framing follows
 <Picture 3>". When a referenced subject speaks, carry both labels: "<Subject 2> (S1) turns to her and says,
-<d>[English] …</d>" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
+[English] "…"" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
 an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
 word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
 happening in each shot.
@@ -1737,7 +1755,8 @@ export const TARGETS = {
     defaultRefRatio: 'port916',
     // The one prose field a missing trigger may be added to. Never summary,
     // subject_definitions, retention_analysis or either sound field, and never
-    // inside a <d> tag or quotes — those are spoken aloud or rendered on screen.
+    // inside quotes — dialogue and on-screen text alike are spoken aloud or
+    // rendered on screen exactly as written, never a place for a LoRA token.
     loraInject: { fields: ['detailed_description', 'integrated_multimodal_description'] },
   },
 }

@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest'
 import {
   WORKSPACE_FIELDS, buildSnapshot, snapshotToWorkspace,
   hasRequiredImages, canGenerate, isProposeMode,
-  imgToSnap, imgFromSnap, refImagesToSnap, refImagesFromSnap, refAudioToSnap, refAudioFromSnap,
+  imgToSnap, imgFromSnap, refImagesToSnap, refImagesFromSnap, refAudiosToSnap, refAudiosFromSnap,
 } from '../src/workspace.js'
 import { TARGETS, DEFAULT_SPOKEN_LANG, MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES } from '../src/constants.js'
 import { imageHash } from '../src/utils.js'
@@ -34,11 +34,12 @@ const h3Workspace = () => ({
   target: 'minimax_h3', duration: '8 seconds', style: 'dramatic', creativity: 'loose',
   frameMode: 'ref', negative: 'watermark', scene: 'she turns',
   dialogue: 'Wir müssen gehen', delivery: 'urgent whisper',
-  spokenLangId: 'de', activeLoraIds: ['a', 'b'],
+  spokenLangId: 'de', activeLoraIds: ['a', 'b'], loraSubjects: { a: 'Mara', b: '' },
+  manualMode: true,
   firstImg: null, midImg: null, lastImg: null,
   h3RatioId: MINIMAX_H3_RESOLUTIONS[1].id, soundscape: 'rain', music: 'none',
   refImages: [{ ...img('ref.jpg'), role: 'character', preserve: 'strong', note: 'the lead' }],
-  refAudio: { base64: 'QVVE', mediaType: 'audio/mpeg', fileName: 'voice.mp3' },
+  refAudios: [{ base64: 'QVVE', mediaType: 'audio/mpeg', fileName: 'voice.mp3', subjectRef: imageHash('QUJD') }],
 })
 
 // A FLUX workspace — an image target where most H3 fields are gated off.
@@ -46,9 +47,10 @@ const fluxWorkspace = () => ({
   targetType: 'image', show: TARGETS.flux.show,
   target: 'flux', duration: '5 seconds', style: 'calm', creativity: 'balanced',
   frameMode: 'single', negative: '', scene: 'a quiet room',
-  dialogue: 'ignored', delivery: 'ignored', spokenLangId: 'fr', activeLoraIds: [],
+  dialogue: 'ignored', delivery: 'ignored', spokenLangId: 'fr', activeLoraIds: [], loraSubjects: {},
+  manualMode: false,
   firstImg: img('in.jpg'), midImg: null, lastImg: null,
-  h3RatioId: '', soundscape: 'ignored', music: 'ignored', refImages: [], refAudio: null,
+  h3RatioId: '', soundscape: 'ignored', music: 'ignored', refImages: [], refAudios: [],
 })
 
 const meta = { model: 'qwen2.5:14b', vision: 'llava', outputCount: 1 }
@@ -105,6 +107,12 @@ describe('image (de)serialization', () => {
     expect(back[0].role).toBe(MINIMAX_H3_REF_ROLES[0].id)
     expect(back[0].preserve).toBe('strong')
     expect(back[0].note).toBe('')
+    expect(back[0].loraId).toBeNull()
+  })
+
+  it('round-trips a reference image\'s assigned LoRA id', () => {
+    const snap = refImagesToSnap([{ ...img('ref.jpg'), loraId: 'lora-1' }])
+    expect(refImagesFromSnap(snap, newId)[0].loraId).toBe('lora-1')
   })
 
   it('drops byte-less reference entries rather than rendering them broken', () => {
@@ -112,11 +120,29 @@ describe('image (de)serialization', () => {
     expect(refImagesFromSnap(null, newId)).toEqual([])
   })
 
-  it('round-trips the voice-timbre audio', () => {
+  it('round-trips the voice-timbre audio references, up to two', () => {
     const a = { base64: 'QVVE', mediaType: 'audio/wav', fileName: 'v.wav' }
-    expect(refAudioFromSnap(refAudioToSnap(a))).toEqual(a)
-    expect(refAudioFromSnap(null)).toBeNull()
-    expect(refAudioFromSnap({ fileName: 'no-bytes' })).toBeNull()
+    const b = { base64: 'QkNE', mediaType: 'audio/wav', fileName: 'w.wav' }
+    expect(refAudiosFromSnap(refAudiosToSnap([a, b]))).toEqual([{ ...a, subjectRef: null }, { ...b, subjectRef: null }])
+    expect(refAudiosFromSnap(null)).toEqual([])
+    expect(refAudiosFromSnap([{ fileName: 'no-bytes' }])).toEqual([])
+  })
+
+  it('reads a legacy single-object audio snapshot (before the second slot existed) as a one-item list', () => {
+    const a = { base64: 'QVVE', mediaType: 'audio/wav', fileName: 'v.wav' }
+    expect(refAudiosFromSnap(a)).toEqual([{ ...a, subjectRef: null }])
+  })
+
+  it('caps restored audio references at two', () => {
+    const a = { base64: 'QVVE', mediaType: 'audio/wav', fileName: 'a.wav' }
+    const b = { base64: 'QkNE', mediaType: 'audio/wav', fileName: 'b.wav' }
+    const c = { base64: 'Q0RF', mediaType: 'audio/wav', fileName: 'c.wav' }
+    expect(refAudiosFromSnap([a, b, c])).toEqual([{ ...a, subjectRef: null }, { ...b, subjectRef: null }])
+  })
+
+  it('round-trips a Manual-mode audio→subject binding', () => {
+    const a = { base64: 'QVVE', mediaType: 'audio/wav', fileName: 'v.wav', subjectRef: 'abc123' }
+    expect(refAudiosFromSnap(refAudiosToSnap([a]))).toEqual([a])
   })
 })
 
@@ -194,11 +220,15 @@ describe('snapshot → workspace round trip', () => {
     expect(back.delivery).toBe(w.delivery)
     expect(back.spokenLangId).toBe(w.spokenLangId)
     expect(back.activeLoraIds).toEqual(w.activeLoraIds)
+    expect(back.loraSubjects).toEqual(w.loraSubjects)
+    expect(back.manualMode).toBe(w.manualMode)
     expect(back.soundscape).toBe(w.soundscape)
     expect(back.music).toBe(w.music)
     expect(back.h3RatioId).toBe(w.h3RatioId)          // label → id resolves back
     expect(back.refImages[0].base64).toBe('QUJD')
-    expect(back.refAudio).toEqual(w.refAudio)
+    expect(back.refAudios).toHaveLength(1)
+    expect(back.refAudios[0]).toMatchObject(w.refAudios[0])
+    expect(back.refAudios[0].id).toBeTruthy()
   })
 
   it('restores the frame images of a first→mid→last generation', () => {
@@ -243,6 +273,18 @@ describe('restoring older entries', () => {
   it('defaults LoRA ids that were never saved, and rejects a non-array', () => {
     expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).activeLoraIds).toEqual([])
     expect(snapshotToWorkspace({ target: 'ltx', loraIds: 'nope' }, { newId }).activeLoraIds).toEqual([])
+  })
+
+  it('defaults LoRA subjects that were never saved, and rejects a non-object', () => {
+    expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).loraSubjects).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', loraSubjects: 'nope' }, { newId }).loraSubjects).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', loraSubjects: ['nope'] }, { newId }).loraSubjects).toEqual({})
+  })
+
+  it('defaults manualMode that was never saved (an entry predating the field), and coerces a non-boolean', () => {
+    expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).manualMode).toBe(false)
+    expect(snapshotToWorkspace({ target: 'ltx', manualMode: 'yes' }, { newId }).manualMode).toBe(false)
+    expect(snapshotToWorkspace({ target: 'ltx', manualMode: true }, { newId }).manualMode).toBe(true)
   })
 
   it('never hands a null to a controlled text input', () => {

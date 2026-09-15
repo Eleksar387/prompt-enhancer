@@ -10,6 +10,12 @@ import { generateId } from '../db'
 // `kinds` narrows which library entries are offered as chips. The Scriptwriter
 // passes ['style'], because there a character LoRA is bound to a cast member in
 // the bible instead — one mechanism per question, so the two can't disagree.
+//
+// `subjects` (id → name) + `onSubjectChange` are the standalone-workspace
+// equivalent of that bible binding: once a 'character'-kind LoRA is toggled
+// active, a small inline field lets the user name who its trigger belongs to,
+// so the writer isn't guessing when two character LoRAs are active at once.
+// Both are optional — omitted, chips behave exactly as before.
 
 const lbl = {
   fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block',
@@ -31,6 +37,7 @@ const kindShort = (kind) => (LORA_KINDS.find(k => k.id === kind) || LORA_KINDS[0
 export default function LoraPanel({
   loras = [], activeIds = [], kinds = null, editable = true,
   onToggle, onSaveLoras, hint = '',
+  subjects = {}, onSubjectChange,
 }) {
   const [open, setOpen] = useState(false)
 
@@ -50,15 +57,31 @@ export default function LoraPanel({
         </span>
       </label>
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {shown.map(l => (
-          <button key={l.id} type="button" onClick={() => onToggle?.(l.id)} disabled={!editable}
-            title={`${l.trigger || '(no trigger yet)'}${l.note ? ` — ${l.note}` : ''}`}
-            style={{ ...btn(active(l.id)), opacity: l.trigger.trim() ? 1 : 0.5 }}>
-            <span style={{ opacity: 0.6, marginRight: 5 }}>{kindShort(l.kind)}</span>
-            {l.name.trim() || l.trigger.trim() || 'unnamed'}
-          </button>
-        ))}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {shown.map(l => {
+          const showSubject = l.kind === 'character' && active(l.id) && onSubjectChange
+          return (
+            <div key={l.id} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <button type="button" onClick={() => onToggle?.(l.id)} disabled={!editable}
+                title={`${l.trigger || '(no trigger yet)'}${l.note ? ` — ${l.note}` : ''}`}
+                style={{ ...btn(active(l.id)), opacity: l.trigger.trim() ? 1 : 0.5 }}>
+                <span style={{ opacity: 0.6, marginRight: 5 }}>{kindShort(l.kind)}</span>
+                {l.name.trim() || l.trigger.trim() || 'unnamed'}
+              </button>
+              {showSubject && (
+                <input
+                  type="text"
+                  value={subjects[l.id] || ''}
+                  onChange={e => onSubjectChange(l.id, e.target.value)}
+                  disabled={!editable}
+                  placeholder="which character?"
+                  title="Name of the character this trigger belongs to — only needed once more than one character LoRA is active at the same time"
+                  style={field({ fontSize: 11.5, padding: '3px 7px', width: 112 })}
+                />
+              )}
+            </div>
+          )
+        })}
         {shown.length === 0 && (
           <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
             No LoRAs yet{kinds ? ' of this kind' : ''}.

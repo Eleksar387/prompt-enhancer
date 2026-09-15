@@ -12,9 +12,9 @@ const workspace = {
   targetType: 'video', show: TARGETS.minimax_h3.show,
   target: 'minimax_h3', duration: '8 seconds', style: 'dramatic', creativity: 'balanced',
   frameMode: 'ref', negative: 'watermark', scene: 'she turns from the window',
-  dialogue: 'Wir müssen gehen', delivery: 'urgent', spokenLangId: 'de', activeLoraIds: ['s'],
+  dialogue: 'Wir müssen gehen', delivery: 'urgent', spokenLangId: 'de', activeLoraIds: ['s'], loraSubjects: { s: 'Mara' },
   firstImg: null, midImg: null, lastImg: null,
-  h3RatioId: 'port916', soundscape: 'rain', music: '', refImages: [], refAudio: null,
+  h3RatioId: 'port916', soundscape: 'rain', music: '', refImages: [], refAudios: [],
   promptLength: 'standard',
 }
 

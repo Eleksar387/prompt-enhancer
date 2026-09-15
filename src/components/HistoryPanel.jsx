@@ -11,9 +11,10 @@
 // callbacks arrive as one `actions` object that App keeps identity-stable.
 
 import { memo, useEffect, useState } from 'react'
-import { TARGETS, STYLE_OPTIONS, CREATIVITY_OPTIONS } from '../constants'
+import { TARGETS, STYLE_OPTIONS, CREATIVITY_OPTIONS, ROLE_NONE } from '../constants'
 import { moveLabel } from '../utils'
 import { entryTargetLabel, entryHasImages, modelFilterLabel } from '../history'
+import { resolveRefCaption } from '../adapt'
 
 const card = { background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }
 const cardHead = { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }
@@ -41,19 +42,129 @@ const restoreBtn = (restoringId, id) => ({
   opacity: restoringId && restoringId !== id ? 0.5 : 1,
 })
 
+// One reference image's own description, read/edited directly — `onSaveIndexed`
+// writes it straight onto that entry's refImages[index-1].captions[im.role]
+// (App.jsx's saveRefImageCaption, a plain array-index + map-key update),
+// never back into the old shared text block, so a save here can never touch
+// or be silently dropped by another reference's line in the same entry.
+// `resolveRefCaption` (src/adapt.js) is the SAME resolver the gallery's
+// multi-role info panel reads through — this card only ever shows/saves the
+// image's own assigned role (no picker, no AI here), but it must resolve
+// through the same priority order (structural map → legacy flat `caption` →
+// legacy shared-block extraction) so a save made from either this card or
+// the gallery is never displayed as stale/reverted by the other.
+// AI re-description is deliberately NOT offered here (only in the "Reuse
+// image from history" gallery, HistoryImageGallery.jsx) — this card shows an
+// ALREADY-FINISHED generation with its own already-baked prompt text;
+// re-describing a reference image here wouldn't retroactively rewrite that
+// prompt, which read as broken rather than useful.
+function RefImageCaptionRow({ im, index, fullCaption, onSaveIndexed }) {
+  const initialText = resolveRefCaption(im, im?.role || ROLE_NONE, fullCaption, index)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(initialText)
+  const [flash, setFlash] = useState(false)
+  const [saveError, setSaveError] = useState(false)
+  useEffect(() => { if (!editing) { setDraft(initialText); setSaveError(false) } }, [initialText, editing])
+
+  const save = async () => {
+    setSaveError(false)
+    try {
+      await onSaveIndexed(index - 1, draft)
+      setEditing(false)
+      setFlash(true)
+      setTimeout(() => setFlash(false), 1800)
+    } catch {
+      setSaveError(true)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: '1px solid var(--pe-line)' }}>
+      {im?.url && <img src={im.url} loading="lazy" decoding="async" alt={im.fileName} style={thumb(40, 30)} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: 'var(--pe-ink-3)', marginBottom: 2 }}>
+          Image {index}{im?.role ? ` · ${im.role}` : ''}{flash ? ' · ✓ saved' : ''}
+        </div>
+        {editing ? (
+          <>
+            <textarea value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false}
+              rows={Math.min(10, Math.max(2, draft.split('\n').length + 1))}
+              style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.5, color: 'var(--pe-ink-2)', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '5px 7px', fontFamily: 'inherit', resize: 'vertical' }} />
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button onClick={save} style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Save</button>
+              <button onClick={() => { setDraft(initialText); setEditing(false) }} style={{ fontSize: 12, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 6px', cursor: 'pointer' }}>Cancel</button>
+            </div>
+            {saveError && <div style={{ fontSize: 12, color: 'var(--pe-danger)', marginTop: 3 }}>✗ Save failed — the history server may be unreachable. Your edit is still here; try again.</div>}
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 13, color: 'var(--pe-ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+              {initialText || <span style={{ color: 'var(--pe-ink-3)' }}>No description.</span>}
+            </div>
+            {onSaveIndexed && (
+              <button onClick={() => { setDraft(initialText); setEditing(true) }}
+                style={{ marginTop: 3, fontSize: 12, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '1px 7px', cursor: 'pointer' }}>✎ Edit</button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // The vision description stored on a history entry — read it, and (when `onSave`
 // is given) edit it in place. `onSave(text)` should persist + refresh.
-function HistoryCaptionEditor({ value, onSave }) {
+//
+// `refImages` (ref-mode entries only) is what makes this per-image-aware: with
+// more than one reference image, each gets its OWN editable row
+// (`RefImageCaptionRow`, saved via `onSaveIndexed` directly onto
+// refImages[i].caption) instead of one flat textarea over the shared legacy
+// block — editing one used to silently overwrite (and, in an earlier version
+// of this fix, silently DISCARD) every other reference's description in the
+// same entry, because saving always went back through that one shared
+// string. A plain array-index write can't do either: it always takes effect,
+// and it can never touch a different index — including on an entry whose old
+// shared `value` is already corrupted from an earlier version of this bug,
+// since saving here never reads or rewrites that string again. Zero or one
+// reference image falls back to the flat editor below, where there's nothing
+// to keep separate.
+function HistoryCaptionEditor({ value, onSave, refImages = null, onSaveIndexed = null }) {
+  const perImage = (refImages && refImages.length > 0)
+    ? refImages.map((im, i) => ({ im, index: i + 1 }))
+    : null
+  const canSplit = !!perImage && perImage.length > 1
+
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const [flash, setFlash] = useState(false)
-  useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
+  const [saveError, setSaveError] = useState(false)
+  useEffect(() => { if (!editing) { setDraft(value); setSaveError(false) } }, [value, editing])
 
   const save = async () => {
-    await onSave(draft)
-    setEditing(false)
-    setFlash(true)
-    setTimeout(() => setFlash(false), 1800)
+    setSaveError(false)
+    try {
+      await onSave(draft)
+      setEditing(false)
+      setFlash(true)
+      setTimeout(() => setFlash(false), 1800)
+    } catch {
+      setSaveError(true)
+    }
+  }
+
+  if (canSplit) {
+    return (
+      <details style={{ marginBottom: 6 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--pe-ink-3)' }}>
+          👁 vision description ({perImage.length} references, edited separately)
+        </summary>
+        <div style={{ marginTop: 4 }}>
+          {perImage.map(p => (
+            <RefImageCaptionRow key={p.index} im={p.im} index={p.index} fullCaption={value} onSaveIndexed={onSaveIndexed} />
+          ))}
+        </div>
+      </details>
+    )
   }
 
   if (editing) {
@@ -67,6 +178,7 @@ function HistoryCaptionEditor({ value, onSave }) {
           <button onClick={save} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 10px', cursor: 'pointer' }}>Save</button>
           <button onClick={() => { setDraft(value); setEditing(false) }} style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Cancel</button>
         </div>
+        {saveError && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 4 }}>✗ Save failed — the history server may be unreachable. Your edit is still here; try again.</div>}
       </div>
     )
   }
@@ -272,7 +384,9 @@ const StandardCard = memo(function StandardCard({ h, projects, restoringId, acti
         <div style={{ marginTop: 6 }}>
           {!hasImages && sceneBlock}
           {h.caption && (
-            <HistoryCaptionEditor value={h.caption} onSave={h.id ? (text => actions.saveCaption(h.id, text)) : null} />
+            <HistoryCaptionEditor value={h.caption} onSave={h.id ? (text => actions.saveCaption(h.id, text)) : null}
+              refImages={h.frameMode === 'ref' ? h.refImages : null}
+              onSaveIndexed={h.id ? ((idx, text) => actions.saveRefImageCaption(h.id, idx, text)) : null} />
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
             {(h.outputs || []).map((o, oi) => (

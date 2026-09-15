@@ -393,7 +393,7 @@ Primary language: French — all spoken audio is in French. Render every spoken 
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
 - ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
 - aidmaMJ6.1   (style trigger — put it in the opening style phrase)
-Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
 
 Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
 `;
@@ -409,7 +409,7 @@ Spoken dialogue — include these EXACT words in quotation marks, broken into sh
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
 - ohwx woman   (character trigger for ANNA — put it immediately before or after the first mention of the character it names)
 - aidmaMJ6.1   (style trigger — put it in the opening style phrase)
-Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
 
 Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
 `;
@@ -436,7 +436,7 @@ Spoken dialogue — include these EXACT words in quotation marks, broken into sh
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
 - ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
 - aidmaMJ6.1   (style trigger — put it in the opening style phrase)
-Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
 
 Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
 `;
@@ -993,6 +993,12 @@ exports[`foldCaption — caption scaffolding stripped per source frame mode > re
 location: An unlit room with a tall sash window."
 `;
 
+exports[`foldCaption — caption scaffolding stripped per source frame mode > ref · two audio references, with dialogue (deduped to one voice line) 1`] = `
+"character: A woman in her thirties, dark hair, red wool coat. (intended use: keep the coat exactly.)
+location: An unlit room with a tall sash window.
+Voice: reference timbre only — natural delivery."
+`;
+
 exports[`foldCaption — caption scaffolding stripped per source frame mode > ref · with dialogue (voice line kept) 1`] = `
 "character: A woman in her thirties, dark hair, red wool coat. (intended use: keep the coat exactly.)
 location: An unlit room with a tall sash window.
@@ -1073,12 +1079,12 @@ exports[`loraInstruction > one instruction per target shape 1`] = `
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
 - ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
 - aidmaMJ6.1   (style trigger — put it in the opening style phrase)
-Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.",
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.",
   "h3 · character bound": "
 
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
 - ohwx woman   (character trigger for ANNA — put it immediately before or after the first mention of the character it names)
-Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.",
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.",
   "ltx": "
 
 LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
@@ -1427,7 +1433,7 @@ exports[`system prompt selection > keeps the target table shape 1`] = `
     "clipLabel": null,
     "clipNoun": "clip",
     "clipShort": "H3",
-    "clipSystem": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+    "clipSystem": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
     "defaultFrameMode": "ref",
     "defaultRefRatio": "port916",
     "durations": [
@@ -1719,11 +1725,11 @@ exports[`system prompt selection > resolves one prompt per target × frameMode 1
   "ltx_guide · last": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx_guide · ref": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx_guide · single": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
-  "minimax_h3 · firstlast": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · firstmidlast": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · last": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · ref": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · single": "27620 chars · sha256:999943dc6336ea6b · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · firstlast": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · firstmidlast": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · last": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · ref": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · single": "28458 chars · sha256:d18827be815d6b29 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
   "scriptwriter · firstlast": "undefined",
   "scriptwriter · firstmidlast": "undefined",
   "scriptwriter · last": "undefined",

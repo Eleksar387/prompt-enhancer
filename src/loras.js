@@ -80,7 +80,7 @@ export function loraInstruction(active, targetId) {
     + (fields
       ? ` In this format they belong in the ${fields[0]} (or ${fields[1]}) field only: `
         + `never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and `
-        + `never inside a <d> tag or inside quotes — text in those places is spoken aloud or rendered on screen in the video.`
+        + `never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.`
       : '')
 }
 

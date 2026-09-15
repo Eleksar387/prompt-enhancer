@@ -1,4 +1,4 @@
-import { TARGETS, STYLE_OPTIONS, spokenLanguageDirective, caps } from './constants'
+import { TARGETS, STYLE_OPTIONS, spokenLanguageDirective, caps, ROLE_NONE } from './constants'
 import { loraInstruction } from './loras'
 
 // Destination targets for "Adapt to text-only prompt" — every writer-capable
@@ -72,6 +72,7 @@ export function foldCaption(caption, sourceFrameMode, { hasDialogue = false } = 
 
   if (sourceFrameMode === 'ref') {
     const out = []
+    let sawAudio = false   // H3 takes up to two Audio N lines — fold to one note, not one per line
     for (const raw of text.split('\n')) {
       const line = raw.trimEnd()
       const img = line.match(/^Image\s+\d+\s+—\s+role:\s+(.+?),\s+preservation:\s+.+?:\s*(.*)$/)
@@ -81,8 +82,8 @@ export function foldCaption(caption, sourceFrameMode, { hasDialogue = false } = 
         out[out.length - 1] = `${out[out.length - 1]} (intended use: ${note[1]})`
         continue
       }
-      if (/^Audio\s+1\s+—\s+voice-timbre reference/i.test(line)) {
-        if (hasDialogue) out.push('Voice: reference timbre only — natural delivery.')
+      if (/^Audio\s+\d+\s+—\s+voice-timbre reference/i.test(line)) {
+        if (hasDialogue && !sawAudio) { out.push('Voice: reference timbre only — natural delivery.'); sawAudio = true }
         continue
       }
       out.push(line)
@@ -101,6 +102,54 @@ export function foldCaption(caption, sourceFrameMode, { hasDialogue = false } = 
   }
 
   return text
+}
+
+// ── per-reference caption reading (History gallery) ─────────────────────────
+// A ref-mode entry's `caption` is ONE shared block — one "Image N — role: X,
+// preservation: Y (marker): <caption>" line per reference image, built by
+// captionImages() (src/App.jsx) and already parsed the same way by
+// foldCaption() above. Editing used to write BACK into this block (splicing
+// just one line) — but a regex match against a semi-structured blob is
+// fragile, and a non-matching line (any entry already damaged by an earlier
+// version of this same fix, or any block that just doesn't parse) made the
+// splice a **guaranteed silent no-op**: the user's edit was discarded and
+// the original text sent back unchanged, while the UI still reported
+// success. Saving a reference image's caption now always writes directly to
+// that image's own `refImages[i].caption` field instead (a plain
+// array-index update in App.jsx's `saveRefImageCaption` — see there) — this
+// function is READ-ONLY now, used purely as a legacy-display fallback for an
+// image that hasn't been individually re-saved yet (including one whose
+// shared block is already corrupted — that block is simply never written
+// through again, corrupted or not).
+const REF_IMAGE_LINE_RE = /^Image\s+(\d+)\s+—\s+role:\s+(.+?),\s+preservation:\s+(.+?):\s*(.*)$/
+
+// Image N's own caption text within a ref-mode block, or null if that image's
+// line isn't present (a malformed/legacy block, or N out of range) — the
+// caller falls back to an empty starting caption in that case.
+export function extractRefImageCaption(fullText, imageIndex1based) {
+  for (const line of (fullText || '').split('\n')) {
+    const m = line.match(REF_IMAGE_LINE_RE)
+    if (m && Number(m[1]) === imageIndex1based) return m[4]
+  }
+  return null
+}
+
+// The single, shared way to resolve what caption text to show for one
+// reference image under a given role. Priority: the new structural
+// `im.captions[roleId]` map (role-specific "🤖 Describe with AI" runs write
+// only here) → the legacy flat `im.caption` string, but ONLY for the image's
+// own assigned role (that field was never role-aware — it's whatever the
+// original captioning pass wrote) → the even-older shared-block extraction
+// above, same own-role-only restriction → empty. Never writes anything.
+// Used by both HistoryImageGallery.jsx (the multi-role info panel) and
+// HistoryPanel.jsx (the plain history-card editor) so a save made through
+// either one is never shown as stale/reverted by the other.
+export function resolveRefCaption(im, roleId, blockText, refImageIndex) {
+  if (im?.captions && im.captions[roleId] != null) return im.captions[roleId]
+  const ownRole = im?.role || ROLE_NONE
+  if (roleId !== ownRole) return ''
+  if (im?.caption) return im.caption
+  return refImageIndex != null ? (extractRefImageCaption(blockText, refImageIndex) || '') : ''
 }
 
 const sceneOr = (scene, fallback) => (scene && scene.trim() ? scene.trim() : fallback)

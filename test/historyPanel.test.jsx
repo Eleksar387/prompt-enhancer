@@ -15,7 +15,7 @@ import HistoryPanel from '../src/components/HistoryPanel.jsx'
 
 const actions = {
   restore: () => {}, remove: () => {}, adapt: () => {}, assignProject: () => {},
-  saveCaption: () => {}, clearAll: () => {}, exportAll: () => {}, importFiles: () => {},
+  saveCaption: () => {}, saveRefImageCaption: () => {}, clearAll: () => {}, exportAll: () => {}, importFiles: () => {},
 }
 const filters = { project: 'all', target: 'all', model: 'all', image: 'all', search: '' }
 
@@ -150,6 +150,120 @@ describe('StandardCard', () => {
   it('survives an entry carrying almost nothing', () => {
     const bare = { id: 'x', ts: 1735689600000, type: 'standard' }
     expect(() => render({ history: [bare], visible: [bare] })).not.toThrow()
+  })
+
+  it('splits a real multi-reference caption block into one row per image instead of one flat box — the reported bug', () => {
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: [
+        'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman with dark hair.',
+        'Image 2 — role: Location, preservation: Guide (attribute_transfer): A rainy street at night.',
+      ].join('\n\n'),
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('2 references, edited separately')
+    expect(out).toContain('A woman with dark hair.')
+    expect(out).toContain('A rainy street at night.')
+  })
+
+  it('falls back to the single flat box only when there is at most one reference image', () => {
+    // `standard`'s own fixture: one refImage, so per-row editing (which only
+    // matters once there's more than one description to keep separate) is
+    // skipped even though `caption` here is plain prose ("a rainy window"),
+    // not the "Image 1 — role: …" shape either — must not crash.
+    expect(html).not.toContain('edited separately')
+    expect(html).toContain('a rainy window')
+  })
+
+  it('still uses per-row editing when one of several images\' lines fails to parse — never demotes back to one flat, overwrite-everything box', () => {
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'wardrobe' },
+        { url: '/api/blob/r3', fileName: 'c.jpg', role: 'location' },
+      ],
+      caption: [
+        'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman with dark hair.',
+        'Image 2 — role: Wardrobe / Clothing — malformed, no preservation segment.',
+        'Image 3 — role: Location, preservation: Guide (attribute_transfer): A rainy street at night.',
+      ].join('\n\n'),
+    }
+    const out = render({ history: [h], visible: [h] })
+    // Still splits into 3 rows (not 2 — the count is refImages.length, not
+    // "however many lines happened to parse") …
+    expect(out).toContain('3 references, edited separately')
+    // … the two well-formed images still show their own real text …
+    expect(out).toContain('A woman with dark hair.')
+    expect(out).toContain('A rainy street at night.')
+    // … and the malformed one shows its own empty placeholder rather than
+    // the raw whole block (which would otherwise leak the other two images'
+    // text into what looks like image 2's own box).
+    expect(out).toContain('No description.')
+    expect(out).not.toContain('malformed, no preservation segment')
+  })
+
+  it('prefers an image\'s own already-saved structural caption over the legacy shared block', () => {
+    // The legacy flat refImages[i].caption field (as written by an older
+    // round, before saveRefImageCaption moved to the role-keyed captions
+    // map) still wins over the even-older shared block via
+    // resolveRefCaption's fallback order — shown directly, no more parsing
+    // the old block for it, so this stays correct even if that block is
+    // stale or already corrupted.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character', caption: 'Already individually saved text.' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stale/corrupted shared block with no per-image structure at all',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('Already individually saved text.')
+    expect(out).not.toContain('a stale/corrupted shared block')
+  })
+
+  it('also displays a caption saved through the NEW role-keyed map (captions[role]), not just the legacy flat field', () => {
+    // App.jsx's saveRefImageCaption is shared between this card's own plain
+    // editor and the gallery's role-aware "🤖 Describe with AI" picker —
+    // since last round, both write into refImages[i].captions[roleId]
+    // instead of the legacy flat `caption` field. This card must resolve
+    // through the same shared resolver (resolveRefCaption, adapt.js) so a
+    // save made from EITHER surface is never shown as stale here — the
+    // regression this test guards against.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'subject_identity', captions: { subject_identity: 'Saved via the role-keyed map.' } },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stale/corrupted shared block with no per-image structure at all',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('Saved via the role-keyed map.')
+    expect(out).not.toContain('a stale/corrupted shared block')
+  })
+
+  it('never offers a "Describe with AI" button here — only the reuse-from-history gallery does', () => {
+    // This card shows an already-finished generation with its own already-
+    // baked prompt text; re-describing a reference here wouldn't
+    // retroactively rewrite that prompt, so the trigger is gallery-only
+    // (HistoryImageGallery.jsx) — only manual ✎ Edit lives on this card.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character', caption: 'Already has one.' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stored shared block, irrelevant once refImages carry their own caption',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).not.toContain('Describe with AI')
+    expect(out).toContain('✎ Edit')
   })
 })
 

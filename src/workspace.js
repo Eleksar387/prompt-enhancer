@@ -40,6 +40,9 @@ export const imgFromSnap = (v) => ((v && typeof v === 'object' && v.base64)
 export const refImagesToSnap = (list) => (list || []).map(im => ({
   base64: im.base64, mediaType: im.mediaType, fileName: im.fileName,
   role: im.role, preserve: im.preserve, note: im.note || '',
+  // The character-kind LoRA (if any) assigned directly on this reference's own
+  // card — see "Per-reference LoRA/voice binding" in MinimaxRefPanel.jsx.
+  loraId: im.loraId || null,
   hash: im.hash || imageHash(im.base64),
 }))
 
@@ -54,17 +57,38 @@ export const refImagesFromSnap = (list, newId) => (Array.isArray(list)
       role: im.role || MINIMAX_H3_REF_ROLES[0].id,
       preserve: im.preserve || 'strong',
       note: im.note || '',
+      loraId: im.loraId || null,
       hash: im.hash || imageHash(im.base64),
     }))
   : [])
 
-export const refAudioToSnap = (a) => (a
-  ? { base64: a.base64, mediaType: a.mediaType, fileName: a.fileName }
-  : null)
+// H3's audio input takes up to two voice-timbre samples (ref_audio_0 /
+// ref_audio_1), so this is an array (max 2), not a single object. Entries
+// saved before the second slot was wired up stored one bare object under
+// this same snapshot key — refAudiosFromSnap accepts either shape and
+// normalizes to an array, so an old entry restores as a one-item list.
+export const refAudiosToSnap = (list) => (list || []).map(a => ({
+  base64: a.base64, mediaType: a.mediaType, fileName: a.fileName,
+  // Manual mode's Audio→Subject binding — the linked reference image's
+  // content hash (stable across restore), not its volatile id. Absent for an
+  // AI-mode-only entry or one saved before this existed.
+  subjectRef: a.subjectRef || null,
+}))
 
-export const refAudioFromSnap = (a) => ((a && typeof a === 'object' && a.base64)
-  ? { base64: a.base64, mediaType: a.mediaType || 'audio/mpeg', fileName: a.fileName }
-  : null)
+// `newId` is injected (App passes generateId from db.js) so the restored list
+// gets stable React keys, the same as refImagesFromSnap; omit it and entries
+// come back without an `id` (fine for a pure round-trip assertion in tests).
+export const refAudiosFromSnap = (v, newId) => {
+  const list = Array.isArray(v) ? v : (v && typeof v === 'object' ? [v] : [])
+  return list
+    .filter(a => a && typeof a === 'object' && a.base64)
+    .map(a => ({
+      ...(newId ? { id: newId() } : {}),
+      base64: a.base64, mediaType: a.mediaType || 'audio/mpeg', fileName: a.fileName,
+      subjectRef: a.subjectRef || null,
+    }))
+    .slice(0, 2)
+}
 
 // ── the field table ────────────────────────────────────────────────────────
 // Each row: the snapshot key, the workspace key, and optionally
@@ -88,6 +112,10 @@ export const WORKSPACE_FIELDS = [
   { snap: 'style',       state: 'style' },
   { snap: 'creativity',  state: 'creativity' },
   { snap: 'frameMode',   state: 'frameMode' },
+  // "Write it yourself" — MiniMax H3's zero-AI manual assembly mode (src/manualH3.js).
+  // Meaningless for a non-H3 target but harmless to carry, same as activeLoraIds.
+  { snap: 'manualMode', state: 'manualMode', fallback: false,
+    from: v => v === true },
   { snap: 'negative',    state: 'negative',  fallback: '' },
   { snap: 'scene',       state: 'scene',     fallback: '' },
 
@@ -98,6 +126,13 @@ export const WORKSPACE_FIELDS = [
 
   { snap: 'loraIds', state: 'activeLoraIds', fallback: [],
     from: v => (Array.isArray(v) ? v : []) },
+  // Which named character each active *character*-kind LoRA's trigger belongs
+  // to, for a generation with more than one active at once — keyed by LoRA id,
+  // set in LoraPanel next to that LoRA's chip once it's toggled on. Mirrors the
+  // Scriptwriter's own cast→LoRA binding (there it's `c.lora` on a bible
+  // character; here there is no bible, so the name is typed directly).
+  { snap: 'loraSubjects', state: 'loraSubjects', fallback: {},
+    from: v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {} },
 
   { snap: 'firstImg', state: 'firstImg', to: w => imgToSnap(w.firstImg), from: imgFromSnap, fallback: null },
   { snap: 'midImg',   state: 'midImg',   to: w => imgToSnap(w.midImg),   from: imgFromSnap, fallback: null },
@@ -114,8 +149,8 @@ export const WORKSPACE_FIELDS = [
 
   { snap: 'refImages', state: 'refImages', when: hasRefs, empty: null, fallback: [],
     to: w => refImagesToSnap(w.refImages) },
-  { snap: 'refAudio', state: 'refAudio', when: hasRefs, empty: null, fallback: null,
-    to: w => refAudioToSnap(w.refAudio) },
+  { snap: 'refAudio', state: 'refAudios', when: hasRefs, empty: null, fallback: [],
+    to: w => refAudiosToSnap(w.refAudios) },
 ]
 
 // `refImages` needs an id generator, which a pure module cannot have — the caller
@@ -143,7 +178,7 @@ export function snapshotToWorkspace(snap, { newId } = {}) {
   for (const f of WORKSPACE_FIELDS) {
     const raw = snap[f.snap]
     if (f.snap === REF_IMAGES_FIELD) { out[f.state] = refImagesFromSnap(raw, newId); continue }
-    if (f.snap === 'refAudio') { out[f.state] = refAudioFromSnap(raw); continue }
+    if (f.snap === 'refAudio') { out[f.state] = refAudiosFromSnap(raw, newId); continue }
     if (f.from) { out[f.state] = f.from(raw, snap); continue }
     // A missing OR null value falls back, so an entry saved before the field
     // existed never puts null into a controlled input.

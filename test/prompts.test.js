@@ -29,7 +29,7 @@ import {
 } from '../src/constants.js'
 import {
   buildStylePart, buildAdaptUserText, buildWriterUserText, foldCaption, ADAPT_TARGETS,
-  audioFieldsPart, ratioLinePart,
+  audioFieldsPart, ratioLinePart, extractRefImageCaption,
 } from '../src/adapt.js'
 import { loraInstruction } from '../src/loras.js'
 
@@ -315,6 +315,10 @@ describe('foldCaption — caption scaffolding stripped per source frame mode', (
     'Image 2 — role: location, preservation: loose: An unlit room with a tall sash window.',
     'Audio 1 — voice-timbre reference: a low, breathy alto.',
   ].join('\n')
+  // H3's audio input takes up to two voice-timbre samples — folding must not
+  // emit one "Voice:" line per Audio N (that would read as two separate notes
+  // for what's really one instruction).
+  const REF_TWO_AUDIO = REF + '\nAudio 2 — voice-timbre reference: a higher, clipped tenor.'
 
   const cases = {
     'single': [SINGLE, 'single', {}],
@@ -322,11 +326,41 @@ describe('foldCaption — caption scaffolding stripped per source frame mode', (
     'firstmidlast': [FIRSTMIDLAST, 'firstmidlast', {}],
     'ref · no dialogue (audio line dropped)': [REF, 'ref', {}],
     'ref · with dialogue (voice line kept)': [REF, 'ref', { hasDialogue: true }],
+    'ref · two audio references, with dialogue (deduped to one voice line)': [REF_TWO_AUDIO, 'ref', { hasDialogue: true }],
     'empty': ['', 'single', {}],
   }
   for (const [name, [caption, mode, opts]] of Object.entries(cases)) {
     it(name, () => { expect(foldCaption(caption, mode, opts)).toMatchSnapshot() })
   }
+})
+
+describe('extractRefImageCaption — legacy per-reference read fallback for the History gallery', () => {
+  // The exact shape captionImages() (src/App.jsx) builds for ref mode: one
+  // "Image N — role: X, preservation: Y (marker): <caption>" line per
+  // reference, an indented note continuation on some, and Audio N lines after.
+  // READ-ONLY now — saving a reference image's caption always writes
+  // directly to refImages[i].caption (App.jsx's saveRefImageCaption) instead
+  // of splicing back into this block; this function only supplies the
+  // starting text for an image that hasn't been individually saved yet.
+  const BLOCK = [
+    'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman in her thirties, dark hair.',
+    '   Requested use of this reference: keep the face exact.',
+    'Image 2 — role: Wardrobe / Clothing, preservation: Strong (partially_preserved): A red wool coat, double-breasted.',
+    'Image 3 — role: Location, preservation: Guide (attribute_transfer): An unlit room with a tall sash window.',
+    'Audio 1 — voice-timbre reference (marker: reference): file "voice.mp3". Reference ONLY the timbre.',
+  ].join('\n')
+
+  it('extracts only the named image\'s own caption text', () => {
+    expect(extractRefImageCaption(BLOCK, 1)).toBe('A woman in her thirties, dark hair.')
+    expect(extractRefImageCaption(BLOCK, 2)).toBe('A red wool coat, double-breasted.')
+    expect(extractRefImageCaption(BLOCK, 3)).toBe('An unlit room with a tall sash window.')
+  })
+
+  it('returns null for an image index that has no line in the block', () => {
+    expect(extractRefImageCaption(BLOCK, 4)).toBeNull()
+    expect(extractRefImageCaption('', 1)).toBeNull()
+    expect(extractRefImageCaption('plain prose, not a ref block', 1)).toBeNull()
+  })
 })
 
 describe('spokenLanguageDirective', () => {
