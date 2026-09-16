@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
-import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash } from '../utils'
-import { hasDragImage, takeDragImage } from '../imageDrag'
+import { useState, useRef, useEffect, memo } from 'react'
+import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash, shrinkToJpeg } from '../utils'
+import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
 
-export default function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
+function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
   const [image, setImage]           = useState(null)
   const [targetRes, setTargetRes]   = useState(presets[1] ? presets[1].id : presets[0].id)
   const [cropOpen, setCropOpen]     = useState(false)
@@ -17,20 +17,10 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
     const reader = new FileReader()
     reader.onload = (e) => {
       const img = new Image()
-      img.onload = () => {
+      img.onload = async () => {
         const nativeW = img.naturalWidth, nativeH = img.naturalHeight
-        const MAX = 1536
-        let w = img.width, h = img.height
-        if (w > MAX || h > MAX) {
-          if (w >= h) { h = Math.round(h * MAX / w); w = MAX }
-          else { w = Math.round(w * MAX / h); h = MAX }
-        }
-        const canvas = document.createElement('canvas')
-        canvas.width = w; canvas.height = h
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
-        let dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-        if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
-        const base64 = dataUrl.split(',')[1]
+        const { base64 } = await shrinkToJpeg(img, 1536, 0.85)
+        const dataUrl = `data:image/jpeg;base64,${base64}`
         const obj = {
           base64, mediaType: 'image/jpeg',
           previewUrl: dataUrl, originalUrl: e.target.result,
@@ -75,7 +65,7 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
   const onFileChange = (e) => loadFile(e.target.files[0])
   const onDrop = (e) => {
     e.preventDefault(); setDragOver(false)
-    if (hasDragImage(e.dataTransfer)) { const d = takeDragImage(); if (d) loadFromData(d); return }
+    if (hasDragImage(e.dataTransfer)) { const d = takeDragImage(); if (d) resolveDragImage(d).then(r => r && loadFromData(r)).catch(() => {}); return }
     const f = e.dataTransfer.files[0]
     if (f?.type.startsWith('image/')) loadFile(f)
   }
@@ -282,3 +272,9 @@ export default function ImagePanel({ label, hint, onChange, presets, showTwoStag
     </div>
   )
 }
+
+// Memoized: every prop App passes is stable across renders (a useState setter,
+// a resolution table from constants.js, a string, or the seed object that only
+// changes when a history thumbnail is picked), so this panel — which holds a
+// decoded preview and does canvas work — stops re-rendering on unrelated state.
+export default memo(ImagePanel)

@@ -2,6 +2,10 @@ node_modules/
 dist/
 .env
 .env.local
+# local history DB (default lives at ~/.prompt-enhancer-data, outside the repo —
+# but ignore an in-repo copy too if PE_DATA_DIR is pointed here)
+data/
+.prompt-enhancer-data/
 *Zone.Identifier
 .claude/skills/*/screenshots/
 prompt-enhancer-history-RECOVERED*.json

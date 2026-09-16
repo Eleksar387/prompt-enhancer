@@ -97,6 +97,7 @@ tmux capture-pane -t app -p
 | `wait-for <selector>` | wait for any Playwright selector (CSS, `xpath=`, `text=`) |
 | `click <selector>` | click an element |
 | `fill <selector> <text...>` | fill an input/textarea |
+| `setfiles <selector> <path>` | set files on an `<input type=file>` (may be hidden; comma-separate for multiple) |
 | `press <key>` | keyboard key, e.g. `Enter` |
 | `value <selector>` | print `inputValue()` of a field |
 | `text <selector>` | print `innerText()` of an element |

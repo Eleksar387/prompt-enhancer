@@ -1,7 +1,10 @@
-import { CAMERA_GROUPS } from './constants'
+import { CAMERA_GROUPS, spokenLangDef } from './constants'
 
 // public-domain cyrb53 (Bryc) — fast 53-bit non-crypto string hash, base-36 out.
 // Used only for cache keys, never security.
+// NOTE: cyrb53 + imageHash are copied byte-identical into `server/hash.mjs` (the
+// sidecar keys blob files by imageHash(base64)). Keep the two in sync or blob
+// dedupe and the vision-caption cache silently break.
 export function cyrb53(str, seed = 0) {
   let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed
   for (let i = 0; i < str.length; i++) {
@@ -27,6 +30,74 @@ export function visionCacheKey(model, system, content) {
   const parts = content.map(b =>
     b.type === 'text' ? `t:${cyrb53(b.text || '')}` : `i:${imageHash(b.source.data)}`)
   return `v2|t0.3|${model}|s:${cyrb53(system || '')}|${parts.join('|')}`
+}
+
+// Run `fn(item, i)` over `items` with at most `limit` promises in flight at
+// once, keeping results in input order. Rejects on the first error, like
+// Promise.all. `limit <= 1` runs everything strictly sequentially — needed for
+// vision calls against a local Ollama, whose parallel slots cross-contaminate
+// concurrent multimodal (image) requests so two references get a blended
+// description. Cloud providers handle concurrent requests independently, so the
+// caller passes a higher limit for those.
+export async function mapWithConcurrency(items, limit, fn) {
+  const list = items || []
+  const results = new Array(list.length)
+  const workers = Math.max(1, Math.min(limit || 1, list.length))
+  let next = 0
+  const run = async () => {
+    while (next < list.length) {
+      const i = next++
+      results[i] = await fn(list[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, run))
+  return results
+}
+
+// Fetch a blob URL (e.g. the sidecar's /api/blob/<hash>) and return just its
+// base64 payload — the shape the image panels / vision / ComfyUI paths expect.
+// History rows no longer carry image bytes inline, so drag/pick from the history
+// gallery resolves them on demand through here.
+export function blobUrlToBase64(url) {
+  return fetch(url)
+    .then((r) => { if (!r.ok) throw new Error(`blob fetch ${r.status}`); return r.blob() })
+    .then((blob) => new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(String(fr.result).split(',')[1] || '')
+      fr.onerror = () => reject(fr.error || new Error('read failed'))
+      fr.readAsDataURL(blob)
+    }))
+}
+
+// Re-encode an image to a bounded-size JPEG via canvas. `src` may be a Blob, a
+// data/object URL string, or an already-loaded HTMLImageElement. Clamps the
+// longest edge to `maxPx`, encodes at `quality`, and drops to 0.7 if the result
+// is still over ~4 MB. Resolves { base64, mediaType, width, height }.
+export function shrinkToJpeg(src, maxPx = 1536, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const encode = (img, revokeUrl) => {
+      try {
+        let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height
+        if (w > maxPx || h > maxPx) {
+          if (w >= h) { h = Math.round(h * maxPx / w); w = maxPx }
+          else { w = Math.round(w * maxPx / h); h = maxPx }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+        let dataUrl = canvas.toDataURL('image/jpeg', quality)
+        if (dataUrl.length * 0.75 > 4 * 1024 * 1024) dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+        resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg', width: w, height: h })
+      } catch (e) { reject(e) }
+      finally { if (revokeUrl) URL.revokeObjectURL(revokeUrl) }
+    }
+    if (src instanceof HTMLImageElement && src.complete) return encode(src, null)
+    const objUrl = src instanceof Blob ? URL.createObjectURL(src) : src
+    const img = new Image()
+    img.onload = () => encode(img, src instanceof Blob ? objUrl : null)
+    img.onerror = () => { if (src instanceof Blob) URL.revokeObjectURL(objUrl); reject(new Error('Image failed to decode')) }
+    img.src = objUrl
+  })
 }
 
 export const presetById = (id, presets) => presets.find(p => p.id === id)
@@ -127,16 +198,26 @@ export function looksGerman(text) {
 // Practical speech-time budget for spoken dialogue in a video-generation prompt.
 // Natural human speech runs ~4-6+ syllables/sec, but video models need slack for
 // pacing buffers (lead-in, reaction beats, mouth-shape transitions) — recommended
-// budget is ~2.5-3.0 syll/s for English, ~2.0-2.5 syll/s for German (longer
-// compound words need fewer syllables to say the same thing). Usable speech time
-// assumes ~1.5s of a clip goes to pre/post-roll, not spoken words.
-export function syllableBudget(durationValue, text) {
+// budget per language lives in SPOKEN_LANGUAGES (`sps`) — roughly 2.5-3.0 syll/s
+// for English, 2.0-2.5 for German (longer compound words need fewer syllables to
+// say the same thing). Usable speech time assumes ~1.5s of a clip goes to
+// pre/post-roll, not spoken words.
+//
+// `langId` is the user's explicit spoken-language pick and wins when given; with
+// no pick we fall back to guessing from the text, which is what every caller did
+// before the picker existed. When the picked language differs from the language
+// the text is written in, the count is only indicative — the writer translates
+// the line before it is spoken.
+export function syllableBudget(durationValue, text, langId = null) {
   const m = String(durationValue || '').match(/(\d+(?:\.\d+)?)\s*seconds?/)
   const seconds = m ? parseFloat(m[1]) : null
-  const german = looksGerman(text)
-  const [spsLo, spsHi] = german ? [2.0, 2.5] : [2.5, 3.0]
+  const def = langId ? spokenLangDef(langId) : null
+  const german = def ? def.id === 'de' : looksGerman(text)
+  const [spsLo, spsHi] = def ? def.sps : (german ? [2.0, 2.5] : [2.5, 3.0])
+  const langLabel = def ? def.label : (german ? 'German' : 'English')
   const count = estimateSyllables(text)
-  if (seconds == null) return { count, seconds: null, german, spsLo, spsHi, min: null, max: null }
+  const base = { count, german, langLabel, spsLo, spsHi }
+  if (seconds == null) return { ...base, seconds: null, min: null, max: null }
   const usable = Math.max(0, seconds - 1.5)
-  return { count, seconds, german, spsLo, spsHi, min: Math.round(usable * spsLo), max: Math.round(usable * spsHi) }
+  return { ...base, seconds, min: Math.round(usable * spsLo), max: Math.round(usable * spsHi) }
 }

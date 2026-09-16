@@ -7,21 +7,14 @@
 //    with, and the input/ filenames of those images) to the Prompt Enhancer
 //    Bridge custom node pack, so a workflow can read it without copy-paste.
 
+import { makeLocalStore } from './localStore'
+
 export const COMFY_CFG_KEY = 'prompt-enhancer-comfy-config'
 export const DEFAULT_COMFY_CFG = { url: 'http://127.0.0.1:8188', slot: 'default' }
 
-export function loadComfyCfg() {
-  let saved = {}
-  try {
-    const raw = localStorage.getItem(COMFY_CFG_KEY)
-    if (raw) saved = JSON.parse(raw)
-  } catch {}
-  return { ...DEFAULT_COMFY_CFG, ...saved }
-}
-
-export function saveComfyCfg(cfg) {
-  try { localStorage.setItem(COMFY_CFG_KEY, JSON.stringify(cfg)) } catch {}
-}
+const comfyStore = makeLocalStore(COMFY_CFG_KEY, { defaults: DEFAULT_COMFY_CFG })
+export const loadComfyCfg = comfyStore.load
+export const saveComfyCfg = comfyStore.save
 
 export async function uploadImage(base64, fileName, mediaType, comfyUrl) {
   const base = (comfyUrl || '').replace(/\/+$/, '')
@@ -78,4 +71,73 @@ export async function sendShot(shot, comfyUrl, slot) {
     throw new Error(`ComfyUI push failed: ${msg}`)
   }
   return res.json()
+}
+
+// --- reading generated images back out of ComfyUI ---------------------------
+//
+// ComfyUI has no notion of "the image for shot 3, first frame" — the app pushes
+// a prompt into a slot, the user renders it, and these helpers let the user pick
+// the result out of ComfyUI's own recent-output history and attach it by hand.
+
+// Build a /view URL for one output-image descriptor from a /history entry.
+export function comfyViewUrl(comfyUrl, { filename, subfolder = '', type = 'output' }) {
+  const base = (comfyUrl || '').replace(/\/+$/, '')
+  const qs = new URLSearchParams({ filename, subfolder: subfolder || '', type: type || 'output' })
+  return `${base}/view?${qs.toString()}`
+}
+
+// GET /history → a newest-first flat list of the images each run produced:
+//   [{ filename, subfolder, type, promptId, nodeId, ts, viewUrl }]
+// `type` is 'output' (SaveImage) or 'temp' (PreviewImage — purged on restart).
+// Runs that errored are skipped unless `onlySuccess` is false.
+export async function fetchComfyOutputs(comfyUrl, { max = 24, onlySuccess = true } = {}) {
+  const base = (comfyUrl || '').replace(/\/+$/, '')
+  let res
+  try {
+    res = await fetch(`${base}/history?max_items=${max}`)
+  } catch (e) {
+    throw new Error(`Network error reaching ComfyUI at ${base}. Is it running, and started with --enable-cors-header? (${e.message})`)
+  }
+  if (!res.ok) throw new Error(`ComfyUI history fetch failed: HTTP ${res.status}`)
+  const hist = await res.json()
+
+  // /history returns runs in execution order (oldest first). Prefer the real
+  // timestamp off status.messages when present, fall back to position.
+  const rows = Object.entries(hist).map(([promptId, run], idx) => {
+    let ts = idx
+    for (const m of run?.status?.messages || []) {
+      if (Array.isArray(m) && m[1] && typeof m[1].timestamp === 'number') ts = m[1].timestamp
+    }
+    return { promptId, run, ts }
+  })
+  rows.sort((a, b) => b.ts - a.ts)
+
+  const out = []
+  for (const { promptId, run, ts } of rows) {
+    if (onlySuccess && run?.status?.status_str && run.status.status_str !== 'success') continue
+    for (const [nodeId, node] of Object.entries(run?.outputs || {})) {
+      for (const img of node?.images || []) {
+        if (img.type !== 'output' && img.type !== 'temp') continue
+        out.push({
+          filename: img.filename, subfolder: img.subfolder || '', type: img.type,
+          promptId, nodeId, ts, viewUrl: comfyViewUrl(base, img),
+        })
+      }
+    }
+  }
+  return out.slice(0, max)
+}
+
+// Fetch one output image as a Blob so the caller can re-encode it. Needs
+// --enable-cors-header (a bare <img src> for previews does not).
+export async function fetchComfyImageBlob(viewUrl) {
+  let res
+  try {
+    res = await fetch(viewUrl)
+  } catch (e) {
+    throw new Error(`Network error fetching the image from ComfyUI (${e.message}). Started with --enable-cors-header?`)
+  }
+  if (res.status === 404) throw new Error('ComfyUI returned 404 for that image — it may have been cleared. Refresh the list.')
+  if (!res.ok) throw new Error(`ComfyUI image fetch failed: HTTP ${res.status}`)
+  return res.blob()
 }

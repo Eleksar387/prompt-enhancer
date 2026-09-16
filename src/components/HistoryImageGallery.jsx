@@ -1,38 +1,75 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { MINIMAX_H3_REF_ROLES } from '../constants'
-import { DRAG_MIME, setDragImage } from '../imageDrag'
+import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
+import { MINIMAX_H3_REF_ROLES, ROLE_NONE, roleIcon } from '../constants'
+import { resolveRefCaption } from '../adapt'
+import { DRAG_MIME, setDragImage, resolveDragImage } from '../imageDrag'
 
-const roleLabel = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id
+const roleLabel = (id) => (!id || id === ROLE_NONE) ? 'No role assigned' : (MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id)
 
 const CAP = 60  // most thumbnails to render at once
 
-// Cheap dedupe key — avoids holding a second reference to every multi-MB base64
-// string as a Map key. Length + head + tail + filename is unique enough for our
-// inputs (all normalised to <=1536px JPEG on load).
-const keyOf = (b, fileName) => `${fileName || ''}|${b.length}|${b.slice(0, 64)}|${b.slice(-64)}`
+// Dedupe key. History rows now carry the content hash (imageHash of the bytes)
+// on every image node, so that IS the key; fall back to blobRef / url / filename
+// for anything unhashed.
+const keyOf = (im, url) => im.hash || im.blobRef || url || im.fileName || Math.random().toString(36)
+
+// Which frame(s) the entry's `caption` string actually covers, for the label on
+// the description panel. Input images in first/last/mid+last modes share one
+// combined caption; ref mode shares one assembled block.
+const captionScope = (frameMode, slot) => {
+  if (slot === 'render') return 'render'
+  if (slot === 'ref') return 'ref'
+  if (frameMode === 'firstlast' || frameMode === 'firstmidlast') return 'multi'
+  return 'single'
+}
 
 // Walk every history entry and collect the unique images it stored — both the
 // input images (first/mid/last/ref frames) and any Grok-rendered output images
 // (`outputs[].images[]`, which key their bytes under `b64`). Returns
 // { images (newest-first), stats } — stats drives the DEV diagnostic and the
 // empty-state copy. Legacy entries that stored only a filename string never pass
-// the base64 gate, so they are silently skipped.
-function collectImages(history) {
+// the base64 gate, so they are silently skipped. Each collected image also
+// carries the vision description from the newest generation that used it
+// (`caption` + `captionScope`/`entryId` so it can be read and edited in place).
+export function collectImages(history) {
   const byKey = new Map()
   const stats = { entries: (history || []).length, rawFields: 0, objWithBase64: 0, collected: 0 }
-  const consider = (im, ts, slot) => {
-    if (im == null) return
+  const consider = (im, ts, slot, ctx) => {
+    if (im == null || typeof im !== 'object') return
     stats.rawFields++
-    const b64 = typeof im === 'object' ? (im.base64 || im.b64) : null
-    if (!b64) return
+    const url = im.url || null   // sidecar blob URL; history rows carry no bytes
+    if (!url) return
     stats.objWithBase64++
-    const key = keyOf(b64, im.fileName)
+    const key = keyOf(im, url)
     const prev = byKey.get(key)
     if (prev && prev.ts >= ts) { prev.uses++; return }
     const isRender = slot === 'render'
+    // A ref-mode entry's caption used to be ONE block covering every
+    // reference image (see adapt.js's REF_IMAGE_LINE_RE comment), then a
+    // single structural im.caption field, and is now a role-keyed map
+    // (im.captions — "🤖 Describe with AI" can describe the same image under
+    // several different roles, each kept separately). `resolveRefCaption`
+    // (adapt.js) is the one shared place that knows the full fallback order
+    // (structural map → legacy flat `caption` → legacy shared-block
+    // extraction) — used here for the image's OWN assigned role only; every
+    // other role's text, if any, comes straight from im.captions. Saving
+    // always goes through onSaveRefImageCaption (a plain array-index +
+    // map-key write — see ImageInfoPanel.save() below), never back through
+    // the shared block or the flat field, so a failed/empty resolution here
+    // can only ever produce an empty starting field, never lost or
+    // cross-wired data.
+    const refImageIndex = slot === 'ref' && ctx.refIndex != null ? ctx.refIndex + 1 : null
+    const ownRoleKey = im.role || ROLE_NONE
+    const captions = (!isRender && refImageIndex != null) ? { ...(im.captions || {}) } : {}
+    if (refImageIndex != null && captions[ownRoleKey] == null) {
+      const legacy = resolveRefCaption(im, ownRoleKey, ctx.caption, refImageIndex)
+      if (legacy) captions[ownRoleKey] = legacy
+    }
+    const caption = isRender ? (im.revisedPrompt || '')
+      : refImageIndex != null ? (captions[ownRoleKey] || '')
+      : (ctx.caption || '')
     byKey.set(key, {
       key,
-      base64: b64,
+      url,
       mediaType: im.mediaType || 'image/jpeg',
       fileName: im.fileName || (isRender ? `grok-render.${(im.mediaType || 'image/png').split('/')[1] || 'png'}` : 'image.jpg'),
       hash: im.hash || null,
@@ -40,19 +77,38 @@ function collectImages(history) {
       note: im.note || '',
       render: isRender ? (im.upscaled ? '🎨 2K' : '🎨') : null,
       slot,
+      // Description shown/edited in the info panel, for the image's OWN
+      // assigned role (this is what onPick still forwards — alternate-role
+      // descriptions are browse/edit-only in this panel for now, not yet
+      // selectable at pick time). Renders use the model's revised prompt
+      // (read-only).
+      caption,
+      // Every role this image has ever been described under, role id →
+      // text — ref-slot images only. Powers the multi-role rows + the
+      // "describe as another role" icon picker in ImageInfoPanel.
+      captions,
+      // 'ref-item' means "this image's position within its entry is known" —
+      // it must NOT depend on whether a caption already has text (that's
+      // just which VALUE to display, decided above). Gating scope on
+      // "already described" was a real regression once (see git history) —
+      // every ref-slot image with a known index is 'ref-item', full stop.
+      captionScope: refImageIndex != null ? 'ref-item' : captionScope(ctx.frameMode, slot),
+      refImageIndex,
+      entryId: ctx.entryId || null,
       ts,
       uses: prev ? prev.uses + 1 : 1,
     })
   }
   for (const h of history || []) {
     const ts = h.ts || 0
-    consider(h.firstImg, ts, 'first')
-    consider(h.midImg, ts, 'mid')
-    consider(h.lastImg, ts, 'last')
-    if (Array.isArray(h.refImages)) h.refImages.forEach(im => consider(im, ts, 'ref'))
+    const ctx = { caption: h.caption || '', frameMode: h.frameMode, entryId: h.id || null }
+    consider(h.firstImg, ts, 'first', ctx)
+    consider(h.midImg, ts, 'mid', ctx)
+    consider(h.lastImg, ts, 'last', ctx)
+    if (Array.isArray(h.refImages)) h.refImages.forEach((im, idx) => consider(im, ts, 'ref', { ...ctx, refIndex: idx }))
     if (Array.isArray(h.outputs)) {
       for (const o of h.outputs) {
-        if (o && Array.isArray(o.images)) o.images.forEach(im => consider(im, ts, 'render'))
+        if (o && Array.isArray(o.images)) o.images.forEach(im => consider(im, ts, 'render', ctx))
       }
     }
   }
@@ -60,8 +116,310 @@ function collectImages(history) {
   return { images: [...byKey.values()].sort((a, b) => b.ts - a.ts), stats }
 }
 
-export default function HistoryImageGallery({ history, onPick, pickHint }) {
+const SCOPE_LABEL = {
+  single: 'Vision description of this image',
+  multi: 'Vision description (covers all frames of that generation)',
+  ref: 'Vision description (covers all reference images of that generation)',
+  'ref-item': 'Vision description of this reference image',
+  render: 'Revised prompt (from the image model)',
+}
+
+// Sentinel editingRole value for the non-ref-item flat editor (no role
+// concept applies to a single/multi frame or a render) — never collides
+// with a real MINIMAX_H3_REF_ROLES id or ROLE_NONE.
+const FLAT_ROLE = 'flat'
+
+// Read + edit one collected image's stored description(s). A ref-slot image
+// can carry more than one — one per role it's ever been described under
+// (img.captions, role id → text) — rendered as a stack of rows: the image's
+// own assigned role first (always shown, even empty), then any other role
+// with stored text, then a compact icon row to describe this SAME image
+// under a role it hasn't been described under yet. Every other slot
+// (single/multi frame, render) keeps the original single flat caption —
+// there's no role concept for those.
+function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage, onClose }) {
+  const isRefItem = img.captionScope === 'ref-item' && img.refImageIndex != null
+  const canEdit = img.slot !== 'render' && !!img.entryId && (isRefItem ? !!onSaveRefImageCaption : !!onSaveCaption)
+  const canDescribe = isRefItem && !!onDescribeRefImage
+
+  const ownRoleKey = img.role || ROLE_NONE
+
+  const [editingRole, setEditingRole] = useState(null)   // role id (or FLAT_ROLE) being edited, or null
+  const [draft, setDraft] = useState('')
+  const [flashRole, setFlashRole] = useState(null)
+  const [saveError, setSaveError] = useState(false)
+  const [describingRole, setDescribingRole] = useState(null)
+  const [describeError, setDescribeError] = useState('')
+  const [describeErrorRole, setDescribeErrorRole] = useState(null)
+  useEffect(() => {
+    setEditingRole(null); setDraft(''); setFlashRole(null); setSaveError(false)
+    setDescribingRole(null); setDescribeError(''); setDescribeErrorRole(null)
+  }, [img.key])
+
+  // Own role first, then any role with an already-SAVED description, PLUS —
+  // this is the fix for a real bug — the role currently being edited even
+  // when it has no saved description yet: clicking a picker icon for a
+  // brand-new role runs describe() and sets editingRole/draft on success,
+  // but without this, that role has no row to render its textarea into —
+  // the state changes with no visible effect ("nothing happens").
+  const shownRoles = isRefItem
+    ? [ownRoleKey, ...MINIMAX_H3_REF_ROLES.map(r => r.id).filter(id => id !== ownRoleKey && (img.captions?.[id] || id === editingRole))]
+    : []
+  const pickableRoles = isRefItem ? MINIMAX_H3_REF_ROLES.filter(r => !shownRoles.includes(r.id)) : []
+
+  const startEdit = (roleId) => {
+    setDraft(roleId === FLAT_ROLE ? img.caption : (img.captions?.[roleId] || ''))
+    setEditingRole(roleId)
+    setSaveError(false)
+  }
+
+  const save = async (roleId) => {
+    setSaveError(false)
+    try {
+      // A real role writes THIS image's own captions[roleId] directly (a
+      // plain array-index + map-key update — App.jsx's saveRefImageCaption)
+      // instead of the old whole-block save, so it can never touch or be
+      // silently dropped by another reference's line — or another role's
+      // description on this same image — in the same entry.
+      if (roleId === FLAT_ROLE) await onSaveCaption(img.entryId, draft)
+      else await onSaveRefImageCaption(img.entryId, img.refImageIndex - 1, draft, roleId)
+      setEditingRole(null)
+      setFlashRole(roleId)
+      setTimeout(() => setFlashRole(null), 1800)
+    } catch {
+      setSaveError(true)
+    }
+  }
+
+  // Runs the vision model fresh for ONE role and drops the result into the
+  // SAME edit/Save flow as typing it by hand — it does not save on its own,
+  // so an AI description the user doesn't like is one Cancel away from
+  // being discarded rather than silently overwriting the stored one.
+  const describe = async (roleId) => {
+    setDescribeError(''); setDescribeErrorRole(null)
+    setDescribingRole(roleId)
+    try {
+      const text = await onDescribeRefImage(img.entryId, img.refImageIndex - 1, roleId)
+      setDraft(text)
+      setEditingRole(roleId)
+    } catch (e) {
+      setDescribeError(e?.message || 'Description failed.')
+      setDescribeErrorRole(roleId)
+    } finally {
+      setDescribingRole(null)
+    }
+  }
+
+  const errorNote = (roleId) => describeErrorRole === roleId && describeError
+    ? <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 4 }}>✗ {describeError}</div> : null
+
+  return (
+    <div style={{ marginTop: 10, background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+        <img
+          src={img.url}
+          alt={img.fileName}
+          loading="lazy"
+          decoding="async"
+          style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 5, border: '1px solid var(--pe-line)', flexShrink: 0 }}
+        />
+        <span style={{ minWidth: 0, flex: 1, fontSize: 11.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.4px', lineHeight: 1.35 }}>
+          {SCOPE_LABEL[img.captionScope] || 'Description'}
+        </span>
+        <button onClick={onClose} style={{ fontSize: 12, color: 'var(--pe-ink-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0 }}>✕</button>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', marginBottom: 6 }}>
+        {new Date(img.ts).toLocaleString()}{img.uses > 1 ? ` · used ${img.uses}× (most recent shown)` : ''}
+      </div>
+
+      {isRefItem ? (
+        <>
+          {shownRoles.map(roleId => {
+            const editing = editingRole === roleId
+            const text = img.captions?.[roleId] || ''
+            const describing = describingRole === roleId
+            return (
+              <div key={roleId} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--pe-line)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 14 }} title={roleLabel(roleId)}>{roleIcon(roleId)}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--pe-ink-2)' }}>{roleLabel(roleId)}</span>
+                  {flashRole === roleId && <span style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)' }}>· ✓ saved</span>}
+                </div>
+                {editing ? (
+                  <>
+                    <textarea
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      spellCheck={false}
+                      rows={Math.min(16, Math.max(4, draft.split('\n').length + 1))}
+                      style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.55, color: 'var(--pe-ink-2)', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '6px 8px', fontFamily: 'inherit', resize: 'vertical' }}
+                    />
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                      <button onClick={() => save(roleId)} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 10px', cursor: 'pointer' }}>Save</button>
+                      <button onClick={() => setEditingRole(null)} style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Cancel</button>
+                      {canDescribe && (
+                        <button onClick={() => describe(roleId)} disabled={describing} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: describing ? 'wait' : 'pointer', opacity: describing ? 0.6 : 1 }}>
+                          {describing ? '🤖 Describing…' : '🤖 Re-describe with AI'}
+                        </button>
+                      )}
+                    </div>
+                    {saveError && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 4 }}>✗ Save failed — the history server may be unreachable. Your edit is still here; try again.</div>}
+                    {errorNote(roleId)}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, color: text ? 'var(--pe-ink-2)' : 'var(--pe-ink-3)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                      {text || 'Not described yet.'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                      {canEdit && (
+                        <button onClick={() => startEdit(roleId)}
+                          style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>
+                          ✎ Edit
+                        </button>
+                      )}
+                      {canDescribe && (
+                        <button onClick={() => describe(roleId)} disabled={describing}
+                          style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: describing ? 'wait' : 'pointer', opacity: describing ? 0.6 : 1 }}>
+                          {describing ? '🤖 Describing…' : (text ? '🤖 Re-describe with AI' : '🤖 Describe with AI')}
+                        </button>
+                      )}
+                    </div>
+                    {errorNote(roleId)}
+                  </>
+                )}
+              </div>
+            )
+          })}
+          {canDescribe && pickableRoles.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', marginBottom: 4 }}>Describe this same image for another role:</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {pickableRoles.map(r => (
+                  <button key={r.id} onClick={() => describe(r.id)} disabled={describingRole === r.id}
+                    title={`Describe as ${r.label}`}
+                    style={{ fontSize: 15, lineHeight: 1, width: 28, height: 28, borderRadius: 6, border: '1px solid var(--pe-line)', background: 'var(--pe-rail)', cursor: describingRole === r.id ? 'wait' : 'pointer', opacity: describingRole === r.id ? 0.6 : 1 }}>
+                    {describingRole === r.id ? '…' : r.icon}
+                  </button>
+                ))}
+              </div>
+              {errorNote(describeErrorRole)}
+            </div>
+          )}
+        </>
+      ) : editingRole === FLAT_ROLE ? (
+        <>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            spellCheck={false}
+            rows={Math.min(16, Math.max(5, draft.split('\n').length + 1))}
+            style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.55, color: 'var(--pe-ink-2)', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '6px 8px', fontFamily: 'inherit', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+            <button onClick={() => save(FLAT_ROLE)} style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 10px', cursor: 'pointer' }}>Save</button>
+            <button onClick={() => setEditingRole(null)} style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>Cancel</button>
+          </div>
+          {saveError && <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 4 }}>✗ Save failed — the history server may be unreachable. Your edit is still here; try again.</div>}
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: img.caption ? 'var(--pe-ink-2)' : 'var(--pe-ink-3)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+            {img.caption || (img.slot === 'render'
+              ? 'No revised prompt was stored for this render.'
+              : 'No vision description was stored — this image was used in a text-only or pre-vision generation.')}
+          </div>
+          {canEdit && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <button onClick={() => startEdit(FLAT_ROLE)}
+                style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>
+                ✎ Edit description
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// One thumbnail. Memoized because the grid renders up to CAP of them and the
+// only thing that changes per keystroke elsewhere in the app is nothing at all —
+// `img` comes from a memoized collectImages() and every callback is stable, so a
+// tile re-renders only when it is the one whose info panel opened or closed.
+const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart }) {
+  const pick = onPick ? async () => {
+    const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
+    if (!resolved) return
+    onPick({
+      ...resolved,
+      // Only a per-reference caption/role carries meaning to another
+      // reference slot; a frame/render description does not. `captions`
+      // (the full role→text map) travels too — MinimaxRefPanel's Role
+      // dropdown uses it to mark which roles are already described for
+      // THIS image, and the same content-addressed vision cache that
+      // populated it means picking the matching role at generation time
+      // reuses that exact description instead of a fresh vision call.
+      caption: img.slot === 'ref' ? img.caption : '',
+      role: img.slot === 'ref' ? img.role : null,
+      note: img.slot === 'ref' ? img.note : '',
+      captions: img.slot === 'ref' ? img.captions : {},
+    })
+  } : undefined
+
+  // Every role this image has actually been described under (img.captions,
+  // populated by consider() — see above), not just its own originally
+  // assigned role — so adding an alternate-role description via the info
+  // panel's picker shows up here too instead of the badge staying frozen on
+  // whatever it was at creation. No question-mark fallback: an image with
+  // no description at all simply gets no badge, rather than a permanent
+  // "no role" placeholder.
+  const describedRoles = img.slot === 'ref' ? MINIMAX_H3_REF_ROLES.filter(r => img.captions?.[r.id]) : []
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => onDragStart(e, img)}
+      onClick={pick}
+      title={`${img.fileName}${img.render ? ' · Grok render' : ''}${describedRoles.length ? ` · ${describedRoles.map(r => `${r.icon} ${r.label}`).join(', ')}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
+      style={{
+        position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
+        border: `1px solid ${selected ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+        outline: selected ? '2px solid var(--pe-accent-line)' : 'none',
+        background: 'var(--pe-surface)',
+        cursor: onPick ? 'pointer' : 'grab',
+      }}
+    >
+      <img
+        src={img.url}
+        alt={img.fileName}
+        draggable={false}
+        loading="lazy"
+        decoding="async"
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }}
+      />
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggleInfo(img.key) }}
+        title="Read / edit the vision description"
+        style={{
+          position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: '50%',
+          border: 'none', cursor: 'pointer', fontSize: 12, fontStyle: 'italic', fontWeight: 700,
+          fontFamily: 'Georgia, "Times New Roman", serif', lineHeight: '18px',
+          padding: 0, textAlign: 'center', background: selected ? 'var(--pe-accent-ink)' : 'rgba(8,8,16,0.72)', color: '#fff',
+        }}
+      >i</button>
+      {(describedRoles.length > 0 || img.render) && (
+        <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 11, lineHeight: '16px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {img.render || describedRoles.map(r => r.icon).join(' ')}
+        </span>
+      )}
+    </div>
+  )
+})
+
+function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage }) {
   const [open, setOpen] = useState(false)
+  const [infoFor, setInfoFor] = useState(null)  // img.key of the open info panel
   const touchedRef = useRef(false)
   const { images, stats } = useMemo(() => collectImages(history), [history])
 
@@ -78,21 +436,36 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
       console.warn(`[HistoryImageGallery] BUG: ${stats.objWithBase64} stored image object(s) but 0 collected`)
   }, [stats])
 
-  // No history at all — stay out of the way entirely.
-  if (images.length === 0 && stats.entries === 0) return null
-
-  const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
-
-  const onDragStart = (e, img) => {
-    setDragImage({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
+  // Stable so the memoized tiles below actually stay put: there can be 60 of
+  // them, each previously carrying freshly-allocated onClick/onDragStart
+  // closures, re-created whenever anything in App re-rendered.
+  const onDragStart = useCallback((e, img) => {
+    // Only the blob URL travels — the drop target resolves bytes via
+    // resolveDragImage(). role/note/captions travel too (ref-slot images
+    // only), same as the click-to-pick path in Tile above, so dropping
+    // straight onto MinimaxRefPanel preserves them just like clicking does.
+    setDragImage({
+      url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash,
+      caption: img.slot === 'ref' ? img.caption : '',
+      role: img.slot === 'ref' ? img.role : null,
+      note: img.slot === 'ref' ? img.note : '',
+      captions: img.slot === 'ref' ? img.captions : {},
+    })
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')
       e.dataTransfer.setData('text/plain', img.fileName || 'image')
       e.dataTransfer.effectAllowed = 'copy'
     } catch { /* older browsers */ }
-  }
+  }, [])
+  const toggleInfo = useCallback((key) => setInfoFor(k => (k === key ? null : key)), [])
+
+  // No history at all — stay out of the way entirely.
+  if (images.length === 0 && stats.entries === 0) return null
+
+  const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
 
   const shown = images.slice(0, CAP)
+  const infoImg = infoFor ? shown.find(i => i.key === infoFor) : null
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -115,38 +488,17 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
           ) : (<>
           <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
             Every image used in a past generation. Drag one onto an image slot below{onPick ? ', or click it' : ''}
-            {pickHint ? ` — ${pickHint}` : ''}.
+            {pickHint ? ` — ${pickHint}` : ''}. Click the <strong>i</strong> badge to read or edit an image's vision description.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
             {shown.map((img) => (
-              <div
-                key={img.key}
-                draggable
-                onDragStart={(e) => onDragStart(e, img)}
-                onClick={onPick ? () => onPick({ base64: img.base64, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash }) : undefined}
-                title={`${img.fileName}${img.render ? ' · Grok render' : ''}${img.role ? ` · ${roleLabel(img.role)}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
-                style={{
-                  position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
-                  border: '1px solid var(--pe-line)', background: 'var(--pe-surface)',
-                  cursor: onPick ? 'pointer' : 'grab',
-                }}
-              >
-                <img
-                  src={`data:${img.mediaType};base64,${img.base64}`}
-                  alt={img.fileName}
-                  draggable={false}
-                  loading="lazy"
-                  decoding="async"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }}
-                />
-                {(img.role || img.render) && (
-                  <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 9, lineHeight: '13px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {img.render || roleLabel(img.role)}
-                  </span>
-                )}
-              </div>
+              <Tile key={img.key} img={img} selected={infoFor === img.key}
+                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} />
             ))}
           </div>
+          {infoImg && (
+            <ImageInfoPanel img={infoImg} onSaveCaption={onSaveCaption} onSaveRefImageCaption={onSaveRefImageCaption} onDescribeRefImage={onDescribeRefImage} onClose={() => setInfoFor(null)} />
+          )}
           {images.length > CAP && (
             <p style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', margin: '8px 0 0' }}>
               Showing {CAP} of {images.length} — older ones are still restorable from History.
@@ -158,3 +510,7 @@ export default function HistoryImageGallery({ history, onPick, pickHint }) {
     </div>
   )
 }
+
+// Memoized: the gallery only depends on the history array and stable callbacks,
+// so it stops repainting its grid every time an unrelated field in App changes.
+export default memo(HistoryImageGallery)

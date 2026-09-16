@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { isAnthropic, isGrok } from '../api'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 const GROK_BASE = 'https://api.x.ai/v1'
 
-export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
+function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
   const [open, setOpen] = useState(false)
   const [cacheCleared, setCacheCleared] = useState(false)
 
@@ -212,3 +212,6 @@ export default function ConfigBar({ cfg, setCfg, models, modelStatus, reloadMode
     </div>
   )
 }
+
+// Memoized — see the `configActions` bundle in App.jsx for the stable callbacks.
+export default memo(ConfigBar)

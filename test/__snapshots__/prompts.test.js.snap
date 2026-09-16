@@ -1,0 +1,1754 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildAdaptUserText — the adapt-panel user message > flux (image) 1`] = `
+"Image description / subject:
+She turns away from the window.
+
+Reference image description:
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > flux · no caption 1`] = `
+"Image description / subject:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+SOURCE PROMPT — written for MiniMax H3 · Video. Re-express its full content — subject, action, camera, mood, everything it establishes — as a prompt for THIS target, in THIS target's own format and conventions. Keep what it says; change only how it's said:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > kling 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+Visual details to incorporate (from a reference image used earlier; there is NO reference image now — establish them in the opening phrase, then describe what happens over time; do not call them a "frame"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx · caption + original 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+Visual details to incorporate (from a reference image used earlier; there is NO reference image now — establish them in the opening phrase, then describe what happens over time; do not call them a "frame"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx · caption, no original 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+Visual details to incorporate (from a reference image used earlier; there is NO reference image now — establish them in the opening phrase, then describe what happens over time; do not call them a "frame"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx · caption, no scene 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+No separate scene note — draw the motion from the visual details below.
+
+Visual details to incorporate (from a reference image used earlier; there is NO reference image now — establish them in the opening phrase, then describe what happens over time; do not call them a "frame"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx · no caption (text-only source) 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+SOURCE PROMPT — written for MiniMax H3 · Video. Re-express its full content — subject, action, camera, mood, everything it establishes — as a prompt for THIS target, in THIS target's own format and conventions. Keep what it says; change only how it's said:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx · no caption, no scene 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+No separate scene note — draw the motion from the source prompt below.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+SOURCE PROMPT — written for MiniMax H3 · Video. Re-express its full content — subject, action, camera, mood, everything it establishes — as a prompt for THIS target, in THIS target's own format and conventions. Keep what it says; change only how it's said:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > ltx_guide 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+Visual details to incorporate (from a reference image used earlier; there is NO reference image now — establish them in the opening phrase, then describe what happens over time; do not call them a "frame"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > minimax_h3 · full 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 1366×768 (Landscape · 16:9 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+Visual details to incorporate (these came from reference image(s) used in an earlier generation; there is NO reference image this time — describe them fresh as part of the prompt, never call them a "frame" or "reference"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > minimax_h3 · no caption 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 1366×768 (Landscape · 16:9 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+Ambient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.
+
+Audience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+SOURCE PROMPT — written for MiniMax H3 · Video. Re-express its full content — subject, action, camera, mood, everything it establishes — as a prompt for THIS target, in THIS target's own format and conventions. Keep what it says; change only how it's said:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > minimax_h3 · no ratio, no audio 1`] = `
+"MODE: T2VA
+
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+Visual details to incorporate (these came from reference image(s) used in an earlier generation; there is NO reference image this time — describe them fresh as part of the prompt, never call them a "frame" or "reference"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+Ambient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.
+
+Audience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > minimax_h3 · no scene 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 1366×768 (Landscape · 16:9 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+No separate scene note — draw the moment from the visual details below.
+
+Visual details to incorporate (these came from reference image(s) used in an earlier generation; there is NO reference image this time — describe them fresh as part of the prompt, never call them a "frame" or "reference"):
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+Ambient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.
+
+Audience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > sdxl (image) 1`] = `
+"Image description / subject:
+She turns away from the window.
+
+Reference image description:
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildAdaptUserText — the adapt-panel user message > threed (image) 1`] = `
+"Image description / subject:
+She turns away from the window.
+
+Reference image description:
+A woman in a red coat stands at a rain-streaked window.
+The room behind her is unlit.
+
+[STYLE PART]
+
+[LENGTH PART]
+
+For reference only — the prompt produced for the original generation (MiniMax H3 · Video). Match its level of detail and creative intent, but this is a DIFFERENT target and output format, so do not copy its structure or wording:
+A cinematic shot of a woman at a window."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > base · video · no lang · no loras 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity faithful · forceNonImageWording 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Creative latitude: FAITHFUL — keep the proposed motion minimal and literal to the scene.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity faithful · image 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Image fidelity: FAITHFUL — recreate the reference closely; keep its subject, composition and palette, deviating only slightly.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity faithful · text (dramabox) 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Emotional latitude: FAITHFUL — keep the delivery grounded and true to a plain, literal reading of the idea; minimal embellishment.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity faithful · video 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Creative latitude: FAITHFUL — keep the proposed motion minimal and literal to the scene.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity loose · image 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Image fidelity: LOOSE — treat the reference as rough inspiration only. Invent freely, take creative risks, and prioritize the chosen style over literal resemblance.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > creativity loose · video 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Creative latitude: LOOSE — be genuinely inventive and surprising with the action, framing and atmosphere (within the model's motion limits); don't settle for the obvious motion.
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > dialogue but showDialogue false 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > dialogue without delivery 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > everything at once 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Creative latitude: LOOSE — be genuinely inventive and surprising with the action, framing and atmosphere (within the model's motion limits); don't settle for the obvious motion.
+
+Spoken dialogue — these are the words to be spoken; put them in quotation marks, in the language named below (translate them if they are not already in it), broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Primary language: French — all spoken audio is in French. Render every spoken line in French, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic French and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > loras · character bound to a name 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger for ANNA — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > loras · dramabox (excluded) 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > loras · h3 (field-scoped rules) 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > loras · ltx 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > no dialogue 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > no negative 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen.""
+`;
+
+exports[`buildStylePart — the shared user-message suffix > spokenLang de 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — these are the words to be spoken; put them in quotation marks, in the language named below (translate them if they are not already in it), broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Primary language: German — all spoken audio is in German. Render every spoken line in German, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic German and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > spokenLang de · text target (whole prompt) 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — these are the words to be spoken; put them in quotation marks, in the language named below (translate them if they are not already in it), broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Primary language: German — all spoken audio is in German. Render every spoken line in German, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic German and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Write the WHOLE prompt in German — the quoted speech and the unquoted delivery/narrative tags alike; never fall back to English for the tags.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > spokenLang en 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — these are the words to be spoken; put them in quotation marks, in the language named below (translate them if they are not already in it), broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Primary language: English — all spoken audio is in English. Render every spoken line in English, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic English and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > spokenLang fr 1`] = `
+"
+
+Style / mood — let this genuinely shape the mood and treatment, but keep the scene believable and the subject intact unless the style itself calls for breaking realism (e.g. surreal). Favor clever, well-judged choices over crude exaggeration: Dramatic — high-stakes cinematic tension, bold lighting, strong emotion
+
+Spoken dialogue — these are the words to be spoken; put them in quotation marks, in the language named below (translate them if they are not already in it), broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Primary language: French — all spoken audio is in French. Render every spoken line in French, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic French and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildStylePart — the shared user-message suffix > style auto (emits nothing) 1`] = `
+"
+
+Spoken dialogue — include these EXACT words in quotation marks, broken into short phrases with physical acting beats between them; delivery/voice: urgent whisper:
+"Wir müssen sofort gehen."
+
+Things to avoid — the user does not want these in the result: text overlays, watermarks. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format."
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 FL2VA (first→last) 1`] = `
+"MODE: FL2VA
+
+FIRST FRAME and LAST FRAME (already established — do not restate their static contents, only describe the transition):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 FL2VA · no scene 1`] = `
+"MODE: FL2VA
+
+FIRST FRAME and LAST FRAME (already established — do not restate their static contents, only describe the transition):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+No description provided — infer the natural motion that carries the scene from the first frame to the last.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 I2VA (image, single) 1`] = `
+"MODE: I2VA
+
+FIRST FRAME (already established — do not restate it; only describe what happens over time):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 I2VA · image but vision failed 1`] = `
+"MODE: I2VA
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 I2VA · no scene 1`] = `
+"MODE: I2VA
+
+FIRST FRAME (already established — do not restate it; only describe what happens over time):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 L2VA (last frame) 1`] = `
+"MODE: L2VA
+
+LAST FRAME (already established — the clip must end here; do not restate it, only describe the plausible path that leads to it):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 L2VA · no scene 1`] = `
+"MODE: L2VA
+
+LAST FRAME (already established — the clip must end here; do not restate it, only describe the plausible path that leads to it):
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: derived from the input image(s) — do not override it.
+Target duration: 8 seconds
+
+No description provided — propose a plausible action path that leads naturally to the last frame.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 Ref2VA (references) 1`] = `
+"MODE: Ref2VA
+
+Reference images:
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 Ref2VA · no scene 1`] = `
+"MODE: Ref2VA
+
+Reference images:
+A woman in a red coat stands at a rain-streaked window.
+
+Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+No description provided — propose a fitting scene using the reference images above.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 T2VA (text only) 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 T2VA · no scene 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+No scene description provided.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): rain on glass
+
+Audience-only music (non_diegetic_music): none
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > h3 · no soundscape or music 1`] = `
+"MODE: T2VA
+
+Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
+Target duration: 8 seconds
+
+Scene / action:
+She turns away from the window.
+
+[STYLE PART]
+
+Ambient / diegetic sound (overall_soundscape): not specified — invent restrained ambience that fits the scene.
+
+Audience-only music (non_diegetic_music): not specified — decide whether music serves this scene; if not, use N/A.
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > image (flux) · scene only 1`] = `
+"Image description / subject:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > image · caption, no scene 1`] = `
+"Reference image description:
+A woman in a red coat stands at a rain-streaked window.
+
+No extra description — base the FLUX prompt on the reference description above.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > image · nothing at all 1`] = `
+"No description provided.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > image · with reference caption 1`] = `
+"Reference image description:
+A woman in a red coat stands at a rain-streaked window.
+
+Image description / subject:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > text (dramabox) 1`] = `
+"She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > text · empty scene 1`] = `
+"
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video firstlast 1`] = `
+"MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.
+
+Frames (already established — do not restate their static contents):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+Transition description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video firstlast · no scene 1`] = `
+"MODE: First-to-last-frame interpolation. The clip begins exactly on the FIRST frame and ends exactly on the LAST frame; describe the motion and camera that bridge them.
+
+Frames (already established — do not restate their static contents):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+No description provided — infer the natural motion that carries the scene from the first frame to the last.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video firstmidlast 1`] = `
+"MODE: First-mid-last-frame interpolation. The clip begins on the FIRST frame, passes through the MID frame at approximately the halfway point, and ends on the LAST frame; describe the two-phase motion and camera as one continuous arc with a clear beat at the mid frame.
+
+Frames (already established — do not restate their static contents):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+Transition description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video firstmidlast · no scene 1`] = `
+"MODE: First-mid-last-frame interpolation. The clip begins on the FIRST frame, passes through the MID frame at approximately the halfway point, and ends on the LAST frame; describe the two-phase motion and camera as one continuous arc with a clear beat at the mid frame.
+
+Frames (already established — do not restate their static contents):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+No description provided — infer the natural motion that carries the scene through both transitions.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video kling 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video last 1`] = `
+"FIRST FRAME (already established — do not restate it; only describe what happens over time):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video ltx_guide 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video single · frame, no scene 1`] = `
+"FIRST FRAME (already established — do not restate it; only describe what happens over time):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video single · no scene, no frame 1`] = `
+"Target duration: 8 seconds
+
+No scene description provided.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video single · text only 1`] = `
+"Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`buildWriterUserText — the generate-mode user message > video single · with frame 1`] = `
+"FIRST FRAME (already established — do not restate it; only describe what happens over time):
+A woman in a red coat stands at a rain-streaked window.
+
+Target duration: 8 seconds
+
+Basic scene description:
+She turns away from the window.
+
+[STYLE PART]
+
+[LENGTH PART]"
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > empty 1`] = `""`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > firstlast 1`] = `
+"Opening state: She faces the window, hands at her sides.
+Closing state: She has turned to face the room.
+What changes over the shot: A quarter turn of the body; the light shifts off her face."
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > firstmidlast 1`] = `
+"Opening state: She faces the window.
+Midpoint state: Mid-turn, weight on the back foot.
+Closing state: She faces the room.
+What changes from opening to midpoint: The turn begins.
+What changes from midpoint to close: The turn completes."
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > ref · no dialogue (audio line dropped) 1`] = `
+"character: A woman in her thirties, dark hair, red wool coat. (intended use: keep the coat exactly.)
+location: An unlit room with a tall sash window."
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > ref · two audio references, with dialogue (deduped to one voice line) 1`] = `
+"character: A woman in her thirties, dark hair, red wool coat. (intended use: keep the coat exactly.)
+location: An unlit room with a tall sash window.
+Voice: reference timbre only — natural delivery."
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > ref · with dialogue (voice line kept) 1`] = `
+"character: A woman in her thirties, dark hair, red wool coat. (intended use: keep the coat exactly.)
+location: An unlit room with a tall sash window.
+Voice: reference timbre only — natural delivery."
+`;
+
+exports[`foldCaption — caption scaffolding stripped per source frame mode > single 1`] = `"A woman in a red coat at a window. Overcast daylight."`;
+
+exports[`length injection and aspect hints > PROMPT_LENGTH_INJECT 1`] = `
+{
+  "concise": "",
+  "detailed": "
+
+Length guidance: write a longer, more detailed prompt. Push well past the minimum sentence count. Add rich sensory detail — specific textures, color gradations, sound design, micro-movements, atmospheric depth. Every extra sentence must add something a diffusion model can act on; do not pad with filler. Do not exceed what the clip duration or image format can realistically support.",
+  "standard": "
+
+Length guidance: write slightly more than the minimum — expand on atmosphere, lighting, and texture where it adds value. Aim for the upper end of the recommended sentence range.",
+}
+`;
+
+exports[`length injection and aspect hints > aspect helpers per H3 resolution 1`] = `
+{
+  "land169": {
+    "framing": "",
+    "parts": {
+      "orient": "landscape",
+      "token": "16:9",
+    },
+    "scene": "",
+  },
+  "land219": {
+    "framing": "Ultrawide 21:9 frame: strong lateral staging and negative space, wide two- and three-shots, slow lateral tracking and pans read well.",
+    "parts": {
+      "orient": "ultrawide",
+      "token": "21:9",
+    },
+    "scene": "Delivery format is an ultrawide 21:9 frame: scenes may use wide landscapes and lateral space; still keep the cast and locations few.",
+  },
+  "land43": {
+    "framing": "Horizontal 4:3 frame: two-shots and lateral staging read well; wide establishing shots and lateral camera moves are available.",
+    "parts": {
+      "orient": "landscape",
+      "token": "4:3",
+    },
+    "scene": "Delivery format is a boxy 4:3 frame: contained, classic staging; nothing that needs a wide vista.",
+  },
+  "port34": {
+    "framing": "Vertical 3:4 frame: one or two subjects in frame at most, stacked or receding staging, faces and hands large, minimal wide vistas; camera moves favour push-pull and vertical tilts over lateral pans.",
+    "parts": {
+      "orient": "portrait",
+      "token": "3:4",
+    },
+    "scene": "Delivery format is vertical short-form video (3:4): favour intimate, small-cast, single-location scenes; avoid crowd scenes and sweeping landscapes.",
+  },
+  "port916": {
+    "framing": "Vertical 9:16 frame: one or two subjects in frame at most, stacked or receding staging, faces and hands large, minimal wide vistas; camera moves favour push-pull and vertical tilts over lateral pans.",
+    "parts": {
+      "orient": "portrait",
+      "token": "9:16",
+    },
+    "scene": "Delivery format is vertical short-form video (9:16): favour intimate, small-cast, single-location scenes; avoid crowd scenes and sweeping landscapes.",
+  },
+  "sq": {
+    "framing": "Square 1:1 frame: centred, symmetrical compositions tight on one or two subjects; keep camera moves modest.",
+    "parts": {
+      "orient": "square",
+      "token": "1:1",
+    },
+    "scene": "Delivery format is a square 1:1 frame: keep scenes centred and contained — small cast, one location.",
+  },
+}
+`;
+
+exports[`loraInstruction > one instruction per target shape 1`] = `
+{
+  "h3": "
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.",
+  "h3 · character bound": "
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger for ANNA — put it immediately before or after the first mention of the character it names)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read. In this format they belong in the detailed_description (or integrated_multimodal_description) field only: never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.",
+  "ltx": "
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read.",
+  "sdxl": "
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- ohwx woman   (character trigger — put it immediately before or after the first mention of the character it names)
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read.",
+  "style only": "
+
+LoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, character for character:
+- aidmaMJ6.1   (style trigger — put it in the opening style phrase)
+Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something to describe — they are tokens the image model needs to read.",
+}
+`;
+
+exports[`spokenLanguageDirective > one directive per language × wholePrompt 1`] = `
+{
+  "de · suffix": "
+
+Primary language: German — all spoken audio is in German. Render every spoken line in German, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic German and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.",
+  "de · wholePrompt": "
+
+Primary language: German — all spoken audio is in German. Render every spoken line in German, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic German and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Write the WHOLE prompt in German — the quoted speech and the unquoted delivery/narrative tags alike; never fall back to English for the tags.",
+  "en · suffix": "
+
+Primary language: English — all spoken audio is in English. Render every spoken line in English, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic English and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.",
+  "en · wholePrompt": "
+
+Primary language: English — all spoken audio is in English. Render every spoken line in English, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic English and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Write the WHOLE prompt in English — the quoted speech and the unquoted delivery/narrative tags alike; never fall back to English for the tags.",
+  "fr · suffix": "
+
+Primary language: French — all spoken audio is in French. Render every spoken line in French, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic French and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Visible on-screen text is NOT translated: keep signs, labels and captions exactly as supplied. All structural prose in your output stays English.",
+  "fr · wholePrompt": "
+
+Primary language: French — all spoken audio is in French. Render every spoken line in French, including any dialogue given above: if it was written in another language, translate it into natural, idiomatic French and treat that translation as the exact words to be spoken. Translate only — never add, drop, reorder or embellish, and keep proper names as given. Write the WHOLE prompt in French — the quoted speech and the unquoted delivery/narrative tags alike; never fall back to English for the tags.",
+}
+`;
+
+exports[`system prompt selection > keeps the target table shape 1`] = `
+{
+  "dramabox": {
+    "caps": {
+      "loras": false,
+      "wholePromptLanguage": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "DramaBox · TTS",
+    "loraInject": null,
+    "resolutions": [],
+    "short": null,
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "image": false,
+      "spokenLang": true,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "text",
+    "visionPrompt": null,
+  },
+  "flux": {
+    "caps": {
+      "frameTarget": true,
+      "loras": true,
+      "refBlockInFrames": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "FLUX.dev · Image",
+    "loraInject": null,
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land169",
+      "port916",
+    ],
+    "short": "Flux.dev",
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "435 chars · sha256:eca6bc179a512d55 · "You are a vision model describing a reference image so a downstream writer can r"",
+  },
+  "flux2klein": {
+    "caps": {
+      "frameTarget": true,
+      "loras": true,
+      "refBlockInFrames": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "FLUX.2 Klein · Image",
+    "loraInject": null,
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land169",
+      "port916",
+    ],
+    "short": "Klein",
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "816 chars · sha256:d49ff17884e02854 · "You are a vision model describing a reference image so a downstream writer can r"",
+  },
+  "grokimage": {
+    "caps": {
+      "loras": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "Grok Image · Image",
+    "loraInject": null,
+    "resolutions": [
+      "auto",
+      "sq",
+      "land169",
+      "port916",
+      "land43",
+      "port34",
+      "cine219",
+    ],
+    "short": null,
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+  },
+  "kling": {
+    "caps": {
+      "loras": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [
+      "5 seconds",
+      "10 seconds",
+    ],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "Kling AI · Video",
+    "loraInject": null,
+    "resolutions": [
+      "land169",
+      "port916",
+      "sq",
+    ],
+    "short": null,
+    "show": {
+      "camera": true,
+      "dialogue": false,
+      "duration": true,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "video",
+    "visionPrompt": "690 chars · sha256:a87034dc6d00efd2 · "You are a vision model captioning the start image of a Kling AI image-to-video c"",
+  },
+  "krea2turbo": {
+    "caps": {
+      "loras": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "Krea 2 Turbo · Image",
+    "loraInject": null,
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land169",
+      "port916",
+    ],
+    "short": null,
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+  },
+  "ltx": {
+    "caps": {
+      "clipTarget": true,
+      "loras": true,
+    },
+    "clipLabel": "LTX-2.3 Guide",
+    "clipNoun": "shot",
+    "clipShort": "LTX",
+    "clipSystem": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": true,
+    "hasSystem": true,
+    "label": "LTX-2.3 · Video",
+    "loraInject": null,
+    "resolutions": [
+      "1080p",
+      "720p",
+      "vertical",
+      "land32",
+      "port23",
+      "sq1024",
+      "square",
+    ],
+    "short": null,
+    "show": {
+      "camera": true,
+      "dialogue": true,
+      "duration": true,
+      "frameMode": true,
+      "spokenLang": true,
+      "twoStage": true,
+    },
+    "slug": null,
+    "type": "video",
+    "visionPrompt": null,
+  },
+  "ltx_guide": {
+    "caps": {
+      "loras": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": true,
+    "hasSystem": true,
+    "label": "LTX-2.3 · Guide",
+    "loraInject": null,
+    "resolutions": [
+      "1080p",
+      "720p",
+      "vertical",
+      "land32",
+      "port23",
+      "sq1024",
+      "square",
+    ],
+    "short": null,
+    "show": {
+      "camera": true,
+      "dialogue": true,
+      "duration": true,
+      "frameMode": true,
+      "spokenLang": true,
+      "twoStage": true,
+    },
+    "slug": null,
+    "type": "video",
+    "visionPrompt": null,
+  },
+  "minimax_h3": {
+    "caps": {
+      "audioFields": true,
+      "clipTarget": true,
+      "loras": true,
+      "ratioPicker": true,
+      "refImages": 6,
+      "structured": true,
+    },
+    "clipLabel": null,
+    "clipNoun": "clip",
+    "clipShort": "H3",
+    "clipSystem": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+    "defaultFrameMode": "ref",
+    "defaultRefRatio": "port916",
+    "durations": [
+      "4 seconds",
+      "5 seconds",
+      "6 seconds",
+      "8 seconds",
+      "10 seconds",
+      "12 seconds",
+      "15 seconds",
+    ],
+    "frameModeOptions": [
+      "single",
+      "last",
+      "firstlast",
+      "ref",
+    ],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "MiniMax H3 · Video",
+    "loraInject": {
+      "fields": [
+        "detailed_description",
+        "integrated_multimodal_description",
+      ],
+    },
+    "resolutions": [
+      "land169",
+      "port916",
+      "sq",
+      "land43",
+      "port34",
+      "land219",
+    ],
+    "short": null,
+    "show": {
+      "camera": true,
+      "dialogue": true,
+      "duration": true,
+      "frameMode": true,
+      "spokenLang": true,
+      "twoStage": false,
+    },
+    "slug": "minimax",
+    "type": "video",
+    "visionPrompt": null,
+  },
+  "scriptwriter": {
+    "caps": {},
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": false,
+    "label": "Scriptwriter · Video",
+    "loraInject": null,
+    "resolutions": [
+      "1080p",
+      "720p",
+      "vertical",
+      "land32",
+      "port23",
+      "sq1024",
+      "square",
+    ],
+    "short": null,
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "scriptwriter",
+    "visionPrompt": null,
+  },
+  "sdxl": {
+    "caps": {
+      "frameTarget": true,
+      "loras": true,
+      "posNeg": true,
+      "refBlockInFrames": false,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "SDXL · Image",
+    "loraInject": {
+      "afterLabel": "POSITIVE",
+      "separator": ", ",
+    },
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land43",
+      "port34",
+      "land169",
+      "port916",
+    ],
+    "short": "SDXL",
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "563 chars · sha256:6145fda009f31d33 · "You are a vision model analyzing a reference image for a downstream SDXL tag-bas"",
+  },
+  "threed": {
+    "caps": {
+      "loras": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "3D Print · Image",
+    "loraInject": null,
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land169",
+      "port916",
+    ],
+    "short": null,
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "523 chars · sha256:98c9e74dc1ecc2a5 · "You are a vision model analyzing a reference image to extract character details "",
+  },
+  "zimage": {
+    "caps": {
+      "frameTarget": true,
+      "loras": true,
+      "refBlockInFrames": true,
+    },
+    "clipLabel": null,
+    "clipNoun": null,
+    "clipShort": null,
+    "clipSystem": null,
+    "defaultFrameMode": null,
+    "defaultRefRatio": null,
+    "durations": [],
+    "frameModeOptions": [],
+    "hasBuildSystem": false,
+    "hasSystem": true,
+    "label": "Z-Image Turbo · Image",
+    "loraInject": null,
+    "resolutions": [
+      "sq",
+      "land32",
+      "port23",
+      "land169",
+      "port916",
+    ],
+    "short": "Z-Image Turbo",
+    "show": {
+      "camera": false,
+      "dialogue": false,
+      "duration": false,
+      "frameMode": false,
+      "twoStage": false,
+    },
+    "slug": null,
+    "type": "image",
+    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+  },
+}
+`;
+
+exports[`system prompt selection > lists the adapt destinations 1`] = `
+[
+  {
+    "id": "ltx",
+    "label": "LTX-2.3 · Video",
+  },
+  {
+    "id": "ltx_guide",
+    "label": "LTX-2.3 · Guide",
+  },
+  {
+    "id": "kling",
+    "label": "Kling AI · Video",
+  },
+  {
+    "id": "flux",
+    "label": "FLUX.dev · Image",
+  },
+  {
+    "id": "flux2klein",
+    "label": "FLUX.2 Klein · Image",
+  },
+  {
+    "id": "krea2turbo",
+    "label": "Krea 2 Turbo · Image",
+  },
+  {
+    "id": "zimage",
+    "label": "Z-Image Turbo · Image",
+  },
+  {
+    "id": "grokimage",
+    "label": "Grok Image · Image",
+  },
+  {
+    "id": "sdxl",
+    "label": "SDXL · Image",
+  },
+  {
+    "id": "threed",
+    "label": "3D Print · Image",
+  },
+  {
+    "id": "minimax_h3",
+    "label": "MiniMax H3 · Video",
+  },
+]
+`;
+
+exports[`system prompt selection > resolves one prompt per target × frameMode 1`] = `
+{
+  "dramabox · firstlast": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
+  "dramabox · firstmidlast": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
+  "dramabox · last": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
+  "dramabox · ref": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
+  "dramabox · single": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
+  "flux · firstlast": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · firstmidlast": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · last": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · ref": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · single": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux2klein · firstlast": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · firstmidlast": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · last": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · ref": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · single": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "grokimage · firstlast": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · firstmidlast": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · last": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · ref": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · single": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "kling · firstlast": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
+  "kling · firstmidlast": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
+  "kling · last": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
+  "kling · ref": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
+  "kling · single": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
+  "krea2turbo · firstlast": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · firstmidlast": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · last": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · ref": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · single": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "ltx · firstlast": "5831 chars · sha256:00544c034131b263 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx · firstmidlast": "6059 chars · sha256:bc97c87f78981c12 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx · last": "5265 chars · sha256:f2322300ff54704e · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx · ref": "5265 chars · sha256:f2322300ff54704e · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx · single": "5265 chars · sha256:f2322300ff54704e · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx_guide · firstlast": "6843 chars · sha256:63dab644c5eaa978 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx_guide · firstmidlast": "6908 chars · sha256:b288dddacd492be8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx_guide · last": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx_guide · ref": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "ltx_guide · single": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
+  "minimax_h3 · firstlast": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · firstmidlast": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · last": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · ref": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · single": "28206 chars · sha256:ba97ada8ac25c1b9 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "scriptwriter · firstlast": "undefined",
+  "scriptwriter · firstmidlast": "undefined",
+  "scriptwriter · last": "undefined",
+  "scriptwriter · ref": "undefined",
+  "scriptwriter · single": "undefined",
+  "sdxl · firstlast": "2981 chars · sha256:7e89eb025ca87bef · "You are converting a user request into a Stable Diffusion XL (SDXL) image-genera"",
+  "sdxl · firstmidlast": "2981 chars · sha256:7e89eb025ca87bef · "You are converting a user request into a Stable Diffusion XL (SDXL) image-genera"",
+  "sdxl · last": "2981 chars · sha256:7e89eb025ca87bef · "You are converting a user request into a Stable Diffusion XL (SDXL) image-genera"",
+  "sdxl · ref": "2981 chars · sha256:7e89eb025ca87bef · "You are converting a user request into a Stable Diffusion XL (SDXL) image-genera"",
+  "sdxl · single": "2981 chars · sha256:7e89eb025ca87bef · "You are converting a user request into a Stable Diffusion XL (SDXL) image-genera"",
+  "threed · firstlast": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
+  "threed · firstmidlast": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
+  "threed · last": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
+  "threed · ref": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
+  "threed · single": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
+  "zimage · firstlast": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · firstmidlast": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · last": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · ref": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · single": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+}
+`;

@@ -1,23 +1,36 @@
 import { useState, useEffect } from 'react'
 import {
-  TARGETS, DURATION_OPTIONS, PROMPT_LENGTH_INJECT, MINIMAX_H3_RESOLUTIONS, systemPromptFor,
+  TARGETS, DURATION_OPTIONS, PROMPT_LENGTH_INJECT, systemPromptFor, caps,
 } from '../constants'
 import { btn, selStyle, presetById } from '../utils'
 import { callOllama } from '../api'
 import { ADAPT_TARGETS, foldCaption, buildStylePart, buildAdaptUserText } from '../adapt'
+import { withLoraTriggers } from '../loras'
+import { buildSnapshot } from '../workspace'
 
 const lbl = { fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }
 const sub = { color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }
 
 const durationsFor = (id) => TARGETS[id].durations || DURATION_OPTIONS
 
+// `workspace` is App's compose panel as one object (see src/workspace.js). These
+// values used to arrive as twelve separate pass-through props, so every new compose
+// field had to be threaded through here by hand — and the last two features show
+// what happens when that is forgotten: this panel's hand-written snapshot had no
+// `spokenLang` or `loraIds` key at all, so an adapt-produced history entry silently
+// lost the spoken language and the LoRA selection. It builds its snapshot through
+// the shared registry now, so a new field arrives here for free.
 export default function AdaptPanel({
   caption, captioning = false, scene, sourceFrameMode, sourceTarget, originalPrompt, fromHistory, sourceTs,
   models, defaultModel, cfg,
-  style, creativity, negative, dialogue, delivery, promptLength, soundscape, music,
-  duration, h3RatioId,
+  workspace,
+  activeLoras = [],
   onSaveAdapt, onClose,
 }) {
+  const {
+    style, creativity, negative, dialogue, delivery, promptLength,
+    soundscape, music, spokenLangId, duration, h3RatioId,
+  } = workspace
   const [open, setOpen] = useState(fromHistory)
   const [destTarget, setDestTarget] = useState(
     ADAPT_TARGETS.some(t => t.id === sourceTarget) ? sourceTarget : 'ltx'
@@ -34,6 +47,7 @@ export default function AdaptPanel({
   const [copied, setCopied] = useState(false)
 
   const dest = TARGETS[destTarget]
+  const destCaps = caps(dest)
 
   // Keep the duration valid for the chosen destination.
   useEffect(() => {
@@ -62,33 +76,44 @@ export default function AdaptPanel({
       const stylePart = buildStylePart({
         style, creativity, targetType: dest.type, showDialogue: dest.show.dialogue,
         dialogue, delivery, negative, forceNonImageWording: true,
+        spokenLang: dest.show.spokenLang ? spokenLangId : null,
+        loras: activeLoras, targetId: destTarget,
       })
       const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
-      const aspectRatio = destTarget === 'minimax_h3'
-        ? (presetById(adaptRatioId, MINIMAX_H3_RESOLUTIONS) || MINIMAX_H3_RESOLUTIONS[0])
+      // A target that writes an explicit aspect ratio into its prompt needs one
+      // chosen here; the rest infer it from the image or ignore it.
+      const aspectRatio = destCaps.ratioPicker
+        ? (presetById(adaptRatioId, dest.resolutions) || dest.resolutions[0])
         : null
       const userText = buildAdaptUserText({
         destTarget, scene, foldedCaption,
         sourceLabel: TARGETS[sourceTarget]?.label || sourceTarget,
         duration: adaptDuration, aspectRatio, stylePart, lengthPart,
-        audio: destTarget === 'minimax_h3' ? { soundscape, music } : null,
+        audio: destCaps.audioFields ? { soundscape, music } : null,
         originalPrompt: useOriginal ? originalPrompt : '',
       })
       const system = systemPromptFor(dest, 'single')
-      const { text, usage } = await callOllama(effectiveAdaptModel, userText, system, cfg, cfg.temperature ?? 0.7)
+      const { text: raw, usage } = await callOllama(effectiveAdaptModel, userText, system, cfg, cfg.temperature ?? 0.7)
+      // Put back any active LoRA trigger the writer dropped or mangled.
+      const text = withLoraTriggers(raw, activeLoras, destTarget)
       setResult({ text, usage, loading: false, error: '' })
 
+      // The snapshot for the adapted entry, built through the shared registry so it
+      // carries every field a normal generation's does. An adapt run has no input
+      // images by definition (the caption stands in for them) and always produces
+      // one output, hence frameMode 'single' and the empty image slots.
       const snap = {
-        ts: Date.now(), target: destTarget, outputCount: 1, model: effectiveAdaptModel, vision: null,
-        duration: dest.show.duration ? adaptDuration : '',
-        style, creativity, frameMode: 'single', negative,
-        scene: scene || '',
-        dialogue: dest.show.dialogue ? (dialogue || '') : '', delivery: dest.show.dialogue ? (delivery || '') : '',
-        firstImg: null, midImg: null, lastImg: null, refImages: null, refAudio: null,
-        ratio: destTarget === 'minimax_h3' ? (aspectRatio?.label ?? null) : null,
-        soundscape: destTarget === 'minimax_h3' ? (soundscape || '') : '',
-        music: destTarget === 'minimax_h3' ? (music || '') : '',
-        caption: null,
+        ...buildSnapshot({
+          ...workspace,
+          targetType: dest.type, show: dest.show,
+          target: destTarget,
+          duration: dest.show.duration ? adaptDuration : '',
+          frameMode: 'single',
+          scene: scene || '',
+          activeLoraIds: activeLoras.map(l => l.id),
+          h3RatioId: adaptRatioId,
+          firstImg: null, midImg: null, lastImg: null, refImages: [], refAudios: [],
+        }, { model: effectiveAdaptModel, vision: null, outputCount: 1, caption: null }),
         adaptedFrom: { target: sourceTarget, frameMode: sourceFrameMode, ts: sourceTs ?? null },
       }
       onSaveAdapt?.(snap, [{ label: effectiveAdaptModel, text }])
@@ -151,11 +176,11 @@ export default function AdaptPanel({
             </>
           )}
 
-          {destTarget === 'minimax_h3' && (
+          {destCaps.ratioPicker && (
             <>
               <label style={lbl}>Aspect ratio <span style={sub}>· T2VA needs a concrete ratio</span></label>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-                {MINIMAX_H3_RESOLUTIONS.map(p => (
+                {dest.resolutions.map(p => (
                   <button key={p.id} onClick={() => setAdaptRatioId(p.id)} title={p.note} style={btn(adaptRatioId === p.id)}>{p.label}</button>
                 ))}
               </div>

@@ -1,0 +1,324 @@
+// Smoke-render the components the history section was split into.
+//
+// Server-rendering them with react-dom/server (already a dependency — no test
+// renderer needed) is enough to catch the whole class of mistake a component
+// split invites: a prop that was renamed on one side only, a helper left behind
+// in the old file, an entry shape the card does not guard. esbuild happily
+// compiles all of those; this fails on them.
+//
+// It is deliberately about "does it render the right facts", not about markup
+// details — no snapshots here, so a styling change never breaks these.
+
+import { describe, it, expect } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import HistoryPanel from '../src/components/HistoryPanel.jsx'
+
+const actions = {
+  restore: () => {}, remove: () => {}, adapt: () => {}, assignProject: () => {},
+  saveCaption: () => {}, saveRefImageCaption: () => {}, clearAll: () => {}, exportAll: () => {}, importFiles: () => {},
+}
+const filters = { project: 'all', target: 'all', model: 'all', image: 'all', search: '' }
+
+const render = (over = {}) => renderToStaticMarkup(
+  <HistoryPanel
+    history={[]} visible={[]} open projects={[]} restoringId={null}
+    actions={actions} filters={filters} setFilter={() => {}} resetFilters={() => {}}
+    filtersActive={false} targets={[]} models={[]} onToggleOpen={() => {}}
+    {...over}
+  />,
+)
+
+const standard = {
+  id: 'e1', ts: 1735689600000, type: 'standard', target: 'minimax_h3', model: 'qwen2.5:14b',
+  outputCount: 1, style: 'dramatic', creativity: 'balanced', duration: '8 seconds',
+  scene: 'A woman turns from a window', dialogue: 'Wir müssen gehen', delivery: 'urgent',
+  soundscape: 'rain on glass', music: 'none', negative: 'watermark', caption: 'a rainy window',
+  moves: ['dolly_in'], frameMode: 'ref', project: 'Film A',
+  firstImg: { url: '/api/blob/aaa', fileName: 'in.jpg' },
+  refImages: [{ url: '/api/blob/bbb', fileName: 'ref.jpg', role: 'character' }],
+  outputs: [{
+    label: 'qwen2.5:14b', text: 'detailed_description: a medium shot',
+    images: [{ url: '/api/blob/ccc' }],
+    video: { url: '/api/blob/ddd', duration: 8, blobRef: 'ddd' },
+  }],
+}
+
+const scriptEntry = {
+  id: 's1', ts: 1735689600000, type: 'scriptwriter', model: 'claude-opus-5', phase: 'done',
+  promptTarget: 'minimax_h3', idea: 'a heist gone wrong on a rooftop',
+  script: { title: 'Nightfall', characters: [{ name: 'Anna' }, { name: 'Mo' }], scenes: [{ id: 1 }, { id: 2 }] },
+  directorsCut: { shots: [{ shot_number: 1 }, { shot_number: 2 }] },
+  finalPrompts: [
+    { shotNumber: 1, sceneTitle: 'Rooftop', text: 'summary: they climb' },
+    { shotNumber: 2, sceneTitle: 'Stairwell', text: '' },
+  ],
+  refImages: [{ url: '/api/blob/eee', fileName: 'anna.jpg', note: 'lead' }],
+  framePrompts: [{ frames: { first: { image: { url: '/api/blob/fff' } } } }],
+}
+
+describe('HistoryPanel', () => {
+  it('renders the empty state', () => {
+    expect(render()).toContain('No history yet.')
+  })
+
+  it('says when filters hide everything', () => {
+    const html = render({ history: [standard], visible: [], filtersActive: true })
+    expect(html).toContain('No generations match these filters.')
+  })
+
+  it('shows visible/total in the header only while filtering', () => {
+    expect(render({ history: [standard, scriptEntry], visible: [standard], filtersActive: true }))
+      .toContain('History (1/2)')
+    expect(render({ history: [standard, scriptEntry], visible: [standard, scriptEntry] }))
+      .toContain('History (2)')
+  })
+
+  it('renders nothing but the header when collapsed', () => {
+    const html = render({ history: [standard], visible: [standard], open: false })
+    expect(html).not.toContain('A woman turns from a window')
+    expect(html).not.toContain('Export ↓')
+  })
+
+  it('hides the filter bar for a single entry', () => {
+    expect(render({ history: [standard], visible: [standard] })).not.toContain('Search history…')
+    expect(render({ history: [standard, scriptEntry], visible: [standard, scriptEntry] }))
+      .toContain('Search history…')
+  })
+
+  it('only offers a filter select when there is more than one value for it', () => {
+    const two = { history: [standard, scriptEntry], visible: [standard, scriptEntry] }
+    expect(render({ ...two, targets: ['minimax_h3'], models: ['qwen2.5:14b'] })).not.toContain('All targets')
+    expect(render({ ...two, targets: ['minimax_h3', 'scriptwriter'] })).toContain('All targets')
+    expect(render({ ...two, models: ['qwen2.5:14b', 'claude-opus-5'] })).toContain('All models')
+  })
+})
+
+describe('StandardCard', () => {
+  const html = render({ history: [standard], visible: [standard] })
+
+  it('renders the settings line', () => {
+    expect(html).toContain('MiniMax H3 · Video')
+    expect(html).toContain('qwen2.5:14b')
+    expect(html).toContain('8 seconds')
+    expect(html).toContain('Dramatic')
+    expect(html).toContain('reference')
+  })
+
+  it('renders scene, dialogue, audio and negative', () => {
+    expect(html).toContain('A woman turns from a window')
+    expect(html).toContain('Wir müssen gehen')
+    expect(html).toContain('urgent')
+    expect(html).toContain('rain on glass')
+    expect(html).toContain('watermark')
+  })
+
+  it('resolves camera move ids to labels', () => {
+    expect(html).toContain('Dolly-in')
+  })
+
+  it('renders input, reference, render and video outputs by blob url', () => {
+    for (const hash of ['aaa', 'bbb', 'ccc', 'ddd']) expect(html).toContain(`/api/blob/${hash}`)
+  })
+
+  it('renders the generated prompt text', () => {
+    expect(html).toContain('detailed_description: a medium shot')
+  })
+
+  it('offers Adapt only when there are outputs', () => {
+    expect(html).toContain('⇄ Adapt')
+    const noOut = { ...standard, outputs: [] }
+    expect(render({ history: [noOut], visible: [noOut] })).not.toContain('⇄ Adapt')
+  })
+
+  it('shows a restore-in-progress label on the entry being restored', () => {
+    expect(render({ history: [standard], visible: [standard], restoringId: 'e1' })).toContain('Restoring…')
+    expect(html).toContain('Restore settings')
+  })
+
+  it('falls back to a note when the scene came from an image', () => {
+    const h = { ...standard, scene: '' }
+    expect(render({ history: [h], visible: [h] })).toContain('(proposed from image)')
+  })
+
+  it('renders a legacy filename-string image as text, not a broken img', () => {
+    const h = { ...standard, firstImg: 'old-photo.jpg', refImages: [], outputs: [] }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('old-photo.jpg')
+    expect(out).not.toContain('src="old-photo.jpg"')
+  })
+
+  it('survives an entry carrying almost nothing', () => {
+    const bare = { id: 'x', ts: 1735689600000, type: 'standard' }
+    expect(() => render({ history: [bare], visible: [bare] })).not.toThrow()
+  })
+
+  it('splits a real multi-reference caption block into one row per image instead of one flat box — the reported bug', () => {
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: [
+        'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman with dark hair.',
+        'Image 2 — role: Location, preservation: Guide (attribute_transfer): A rainy street at night.',
+      ].join('\n\n'),
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('2 references, edited separately')
+    expect(out).toContain('A woman with dark hair.')
+    expect(out).toContain('A rainy street at night.')
+  })
+
+  it('falls back to the single flat box only when there is at most one reference image', () => {
+    // `standard`'s own fixture: one refImage, so per-row editing (which only
+    // matters once there's more than one description to keep separate) is
+    // skipped even though `caption` here is plain prose ("a rainy window"),
+    // not the "Image 1 — role: …" shape either — must not crash.
+    expect(html).not.toContain('edited separately')
+    expect(html).toContain('a rainy window')
+  })
+
+  it('still uses per-row editing when one of several images\' lines fails to parse — never demotes back to one flat, overwrite-everything box', () => {
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'wardrobe' },
+        { url: '/api/blob/r3', fileName: 'c.jpg', role: 'location' },
+      ],
+      caption: [
+        'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman with dark hair.',
+        'Image 2 — role: Wardrobe / Clothing — malformed, no preservation segment.',
+        'Image 3 — role: Location, preservation: Guide (attribute_transfer): A rainy street at night.',
+      ].join('\n\n'),
+    }
+    const out = render({ history: [h], visible: [h] })
+    // Still splits into 3 rows (not 2 — the count is refImages.length, not
+    // "however many lines happened to parse") …
+    expect(out).toContain('3 references, edited separately')
+    // … the two well-formed images still show their own real text …
+    expect(out).toContain('A woman with dark hair.')
+    expect(out).toContain('A rainy street at night.')
+    // … and the malformed one shows its own empty placeholder rather than
+    // the raw whole block (which would otherwise leak the other two images'
+    // text into what looks like image 2's own box).
+    expect(out).toContain('No description.')
+    expect(out).not.toContain('malformed, no preservation segment')
+  })
+
+  it('prefers an image\'s own already-saved structural caption over the legacy shared block', () => {
+    // The legacy flat refImages[i].caption field (as written by an older
+    // round, before saveRefImageCaption moved to the role-keyed captions
+    // map) still wins over the even-older shared block via
+    // resolveRefCaption's fallback order — shown directly, no more parsing
+    // the old block for it, so this stays correct even if that block is
+    // stale or already corrupted.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character', caption: 'Already individually saved text.' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stale/corrupted shared block with no per-image structure at all',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('Already individually saved text.')
+    expect(out).not.toContain('a stale/corrupted shared block')
+  })
+
+  it('also displays a caption saved through the NEW role-keyed map (captions[role]), not just the legacy flat field', () => {
+    // App.jsx's saveRefImageCaption is shared between this card's own plain
+    // editor and the gallery's role-aware "🤖 Describe with AI" picker —
+    // since last round, both write into refImages[i].captions[roleId]
+    // instead of the legacy flat `caption` field. This card must resolve
+    // through the same shared resolver (resolveRefCaption, adapt.js) so a
+    // save made from EITHER surface is never shown as stale here — the
+    // regression this test guards against.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'subject_identity', captions: { subject_identity: 'Saved via the role-keyed map.' } },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stale/corrupted shared block with no per-image structure at all',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).toContain('Saved via the role-keyed map.')
+    expect(out).not.toContain('a stale/corrupted shared block')
+  })
+
+  it('never offers a "Describe with AI" button here — only the reuse-from-history gallery does', () => {
+    // This card shows an already-finished generation with its own already-
+    // baked prompt text; re-describing a reference here wouldn't
+    // retroactively rewrite that prompt, so the trigger is gallery-only
+    // (HistoryImageGallery.jsx) — only manual ✎ Edit lives on this card.
+    const h = {
+      ...standard,
+      refImages: [
+        { url: '/api/blob/r1', fileName: 'a.jpg', role: 'character', caption: 'Already has one.' },
+        { url: '/api/blob/r2', fileName: 'b.jpg', role: 'location' },
+      ],
+      caption: 'a stored shared block, irrelevant once refImages carry their own caption',
+    }
+    const out = render({ history: [h], visible: [h] })
+    expect(out).not.toContain('Describe with AI')
+    expect(out).toContain('✎ Edit')
+  })
+})
+
+describe('ScriptCard', () => {
+  const html = render({ history: [scriptEntry], visible: [scriptEntry] })
+
+  it('renders the pipeline summary', () => {
+    expect(html).toContain('Scriptwriter')
+    expect(html).toContain('claude-opus-5')
+    expect(html).toContain('Done')
+    expect(html).toContain('2 scenes')
+    expect(html).toContain('2 cast')
+    expect(html).toContain('2 clips')          // promptTarget h3 → "clips", not "shots"
+    expect(html).toContain('1 H3 prompts')     // only the one with text counts
+  })
+
+  it('renders the title, cast and idea', () => {
+    expect(html).toContain('Nightfall')
+    expect(html).toContain('Anna, Mo')
+    expect(html).toContain('a heist gone wrong on a rooftop')
+  })
+
+  it('renders reference and frame-still thumbnails', () => {
+    expect(html).toContain('/api/blob/eee')
+    expect(html).toContain('/api/blob/fff')
+  })
+
+  it('lists only prompts that have text', () => {
+    expect(html).toContain('Shot 1 · Rooftop')
+    expect(html).not.toContain('Shot 2 · Stairwell')
+  })
+
+  it('calls LTX clips "shots" when that is the target', () => {
+    const ltx = { ...scriptEntry, promptTarget: 'ltx' }
+    const out = render({ history: [ltx], visible: [ltx] })
+    expect(out).toContain('2 shots')
+    expect(out).toContain('1 LTX prompts')
+  })
+
+  it('prefers the Full Auto hint over the boilerplate idea', () => {
+    const auto = { ...scriptEntry, fullAuto: true, fullAutoHint: 'something with rain' }
+    const out = render({ history: [auto], visible: [auto] })
+    expect(out).toContain('🎬 Full Auto')
+    expect(out).toContain('something with rain')
+    expect(out).not.toContain('a heist gone wrong on a rooftop')
+  })
+
+  it('says so when Full Auto got no hint at all', () => {
+    const auto = { ...scriptEntry, fullAuto: true }
+    expect(render({ history: [auto], visible: [auto] })).toContain('AI invented freely')
+  })
+
+  it('survives a session saved before the director phase', () => {
+    const early = { id: 's2', ts: 1735689600000, type: 'scriptwriter', model: 'm', phase: 'script' }
+    expect(() => render({ history: [early], visible: [early] })).not.toThrow()
+    expect(render({ history: [early], visible: [early] })).toContain('Script')
+  })
+})
