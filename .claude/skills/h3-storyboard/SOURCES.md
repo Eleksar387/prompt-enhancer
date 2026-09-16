@@ -1,92 +1,78 @@
-# 來源與驗證狀態
+# Sources and verification status
 
-這份 skill 的每一條都是實拍歸納的，不是文件抄來的。
-官方和社群的 skill 都沒有涵蓋分鏡與表演這段（見下）。
+Every entry in this skill is drawn from real production runs, not copied from documentation.
+Neither the official nor community skills cover shot breakdown and performance (see below).
 
-## 已驗證（有對照實驗）
+## Verified (with controlled comparison)
 
-| 條目 | 驗證方式 | 日期 |
+| Finding | Verification method | Date |
 |---|---|---|
-| **節拍密度是表演成敗的主因** | Ref2VA 243 幀三版對照，seed 固定，**變因逐一隔離**：<br>A 一鏡 9 拍無台詞 → 37–42 dB（臉沒動）<br>B 三鏡各一拍無台詞 → 22–23 dB（表情到位）<br>C 三鏡各一拍加 `<d>` → 19 dB（幅度更大）<br>**A→B 只改鏡頭結構，B→C 只改一句台詞** | 2026-08-26 |
-| **尺寸要講裁切關係** | 同一顆鏡頭四版：分數寫法 45%／52%，裁切關係寫法 69%／70% | 2026-08-25 |
-| **形狀比例交給參考圖** | 文字寫 1.75:1 連三版生成 0.96 正方形；餵空白參考圖一次成功 | 2026-08-25 |
-| **嘴型鋪滿整鏡，不會在下一拍收嘴** | 台詞標在 3.400、下一拍在 4.000，實際嘴部逐幀 PSNR 顯示 2.17s 就開始動、到 5.12s 影片結束仍在動，共 2.96s | 2026-08-26 |
-| **直幅裡整隻入鏡的尺寸上限約 50–60%** | 寬≈高的角色在 9:16 裡量到 52%／61%／61%。裁掉底部只拍上半部，另一集同一招量到 69–70% | 2026-08-27 |
-| **要看的東西不在畫面裡，就會看鏡頭** | 三個鏡頭各自出現：低頭看桌上小物、對蹲著的人說話、看側面的電視。前兩次試圖用「加動作」（抬頭、轉頭）解決都失敗，因為那些動作跟劇情要求互斥；三次改成移動機位到角色看的方向都成立 | 2026-08-28 |
-| **表演的最後一哩靠剪接** | 兩個鏡頭各改四版提示詞都沒解決節奏問題（反應慢 1.35 秒、轉折隔 3.7 秒太平滑）；用插入鏡頭遮蓋空白、把情緒兩端拉近，各剪一次就都解決 | 2026-08-28 |
-| **設計性變化也能藏在閉眼裡** | 同一顆鏡頭內，2.25s 闔眼、3.75s 睜開時已換成另一張參考圖釘的眼睛設計，中間無切鏡。推翻了「設計變化必須靠切鏡換」的舊結論 | 2026-08-27 |
-| **參考圖有「半闔」款時，寫「眼皮降下來」會被拉去半闔** | 同一支實拍中另一處寫 `eyelids come down again ... close all the way`，結果退回半闔的設計而非全閉 | 2026-08-27 |
-| **情緒轉換藏在閉眼裡有效** | 寫成 A→B 時實拍不自然；改成「閉眼 → 閉著眼時眉毛鬆開 → 睜開已是新狀態」，逐幀確認轉換乾淨。附帶發現：規格裡的切鏡頭沒發生，光靠閉眼就成立 | 2026-08-27 |
-| **帶單位的距離會被忽略** | 寫 `a hand's width short of the base`，實拍液體照樣淹到底座旁。改成「兩者之間空著一條跟公仔一樣高的乾木頭」才成立 | 2026-08-26 |
-| **液體會蔓延到不該碰的表面** | 提示詞寫 `coffee glistening around its base` + `light glowing through the wet film`，實拍時咖啡漬蔓延到公仔整張臉。改成「水漬停在一個手掌寬之外＋正面寫表面全乾」即解決 | 2026-08-26 |
-| **碰撞與液體體積做不到** | 要 H3 拍「手撞倒杯子、咖啡漫開淹到小物件」：手全程沒碰到杯子、咖啡量遠超過一杯且不停流、邊緣硬如貼紙、關鍵接觸從未發生。改成「手臂掃過鏡頭 → 切 → 已發生的結果」才成立 | 2026-08-26 |
-| **`<d>` 重新分配鏡頭時間** | 243 幀四鏡影片，只差一句 VO 對白（同 seed、同參考圖、同 `ref_image_size=max`）。有台詞的那一鏡 55 → 84 幀（規格 74），相鄰鏡頭 56 → 42 幀。臉部最大變化 30.2 → 28.5 dB | 2026-08-26 |
-| **`ref_audio_0` 不能當聲音來源** | 6 秒真人音色參考生一句新台詞（接線已確認正確）：音高 192.8→222.2 Hz、音域 175→117 Hz、口音仍漂移、有電子合成感。但嘴型與呼吸節奏正確。<br>⚠️ 第一次測試接到 `ref_video_audio_0` 導致參考完全沒生效且不報錯，重接後才得到這組數據 | 2026-08-26 |
-| **尾巴崩解** | 00 集 G1／G4／G5 三支都在片尾前 1.2–1.7 秒崩解 | 2026-08-24 |
-| **靜圖 alpha fade 要 `-loop 1`** | 疊圖完全不出現且不報錯，加 `-loop 1` 後正常 | 2026-08-25 |
+| **Beat density is the main factor in performance success/failure** | Ref2VA 243-frame three-version comparison, fixed seed, **variables isolated one at a time**:<br>A: one shot, 9 beats, no dialogue → 37–42 dB (face doesn't move)<br>B: three shots, one beat each, no dialogue → 22–23 dB (expression lands)<br>C: three shots, one beat each, plus `<d>` → 19 dB (larger magnitude)<br>**A→B changes only the shot structure, B→C changes only one line of dialogue** | 2026-08-26 |
+| **Size needs to be expressed as a cropping relationship** | Same shot, four versions: fraction phrasing 45%/52%, cropping-relationship phrasing 69%/70% | 2026-08-25 |
+| **Leave aspect/shape ratio to the reference image** | Text specifying 1.75:1 produced a 0.96 square across three consecutive generations; feeding a blank reference image worked on the first try | 2026-08-25 |
+| **Mouth shape fills the whole shot, doesn't close at the next beat** | Dialogue tagged at 3.400, next beat at 4.000; frame-by-frame mouth PSNR showed motion starting at 2.17s and continuing to the video's end at 5.12s, 2.96s total | 2026-08-26 |
+| **Cap on how large a full-body subject can be in a portrait frame is ~50–60%** | A character roughly as wide as tall measured 52%/61%/61% in 9:16; cropping the bottom to show only the upper body measured 69–70% in another episode using the same trick | 2026-08-27 |
+| **If what a character should be looking at isn't in frame, they'll look at the camera** | Occurred in three separate shots: looking down at a small object on a table, speaking to someone crouching, looking sideways at a TV. The first two attempts to fix it by "adding motion" (looking up, turning the head) both failed because that motion conflicted with the story's requirements; switching the camera position to the direction the character was already looking worked all three times | 2026-08-28 |
+| **The last mile of performance is solved in editing** | Two shots each got four prompt rewrites without fixing the pacing problem (a 1.35s-slow reaction; a transition 3.7s apart that was too smooth); inserting a cutaway shot to cover the gap and pull the two emotional ends closer together fixed both, one edit each | 2026-08-28 |
+| **A deliberate design change can also be hidden inside closed eyes** | Within the same shot — eyes close at 2.25s, and by 3.75s when they open the eye design has already switched to match a different pinned reference image, with no cut in between. This overturns the earlier conclusion that "a design change requires a cut to switch it" | 2026-08-27 |
+| **When a reference image has a "half-lidded" variant, writing "eyelids come down" gets pulled toward half-lidded** | Elsewhere in the same production run, writing `eyelids come down again ... close all the way` still resulted in the half-lidded design instead of fully closed | 2026-08-27 |
+| **Hiding an emotional transition inside closed eyes works** | Writing it as A→B produced an unnatural transition on render; changing it to "eyes close → brows release while eyes are closed → eyes open already in the new state" gave a clean transition confirmed frame by frame. Side finding: the cut specified in the spec didn't actually happen — closing the eyes alone was enough | 2026-08-27 |
+| **Unit-based distances get ignored** | Writing `a hand's width short of the base`, the rendered liquid still flooded right up to the base anyway. Fixed by rewriting it as "a gap of dry wood as wide as the figurine is tall between the two" | 2026-08-26 |
+| **Liquid spreads onto a surface it shouldn't touch** | Prompt wrote `coffee glistening around its base` + `light glowing through the wet film`; render showed the coffee stain spreading across the figurine's entire face. Fixed by rewriting it as "the stain stops a hand's width away" + explicitly stating the front surface stays completely dry | 2026-08-26 |
+| **Collisions and liquid volume are impossible** | Asking H3 to shoot "a hand knocks over a cup, coffee spreads and floods a small object": the hand never made contact with the cup throughout, the coffee volume far exceeded a cup's worth and kept flowing, the edge was hard like a sticker, and the key contact moment never happened. Changed to "an arm sweeps across frame → cut → the already-happened result" and it worked | 2026-08-26 |
+| **`<d>` reallocates shot time** | A 243-frame, four-shot video differing only by one line of VO dialogue (same seed, same reference images, same `ref_image_size=max`). The shot carrying dialogue went from 55→84 frames (spec called for 74); the adjacent shot dropped from 56→42 frames. Peak facial-motion change went from 30.2→28.5 dB | 2026-08-26 |
+| **`ref_audio_0` can't be used as a sound source** | A 6-second real-voice timbre reference generating a new line of dialogue (wiring confirmed correct): pitch 192.8→222.2 Hz, range 175→117 Hz, accent still drifted, had an electronic/synthetic quality. But mouth shape and breathing rhythm were correct.<br>⚠️ The first test was accidentally wired to `ref_video_audio_0`, so the reference had no effect at all and threw no error; this data was only obtained after rewiring correctly | 2026-08-26 |
+| **Tail collapse** | All three of episode 00's G1/G4/G5 generations collapsed 1.2–1.7 seconds before the clip's end | 2026-08-24 |
+| **Static-image alpha fade needs `-loop 1`** | The overlay didn't appear at all and threw no error; adding `-loop 1` fixed it | 2026-08-25 |
 
 
-## 部分驗證（合理但未隔離）
+## Partially verified (plausible but not isolated)
 
-| 規則 | 觀察到的 | 為什麼還不算驗證 |
+| Rule | What was observed | Why it doesn't count as verified yet |
 |---|---|---|
-| **有台詞會犧牲背景延續性** | 兩支有台詞版（`match`、`max`）Shot 4 都掉了窗外的配角，落地窗退化成普通窗戶；無台詞版保留 | 無台詞版只跑過一支，n=1 vs n=2。方向一致但不排除生成變異 |
+| **Dialogue sacrifices background continuity** | Both dialogue versions (`match`, `max`) lost the background character outside the window in Shot 4, and the floor-to-ceiling window degraded into an ordinary window; the no-dialogue version kept both | The no-dialogue version only ran once — n=1 vs n=2. The direction is consistent, but generation variance can't be ruled out |
 
 
-| 條目 | 已知 | 未知 |
+| Item | Known | Unknown |
 |---|---|---|
-| **「什麼都不變」會外溢** | 寫了那句的 A 組整顆鏡頭沒動 | **A 組同時還有「九個節拍擠一鏡」這個變因**，兩者沒有分開測。移除那句的 B／C 組也同時拆了鏡頭。<br>目前只能說「不要寫」是安全的做法，不能說它是主因 |
+| **"Nothing changes" bleeds outward** | The A group, which had that line, had a shot where nothing moved at all | **The A group also had a second variable — "nine beats crammed into one shot"** — the two were never tested separately. The B/C groups that removed that line also split the shot at the same time.<br>Right now all that can be said is "don't write it" is the safe practice, not that it's the primary cause |
 
-| **A→B 的狀態轉換會被內插成橡皮臉** | 寫 `the crease between her eyebrows smooths out and releases`，實拍出來情緒轉換不自然。判定為模型在起訖狀態之間做交叉淡化 | 觀察到現象並定位到句型，但「藏在閉眼裡」的改法還沒實拍驗證 |
+| **A→B state transitions get interpolated into a "rubber face"** | Writing `the crease between her eyebrows smooths out and releases` produced an unnatural emotional transition on render. Attributed to the model cross-dissolving between the start and end states | The phenomenon was observed and the sentence pattern identified, but the "hide it inside closed eyes" fix hasn't been verified on a real render yet |
 
-## 未驗證（推論，待實測）
+## Unverified (inferred, awaiting real-world testing)
 
-- **節拍上限到底是幾拍**——只知道 9 拍會被抹平、1 拍可行，中間沒測
-- 情緒的生理順序（眉→眼→嘴）是否真的被照順序執行——三版對照只驗了「有沒有動」，沒驗「順序對不對」
-- 沉默角色的大肢體替代方案——尚未實拍（但 B 組證明沒有台詞也能演，所以這條的急迫性降低了）
-- `<d>` 帶來的增量（23 dB → 19 dB）在觀感上有多明顯——只有數字，沒有做盲測
-- 音訊參考換更長／更短的樣本、或多段樣本，音色轉移會不會變好——只試過一段 6 秒
+- **Where exactly the beat-count ceiling sits** — only known that 9 beats gets flattened and 1 beat works; nothing in between has been tested
+- Whether the emotional physiological order (brow→eye→mouth) is actually executed in that sequence — the three-version comparison only verified "did it move," not "was the order correct"
+- Large-body alternatives for silent characters — not yet tested on a real render (though the B group proved a character can perform without dialogue, so this item is less urgent)
+- How perceptually visible the increment `<d>` produces (23 dB → 19 dB) actually is — only has the numbers, no blind test has been done
+- Whether swapping in a longer/shorter audio reference sample, or multiple samples, improves timbre transfer — only one 6-second sample has been tried
+- **Whether per-shot second ranges help** — starting 2026-09-16, `SYSTEM_PROMPT_MINIMAX_H3` appends a second range derived from the existing cut timestamps after every `[Shot N]` (e.g. `[Shot 1] (0.00–4.00s)`, `At 4.00s, ... [Shot 2] (4.00–10.00s)`), on the theory that it makes timing more explicit and shot boundaries more controllable. This is a brand-new addition with no controlled experiment yet (ranges vs. no ranges, all other variables held fixed) verifying whether it actually improves coherence or controllability — do not cite it as a verified conclusion. What IS known to be ignored by H3 is fine-grained timestamps *within* a shot (see "mouth shape fills the whole shot" above — a dialogue cutoff timestamp was not honored), but that finding measured sub-second precision *inside* a shot, not the boundary *between* shots (rule 5's increasing cut timestamps already depend on the latter being honored) — these are different claims, and one cannot stand in as verification for the other
 
-## 官方與社群的涵蓋範圍（2026-08-26 查證）
+## Coverage by official and community sources (checked 2026-08-26)
 
-| 來源 | 分鏡拆解 | 表情／表演 |
+| Source | Shot breakdown | Expression/performance |
 |---|---|---|
-| MiniMax 官方 `h3-prompt-writing` skill | ❌ | ❌ |
-| MiniMax 官方提示詞指南（base／ref 兩份原文）| ❌ | ❌ |
-| `alperktt/awesome-minimax-h3-skills` | ⚠️ 只有「從時長表推鏡頭數」 | ❌ |
-| `instann/minimax-h3-director` | ⚠️ 列在 roadmap，未實作 | ❌ |
+| MiniMax's official `h3-prompt-writing` skill | ❌ | ❌ |
+| MiniMax's official prompt-writing guides (both the base and ref originals) | ❌ | ❌ |
+| `alperktt/awesome-minimax-h3-skills` | ⚠️ Only "deriving shot count from a duration table" | ❌ |
+| `instann/minimax-h3-director` | ⚠️ Listed on the roadmap, not implemented | ❌ |
 | `teskor-hub/minimax-h3-skill` | ❌ | ❌ |
-| 本機 `minimax-h3` skill | ❌ | ❌ |
+| the local `minimax-h3` skill | ❌ | ❌ |
 
-⚠️ **注意常見的混淆**：網路上「H3 擅長微表情、眉毛抽動、下顎位移」等說法，
-講的是 **Hailuo 02／2.3——託管 API 的模型**，不是 H3 開源權重。
-而且託管版前面掛了 MiniMax 自己的提示詞改寫器，ComfyUI 這條路沒有，
-文字是逐字進 tokenizer 的。
+⚠️ **Note a common mix-up**: online claims that "H3 is good at microexpressions, eyebrow twitches, jaw shifts" etc. are actually describing **Hailuo 02/2.3 — the hosted API model**, not the H3 open-weights model. The hosted version also has MiniMax's own prompt rewriter in front of it; the ComfyUI path here has none — text goes straight into the tokenizer verbatim.
 
-## 實拍出處
+## Provenance
 
-全部來自一部連載短劇的實際製作（9:16 直式、Ref2VA、ComfyUI 本地生成、
-每集約 60 秒 / 6 段 / 1100–1400 幀）。不是從文件推論的。
+All of this comes from the actual production of a serialized short drama (9:16 portrait, Ref2VA, local ComfyUI generation, ~60 seconds / 6 segments / 1100–1400 frames per episode). None of it is inferred from documentation.
 
-## 修訂紀錄
+## Revision log
 
-**2026-08-26**：第一版把主因歸給 `<d>` 對白標籤，**那是錯的**。
-當時的失敗版與成功版同時改了兩件事（鏡頭結構＋對白），沒有隔離。
-補跑「拆短鏡頭但不加 `<d>`」那組之後才確定：**主因是節拍密度，對白只是加成**。
+**2026-08-26**: The first version attributed the main cause to the `<d>` dialogue tag — **that was wrong**. The failing and succeeding versions at the time changed two things at once (shot structure + dialogue), without isolating them. Only after re-running "shorter shots split apart, but without adding `<d>`" was it confirmed: **the main cause is beat density; dialogue is only a contributing factor**.
 
-留這段是因為它本身就是個教訓——**一次只改一個變因，否則歸因會反過來**。
+This entry is kept because it's a lesson in itself — **change only one variable at a time, or the attribution can end up backwards**.
 
-**2026-08-26（同日稍晚）**：`ref_audio_0` 的第一次測試**接錯線**，
-接到了 `ref_video_audio_0`。參考完全沒生效，而且 ComfyUI **不會報錯**，
-所以那組數據看起來很正常、實際上什麼都沒測到。重接後結論才成立。
+**2026-08-26 (later the same day)**: The first `ref_audio_0` test was **wired to the wrong node** — it connected to `ref_video_audio_0` instead. The reference had no effect at all, and ComfyUI **threw no error**, so that data looked normal but actually tested nothing. The conclusion only held after rewiring correctly.
 
-同一個教訓的另一面：**沒報錯不等於接對了**。
+The other side of the same lesson: **no error doesn't mean it's wired correctly**.
 
-**2026-09-14**：App 的 `SYSTEM_PROMPT_MINIMAX_H3`（以及 Manual mode 的模板）已改為
-不再使用 `<d>` 標籤——對白格式從 `<d>[Language] 文字</d>` 改成 `[Language] "文字"`。
-這是使用者在看過上面「`<d>` 重新分配鏡頭時間」與「有台詞會犧牲背景延續性」兩條
-記錄後**仍然決定移除**的明確選擇，不是因為這兩條記錄被推翻或有新證據反駁它們。
-換句話說：`<d>` 對鏡頭時間分配的影響，此刻**推定仍然存在**，只是新格式底下還沒有
-對照實驗驗證同樣的效果是否發生、發生的幅度是否相同。若之後要重新引入 `<d>`、
-或想確認新格式是否也有相同的搶時間效應，上面兩條記錄仍然有效，需要重新測試
-才能下結論——不要假設拿掉標籤本身就解決了背景延續性的問題。
+**2026-09-14**: The app's `SYSTEM_PROMPT_MINIMAX_H3` (and Manual mode's template) changed to no longer use the `<d>` tag — the dialogue format changed from `<d>[Language] text</d>` to `[Language] "text"`. This was a deliberate choice made by the user **after** seeing both the "`<d>` reallocates shot time" and "dialogue sacrifices background continuity" records above — **not** because those records were disproven or contradicted by new evidence. In other words: the effect of `<d>` on shot time allocation is **presumed to still exist** for now; it's just that under the new format there has been no controlled experiment yet verifying whether the same effect occurs, or at what magnitude. If `<d>` is reintroduced later, or if you want to confirm whether the new format has the same time-stealing effect, the two records above are still valid and require re-testing before drawing conclusions — don't assume that removing the tag by itself solved the background-continuity problem.

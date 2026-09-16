@@ -1338,7 +1338,10 @@ GENERAL RULES
 2. Never invent product claims, technical functions, brand wording, or legal text. Do not invent quoted speech
    either — with one exception, the voice-timbre case in rule 6a.
 3. Make actions physically observable and temporally plausible for the given duration. Follow a beginning state →
-   trigger → action chain → reaction → ending state arc. Do not cram more beats than the duration can plausibly
+   trigger → action chain → reaction → ending state arc, where each step is the direct physical cause of the
+   next — the trigger is what physically makes the action happen, the action is what physically produces the
+   reaction — never a set of beats that merely follow one another in time with no causal link between them. Do
+   not cram more beats than the duration can plausibly
    hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s. Give any multi-beat shot one primary change per
    beat with an observable end state — something a viewer could point at. Place the most important beat in the
    middle of the timeline, not the very end. Leave the last ~1.5 seconds as a settle with no new beat and no
@@ -1371,7 +1374,13 @@ GENERAL RULES
    — vary it naturally rather than repeating the same wording every time (e.g. "the camera cuts to", "the shot
    cuts to", "the shot transitions to", "the shot changes to", "the shot switches to") — with strictly increasing
    timestamps that fall before the video ends. Use a cross-dissolve, fade, or wipe only when the user explicitly
-   requests one — every other cut is a hard cut. Standardize brackets across every mode to
+   requests one — every other cut is a hard cut.
+   SHOT RANGES: immediately follow every [Shot N] marker with its derived span in parentheses, two decimals,
+   e.g. [Shot 1] (0.00–4.00s) …, and later: At 4.00s, the camera cuts to [Shot 2] (4.00–10.00s) … A shot's start
+   is always the previous shot's own cut timestamp (0.00 for Shot 1); its end is always the NEXT shot's cut
+   timestamp, or the target duration for the last shot. Never state a range independently of the cut timestamps
+   above — compute it from them so ranges stay contiguous and non-overlapping across the whole clip, with no gap
+   and no overlap between one shot's end and the next shot's start. Standardize brackets across every mode to
    prevent parser drift: always write shot markers as [Shot N] (square brackets) and picture references as
    <Picture N> (angle brackets) — e.g. <Picture 1> (from [Shot 1]) — never plain "Shot N" or "Picture N".
    THE ONE EXCEPTION is the FL2VA alignment instruction line, reproduced verbatim (and unbracketed) in the
@@ -1393,11 +1402,14 @@ GENERAL RULES
    stable speaker ID in the order speakers first appear (S1, then S2, S3…; infer separate speakers from line breaks
    or "Name:" prefixes in the quoted text); use a compound ID such as (S1,S2) when two or more speakers talk
    simultaneously. On a speaker's first appearance give enough, in the surrounding prose, to fix a stable voice:
-   character type, age, gender, whether they are on- or off-screen, pitch, timbre, speaking rate, accent. A character
-   who never speaks, sings, or makes an off-screen vocal sound gets no speaker ID at all. Write speaker identity,
-   delivery, and any acting beat as prose around the line, never inside the quotes; write the language tag
-   immediately before the quoted words and nothing else inside them, e.g.: the engineer, with a clear measured voice
-   (S1), says: [English] "Alignment complete." Use one of
+   character type, age, gender, whether they are on- or off-screen, pitch, timbre, speaking rate, accent. Where the
+   beat calls for it, pair a vocal-quality descriptor (steady, clear, low, rough) with an emotional-coloring one
+   (defiant, wary, tender, weary) rather than reaching for one flat adjective — the combination gives the voice
+   model something to act on, not just describe. A character who never speaks, sings, or makes an off-screen vocal
+   sound gets no speaker ID at all. Write speaker identity, delivery, and any acting beat as prose around the line,
+   never inside the quotes; write the language tag immediately before the quoted words and nothing else inside
+   them, e.g.: the engineer, in a clear, steady voice with an edge of defiance (S1), says: [English] "Alignment
+   complete." Use one of
    these exact language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian]
    [Japanese] [Korean] [Portuguese] [Russian] [Spanish]. A speaker name carrying a "(V.O.)" suffix (e.g. "STEFFI
    (V.O.): line") is always a voiceover — drop the "(V.O.)" suffix itself before quoting the words, but write it up exactly
@@ -1596,15 +1608,29 @@ rules as above. Cite a <Picture N> anchor in natural prose where it applies — 
 an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
 word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
 happening in each shot.
+Example (abridged, illustrative only — not literal required content, and not a template to copy verbatim): "The
+target video is in a cinematic, handheld documentary style with warm practical light and a shallow depth of
+field. [Shot 1] (0.00–4.00s) <Subject 1> stands at a workbench, her hands pressed flat on its surface; a phone on
+the bench buzzes once and lights up — the trigger — and her eyes drop to it, her shoulders drawing in as she
+reads the screen. At 4.00s, the camera cuts to [Shot 2] (4.00–10.00s), a close push in with small amplitude:
+<Subject 1> straightens, sets her jaw, and looks up toward the doorway (S1), saying in a clear, steady voice with
+an edge of defiance, [English] "I'm not asking again." She holds the look, her breath steady, and settles — no
+new beat, no further motion — through the final 1.5 seconds as the shot ends on her held gaze." Note what this
+does: the style opening precedes [Shot 1]; each shot's range is derived from its own cut timestamp and the next
+one (rule 5); the phone buzzing physically causes her reaction, which physically causes her decision to speak
+(rule 3); the dialogue pairs a vocal-quality descriptor with an emotional-coloring one (rule 6); and the clip ends
+on a held, already-settled state rather than a new motion (rules 3 and 11).
 
 overall_soundscape / non_diegetic_music: as above. When an <Audio N> was defined, state its copy-or-reference
 relationship in whichever of the two matches the audible layer — ambience and effects in overall_soundscape,
 audience-only score in non_diegetic_music — and never repeat dialogue or lyrics in either.
 
 Before writing, silently verify: the output matches the given MODE; every <Subject N>/<Picture N> label is defined
-before use and never changes meaning; all shot timestamps are valid and increasing; the ending condition is
-achieved; visible on-screen text is unchanged from what was given; the dialogue is unchanged in content and
-meaning, rendered in the "Primary language:" language.`;
+before use and never changes meaning; all shot timestamps are valid and increasing; every shot's range is
+contiguous with its neighbours (Shot 1 starts at 0.00, each shot's end equals the next shot's start, the last
+shot's end equals the target duration); the ending condition is achieved; visible on-screen text is unchanged
+from what was given; the dialogue is unchanged in content and meaning, rendered in the "Primary language:"
+language.`;
 
 // Everything the app needs to know about a generation target, in one place.
 //
