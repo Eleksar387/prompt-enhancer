@@ -542,16 +542,27 @@ export default function App() {
   // people know it by (minimax_h3 -> minimax).
   const modelSlug = (id) => TARGETS[id]?.slug || id.replace(/_/g, '-')
 
-  const exportBundle = async () => {
+  // Builds one zip — the shared input image(s) + shared voice-reference audio
+  // (imgs.refAudios, MiniMax H3 ref mode only — [] everywhere else) plus
+  // `variantResults`' prompt(s)/renders/manifest — and triggers its download.
+  // Shared between the normal (all variants in one zip) and per-variant
+  // ("3 variants" mode, see exportBundle below) export paths so both stay
+  // byte-identical in everything except which prompt(s) they carry.
+  const buildExportZip = async (variantResults, filenameSuffix) => {
     const zip = new JSZip()
     const images = currentImages()
     for (const img of images) zip.file(img.name, img.base64, { base64: true })
-    results.forEach((r, i) => {
-      if (r.text) zip.file(results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`, r.text)
+    ;(imgs.refAudios || []).forEach((a, i) => {
+      const ext = (a.fileName && a.fileName.includes('.') ? a.fileName.split('.').pop() : imgExt(a.mediaType)).toLowerCase()
+      zip.file(`voice-reference-${i + 1}.${ext}`, a.base64, { base64: true })
+    })
+    const single = variantResults.length === 1
+    variantResults.forEach((r, i) => {
+      if (r.text) zip.file(single ? 'prompt.txt' : `prompt-${i + 1}.txt`, r.text)
       ;(r.images || []).forEach((img, k) => {
         if (img.b64) zip.file(`render-${i + 1}-${k + 1}.${imgExt(img.mediaType)}`, img.b64, { base64: true })
       })
-      if (r.video?.b64) zip.file(results.length === 1 ? 'render.mp4' : `render-${i + 1}.mp4`, r.video.b64, { base64: true })
+      if (r.video?.b64) zip.file(single ? 'render.mp4' : `render-${i + 1}.mp4`, r.video.b64, { base64: true })
     })
     // manifest.json — same machine-readable shape the Scriptwriter's export uses
     // (see ScriptwriterPanel.jsx's exportBundle), so the comfyui-prompt-enhancer-
@@ -571,20 +582,20 @@ export default function App() {
       })
       // Keep each clip's original `i` (not the post-filter position) so promptFile/
       // outputName still names the same file the loop above actually wrote — a
-      // failed variant among 3 must not shift the other two's filenames by one.
-      const clips = results
+      // failed variant among 3 must not shift the other(s)' filenames.
+      const clips = variantResults
         .map((r, i) => ({ r, i }))
         .filter(({ r }) => r.text)
         .map(({ r, i }) => ({
           clipNumber: i + 1,
           sceneTitle: r.label || '',
-          promptFile: results.length === 1 ? 'prompt.txt' : `prompt-${i + 1}.txt`,
+          promptFile: single ? 'prompt.txt' : `prompt-${i + 1}.txt`,
           promptText: r.text,
           mode: images.length ? `image-to-${t.type}` : `text-to-${t.type}`,
           // `duration` is a free-text label ('8 seconds', '97 frames (~4 seconds)'),
           // not a number — pull the seconds figure out the same way syllableBudget() does.
           durationSec: show.duration ? (parseFloat(String(duration || '').match(/(\d+(?:\.\d+)?)\s*seconds?/)?.[1]) || null) : null,
-          outputName: results.length === 1 ? 'prompt' : `prompt-${i + 1}`,
+          outputName: single ? 'prompt' : `prompt-${i + 1}`,
           references,
         }))
       if (clips.length) {
@@ -596,9 +607,25 @@ export default function App() {
     const a = document.createElement('a')
     a.href = url
     const title = titleSlug(scene)
-    a.download = `${title ? title + '-' : ''}${t.type}-${modelSlug(target)}-${new Date().toISOString().slice(0, 10)}.zip`
+    a.download = `${title ? title + '-' : ''}${t.type}-${modelSlug(target)}${filenameSuffix}-${new Date().toISOString().slice(0, 10)}.zip`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // "3 variants" mode used to bundle all three prompts into one zip. A variant
+  // is meant to be picked, not diffed after the fact, so each successful
+  // variant now gets its OWN self-contained zip — shared images/audio plus
+  // just that variant's prompt (and its own renders, if any) — one download
+  // per variant instead of one download holding three competing prompts.
+  const exportBundle = async () => {
+    const successful = results.filter(r => r.text)
+    if (successful.length > 1) {
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].text) await buildExportZip([results[i]], `-variant-${i + 1}`)
+      }
+    } else {
+      await buildExportZip(results, '')
+    }
   }
 
   // A previous copy's status shouldn't linger against a different set of loaded images.
@@ -2185,7 +2212,9 @@ export default function App() {
                 </button>
               )}
               <button onClick={exportBundle} style={{ fontSize: 13, color: 'var(--pe-accent-ink)', background: 'none', border: '1px solid var(--pe-accent-line)', borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>
-                Export ZIP (images + prompt{results.filter(r => r.text).length > 1 ? 's' : ''}) ↓
+                {results.filter(r => r.text).length > 1
+                  ? `Export ${results.filter(r => r.text).length} ZIPs (one per variant) ↓`
+                  : 'Export ZIP (images + prompt) ↓'}
               </button>
             </div>
           )}
