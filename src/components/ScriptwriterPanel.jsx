@@ -24,6 +24,7 @@ import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import LoraPanel from './LoraPanel'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
+import H3SyntaxBadge from './H3SyntaxBadge'
 
 const GENRE_OPTIONS = [
   { id: 'auto',     label: 'Auto' },
@@ -1474,12 +1475,19 @@ export default function ScriptwriterPanel({
     await mapWithConcurrency(shots, 6, (shot, i) => {
       const userMsg = userMsgs[i]
       const isRefShot = /^MODE:\s*Ref2VA/.test(userMsg)
+      // Frozen at generation time — the H3 mode this specific clip's text was
+      // actually written for, never recomputed later from the live reference
+      // set (a clip's pinned references can change after this without
+      // retroactively rewriting its already-generated text — see
+      // "Per-clip reference pinning" — so a live recompute would validate a
+      // stale prompt against the wrong mode).
+      const h3Mode = isH3 ? (isRefShot ? 'Ref2VA' : 'T2VA') : null
       return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
         .then(({ text: raw, usage }) => {
           if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
           const text = withLoraTriggers(isH3 ? normalizeH3Prompt(raw, isRefShot) : raw, lorasForShot(shot), promptTarget)
-          setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false } : p))
-          results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text }
+          setFinalPrompts(prev => prev.map((p, idx) => idx === i ? { ...p, text, usage, loading: false, h3Mode } : p))
+          results[i] = { shotNumber: shot.shot_number, sceneTitle: shot.scene_title, text, h3Mode }
         })
         .catch(e => {
           if (e?.isRefusal && !refusal) refusal = { shotNumber: shot.shot_number, message: e.message }
@@ -1959,17 +1967,20 @@ export default function ScriptwriterPanel({
       // never runs on it. A refused clip must not be saved as if it were a
       // real prompt (this used to happen silently here).
       if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
-      const text = withLoraTriggers(isH3now ? normalizeH3Prompt(raw, /^MODE:\s*Ref2VA/.test(userMsg)) : raw, lorasForShot(shot), promptTarget)
+      const isRefShot = /^MODE:\s*Ref2VA/.test(userMsg)
+      const text = withLoraTriggers(isH3now ? normalizeH3Prompt(raw, isRefShot) : raw, lorasForShot(shot), promptTarget)
+      // Frozen at generation time — see the matching comment in runPhase3.
+      const h3Mode = isH3now ? (isRefShot ? 'Ref2VA' : 'T2VA') : null
       let saved = null
       setFinalPrompts(prev => {
-        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
+        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '', h3Mode } : p)
         saved = next
         return next
       })
       if (saved) commitHistory({
         ...basePayload('done', refs),
         script, directorsCut,
-        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null })),
+        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null, h3Mode: p.h3Mode || null })),
         framePrompts: serializeFramePrompts(framePrompts),
       })
     } catch (e) {
@@ -2004,16 +2015,17 @@ export default function ScriptwriterPanel({
       if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
       const isRefFlag = /^\s*subject_definitions\s*:/i.test(existing) || /^\s*subject_definitions\s*:/i.test(raw)
       const text = withLoraTriggers(normalizeH3Prompt(raw, isRefFlag), lorasForShot(shot), promptTarget)
+      const h3Mode = isRefFlag ? 'Ref2VA' : 'T2VA'
       let saved = null
       setFinalPrompts(prev => {
-        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '' } : p)
+        const next = prev.map((p, i) => i === idx ? { ...p, text, usage, loading: false, error: '', h3Mode } : p)
         saved = next
         return next
       })
       if (saved) commitHistory({
         ...basePayload('done', refImages),
         script, directorsCut,
-        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null })),
+        finalPrompts: saved.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null, h3Mode: p.h3Mode || null })),
         framePrompts: serializeFramePrompts(framePrompts),
       })
     } catch (e) {
@@ -3874,6 +3886,17 @@ export default function ScriptwriterPanel({
                         style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
                         onFocus={focusBorder} onBlur={blurBorder} />
                     )}
+                    {isH3 && p.text && !p.loading && directorsCut?.shots?.[i] && (() => {
+                      const shot = directorsCut.shots[i]
+                      const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+                      const refs = shotRefs(shot, scene)
+                      // A pre-existing entry (saved before h3Mode was stamped
+                      // on finalPrompts) has no p.h3Mode — fall back to the
+                      // same signal buildH3ShotMessage itself uses (captioned
+                      // references present -> Ref2VA, none -> T2VA).
+                      const mode = p.h3Mode || (refs.length ? 'Ref2VA' : 'T2VA')
+                      return <H3SyntaxBadge text={p.text} mode={mode} refImages={refs} />
+                    })()}
                     </>}
                   </div>
                 )})}

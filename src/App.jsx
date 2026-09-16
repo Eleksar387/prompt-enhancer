@@ -42,7 +42,8 @@ import {
   hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode,
   refAudiosFromSnap,
 } from './workspace'
-import { buildStylePart, buildWriterUserText } from './adapt'
+import { buildStylePart, buildWriterUserText, h3ModeFor } from './adapt'
+import H3SyntaxBadge from './components/H3SyntaxBadge'
 import { buildManualH3, buildManualSeed } from './manualH3'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
@@ -814,7 +815,13 @@ export default function App() {
     applyWorkspace(snapshotToWorkspace(h, { newId: generateId }))
     // `saved` = the text as restored, so a later hand-edit is detectable (resultsEdited).
     setResults(Array.isArray(h.outputs)
-      ? h.outputs.filter(o => o && typeof o === 'object').map(o => ({ label: o.label || h.model || 'output', text: o.text || '', saved: o.text || '', usage: null, loading: false, error: '', images: Array.isArray(o.images) ? o.images : [], imgLoading: false, imgError: '', video: (o.video && typeof o.video === 'object' && (o.video.url || o.video.b64)) ? o.video : null, vidLoading: false, vidError: '', vidProgress: 0 }))
+      ? h.outputs.filter(o => o && typeof o === 'object').map(o => ({ label: o.label || h.model || 'output', text: o.text || '', saved: o.text || '', usage: null, loading: false, error: '',
+          // A pre-existing entry (saved before h3Mode was stamped on outputs)
+          // has no o.h3Mode — fall back to deriving it the same way a fresh
+          // generation would, from the snapshot's own frameMode/firstImg, so
+          // H3SyntaxBadge still has a mode to check an old entry against.
+          h3Mode: o.h3Mode || (h.target === 'minimax_h3' ? h3ModeFor(h.frameMode, !!h.firstImg) : null),
+          images: Array.isArray(o.images) ? o.images : [], imgLoading: false, imgError: '', video: (o.video && typeof o.video === 'object' && (o.video.url || o.video.b64)) ? o.video : null, vidLoading: false, vidError: '', vidProgress: 0 }))
       : [])
     // A 🎨 Render right after a restore should patch this same entry.
     lastSavedEntryIdRef.current = h.id || null
@@ -931,28 +938,28 @@ export default function App() {
   //
   // `saved` is set alongside `text` because the hand-edit detector (resultsEdited)
   // compares the two. A null `snapshot` means "don't record this in history".
-  const runWriterCall = async ({ user, system, snapshot }) => {
+  const runWriterCall = async ({ user, system, snapshot, h3Mode = null }) => {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
     // shape this target's output format expects.
     const repair = (raw) => withLoraTriggers(raw, activeLoras, target)
 
     if (outputCount === 1) {
       const lbl = effectiveWriter
-      setResults([{ label: lbl, text: '', usage: null, loading: true, error: '' }])
+      setResults([{ label: lbl, text: '', usage: null, loading: true, error: '', h3Mode }])
       try {
         const { text: raw, usage } = await callOllama(effectiveWriter, user, system, cfg, cfg.temperature)
         const text = repair(raw)
-        setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '' }])
-        if (snapshot) saveHistory(snapshot, [{ label: lbl, text }])
+        setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '', h3Mode }])
+        if (snapshot) saveHistory(snapshot, [{ label: lbl, text, h3Mode }])
         return { ok: true }
       } catch (e) {
-        setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message }])
+        setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message, h3Mode }])
         return { ok: false, error: e.message }
       }
     }
 
     const variants = buildVariants(effectiveWriter)
-    setResults(variants.map(v => ({ label: v.label, text: '', usage: null, loading: true, error: '' })))
+    setResults(variants.map(v => ({ label: v.label, text: '', usage: null, loading: true, error: '', h3Mode })))
     // Each variant settles its own row as it lands; a failed one records its error
     // in place and still contributes a row to the saved entry.
     const outs = await Promise.all(variants.map((v, i) =>
@@ -960,7 +967,7 @@ export default function App() {
         .then(({ text: raw, usage }) => {
           const text = repair(raw)
           setResults(prev => prev.map((r, idx) => idx === i ? { ...r, text, saved: text, usage, loading: false } : r))
-          return { label: v.label, text }
+          return { label: v.label, text, h3Mode }
         })
         .catch(e => {
           setResults(prev => prev.map((r, idx) => idx === i ? { ...r, loading: false, error: e.message } : r))
@@ -973,7 +980,7 @@ export default function App() {
 
   const sendToWriter = async () => {
     admin.setPending(false)
-    return runWriterCall({ user: admin.userMsg, system: admin.system, snapshot: admin.snapshotRef.current })
+    return runWriterCall({ user: admin.userMsg, system: admin.system, snapshot: admin.snapshotRef.current, h3Mode: admin.h3ModeRef.current })
   }
 
   const insertCameraMarker = (move) => {
@@ -1186,8 +1193,7 @@ export default function App() {
       setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); admin.setPending(false)
       setManualWarnings([])
 
-      const mode = frameMode === 'last' ? 'L2VA' : frameMode === 'firstlast' ? 'FL2VA'
-        : frameMode === 'ref' ? 'Ref2VA' : imgs.firstImg ? 'I2VA' : 'T2VA'
+      const mode = h3ModeFor(frameMode, imgs.firstImg)
       const built = buildManualH3({
         mode, storyText: scene, soundscape, music, duration,
         refImages: imgs.refImages, refAudios: imgs.refAudios,
@@ -1202,9 +1208,9 @@ export default function App() {
       // not an AI call, and TARGETS.minimax_h3.loraInject.fields already
       // targets exactly the field names this module emits.
       const text = withLoraTriggers(built.text, activeLoras, target)
-      setResults([{ label: 'manual', text, saved: text, usage: null, loading: false, error: '' }])
+      setResults([{ label: 'manual', text, saved: text, usage: null, loading: false, error: '', h3Mode: mode }])
       const snapshot = buildWorkspaceSnapshot(workspace, { model: 'manual', vision: null, outputCount: 1, caption: null })
-      saveHistory(snapshot, [{ label: 'manual', text }])
+      saveHistory(snapshot, [{ label: 'manual', text, h3Mode: mode }])
       return { ok: true }
     }
 
@@ -1262,15 +1268,19 @@ export default function App() {
     })
 
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
+    // Captured now, from the exact frameMode/hasImg this message was built
+    // for — not recomputed later from possibly-changed live state (see
+    // H3SyntaxBadge / checkH3Prompt).
+    const h3Mode = tcaps.structured ? h3ModeFor(frameMode, hasImg) : null
 
     // Admin mode intercepts here: hold the assembled message for review instead
     // of sending it. A queued run never pauses — nobody is watching it.
     if (admin.mode && !opts?.queue) {
-      admin.pause(userText, snapshot)
+      admin.pause(userText, snapshot, h3Mode)
       return { ok: false, error: 'paused for admin review' }
     }
 
-    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode), snapshot })
+    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode), snapshot, h3Mode })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -1294,7 +1304,7 @@ export default function App() {
   const captionEdited = !writing && !!caption.trim() && caption !== savedCaption && results.some(r => r.text && !r.error)
 
   const saveResultsEdit = () => {
-    const outs = results.filter(r => r.text && !r.error).map(r => ({ label: r.label, text: r.text, ...(r.images?.length ? { images: r.images } : {}), ...(r.video ? { video: r.video } : {}) }))
+    const outs = results.filter(r => r.text && !r.error).map(r => ({ label: r.label, text: r.text, ...(r.h3Mode ? { h3Mode: r.h3Mode } : {}), ...(r.images?.length ? { images: r.images } : {}), ...(r.video ? { video: r.video } : {}) }))
     if (!outs.length) return
     saveHistory(buildSnapshot(caption || null, hasImgNow, outs.length), outs)
     setResults(prev => prev.map(r => ({ ...r, saved: r.text })))
@@ -2292,6 +2302,9 @@ export default function App() {
                   rows={Math.max(4, Math.ceil(r.text.length / 70))} spellCheck={false}
                   style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
                   onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
+              )}
+              {target === 'minimax_h3' && r.text && !r.loading && !r.error && (
+                <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={imgs.refImages} />
               )}
               {r.imgError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Render failed: {r.imgError}</div>}
               {r.images?.length > 0 && (

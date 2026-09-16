@@ -22,6 +22,11 @@ export function useAdminReview(target, frameMode) {
   // The history snapshot of the generation that is waiting to be sent. A ref, not
   // state: nothing renders from it and it must not trigger a re-render.
   const snapshotRef = useRef(null)
+  // The MiniMax H3 mode (T2VA/I2VA/…/Ref2VA) the paused message was built for,
+  // or null for a non-H3 target — captured at the same moment as the snapshot
+  // so a later frameMode change can't make sendToWriter validate the eventual
+  // result against the wrong mode.
+  const h3ModeRef = useRef(null)
 
   useEffect(() => {
     setSystem(systemPromptFor(target, frameMode))
@@ -31,14 +36,15 @@ export function useAdminReview(target, frameMode) {
 
   // Called by the writer instead of sending: hold the assembled message and its
   // snapshot, and surface them for review.
-  const pause = (assembledUserMsg, snapshot) => {
+  const pause = (assembledUserMsg, snapshot, h3Mode = null) => {
     setUserMsg(assembledUserMsg)
     snapshotRef.current = snapshot
+    h3ModeRef.current = h3Mode
     setPending(true)
   }
 
   return {
     mode, setMode, system, setSystem, systemOpen, setSystemOpen,
-    userMsg, setUserMsg, pending, setPending, snapshotRef, pause,
+    userMsg, setUserMsg, pending, setPending, snapshotRef, h3ModeRef, pause,
   }
 }

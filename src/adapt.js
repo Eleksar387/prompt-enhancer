@@ -217,6 +217,21 @@ export function buildAdaptUserText({
 
 
 // ── the generate-mode user message ─────────────────────────────────────────
+// The MiniMax H3 frameMode -> MODE mapping, shared by the AI writer path
+// (buildWriterUserText below) and Manual mode's zero-AI assembly (App.jsx's
+// enhance()) — both need the identical ternary, so it lives in one place.
+// `hasImg` is deliberately a separate argument from "is there a first-frame
+// image loaded", not derived from it here: the AI path passes whether vision
+// actually produced a description (vision can fail independently of an image
+// being loaded), while Manual mode (no vision step) passes image presence
+// directly — each call site decides which question it's answering.
+export function h3ModeFor(frameMode, hasImg) {
+  return frameMode === 'last' ? 'L2VA'
+    : frameMode === 'firstlast' ? 'FL2VA'
+    : frameMode === 'ref' ? 'Ref2VA'
+    : hasImg ? 'I2VA' : 'T2VA'
+}
+
 // The writer's user message for a fresh generation, moved here verbatim from
 // runWriter() so it sits beside buildAdaptUserText — the two are the same job for
 // the same targets, and keeping them in one file is what makes their overlap
@@ -233,10 +248,7 @@ export function buildWriterUserText({
   stylePart = '', lengthPart = '',
 }) {
   if (caps(target).structured) {
-    const mode = frameMode === 'last' ? 'L2VA'
-      : frameMode === 'firstlast' ? 'FL2VA'
-      : frameMode === 'ref' ? 'Ref2VA'
-      : hasImg ? 'I2VA' : 'T2VA'
+    const mode = h3ModeFor(frameMode, hasImg)
     // A ratio is named only when nothing else fixes it: a text-only run, or
     // reference mode where the references do not set the frame. Every image-driven
     // mode inherits the input's ratio and must not be told to override it.
