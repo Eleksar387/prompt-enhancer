@@ -36,6 +36,15 @@ export default function ScriptwriterRefImages({
   onAddFiles, onRemove, onNote, onCaption, onDescribe,
   linkTypes = [], characters = [], locations = [], roles = [], preserves = [],
   onLinkType, onField,
+  // Scroll target for the Director's-Cut "no described references" banners'
+  // "↑ Jump to Reference Images" button (ScriptwriterPanel.jsx) — forwarded
+  // onto whichever root element is actually rendered below.
+  panelRef,
+  // MiniMax H3 only: one line teaching that a reference can also become a
+  // Timeline anchor (Add Guide) later, per clip, on Director's-Cut — see
+  // "Fix 4" / "Anchors stay per-clip" in the discoverability plan. Never a
+  // mode choice here, just context for a concept assigned elsewhere.
+  h3 = false,
 }) {
   const fileInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
@@ -48,7 +57,7 @@ export default function ScriptwriterRefImages({
   // ---- read-only summary (phases after the script exists) ------------------
   if (!editable) {
     return (
-      <details style={{ marginBottom: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '10px 14px' }}>
+      <details ref={panelRef} style={{ marginBottom: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '10px 14px' }}>
         <summary style={{ fontSize: 13, color: 'var(--pe-ink-3)', cursor: 'pointer' }}>
           Reference images ({images.length})
         </summary>
@@ -92,6 +101,7 @@ export default function ScriptwriterRefImages({
 
   return (
     <div
+      ref={panelRef}
       style={{ marginBottom: 16, borderRadius: 10, outline: dragOver ? '2px dashed var(--pe-accent)' : '2px dashed transparent', outlineOffset: 4, transition: 'outline-color 0.15s' }}
       onDrop={onDrop}
       onDragOver={(e) => { if ((e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); setDragOver(true) } }}
@@ -100,6 +110,13 @@ export default function ScriptwriterRefImages({
       <label style={lbl}>
         Reference Images <span style={lblNote}>(optional — up to {max}; each gets a note and an AI description the script is built from)</span>
       </label>
+      {h3 && (
+        <div style={{ fontSize: 12, color: 'var(--pe-ink-3)', marginBottom: 8, lineHeight: 1.4 }}>
+          A reference can also be pinned to a specific moment inside a clip later, on the
+          Director's-Cut screen, for MiniMax H3's Add-Guide multiframe workflow — nothing to
+          decide here.
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {images.map((im, i) => (
@@ -170,15 +187,18 @@ export default function ScriptwriterRefImages({
           </div>
         ))}
 
-        {images.length < max && !busy && (
+        {images.length < max && (
           <div
-            onClick={() => fileInputRef.current?.click()}
-            style={{ padding: 16, borderRadius: 8, border: '1px dashed var(--pe-line)', background: 'var(--pe-rail)', textAlign: 'center', cursor: 'pointer' }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--pe-accent)' }}
+            onClick={busy ? undefined : () => fileInputRef.current?.click()}
+            aria-disabled={busy}
+            style={{ padding: 16, borderRadius: 8, border: '1px dashed var(--pe-line)', background: 'var(--pe-rail)', textAlign: 'center', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+            onMouseEnter={e => { if (!busy) e.currentTarget.style.borderColor = 'var(--pe-accent)' }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--pe-line)' }}
           >
             <div style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>+ Add reference image ({images.length}/{max})</div>
-            <div style={{ fontSize: 13, color: 'var(--pe-line)', marginTop: 3 }}>Click or drag &amp; drop — JPG, PNG, WebP</div>
+            <div style={{ fontSize: 13, color: 'var(--pe-line)', marginTop: 3 }}>
+              {busy ? 'Busy — available again once the script/review finishes' : 'Click or drag & drop — JPG, PNG, WebP'}
+            </div>
           </div>
         )}
       </div>

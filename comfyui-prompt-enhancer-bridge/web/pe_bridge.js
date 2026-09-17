@@ -8,7 +8,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { PROMPT_NODE, IMAGE_NODE, DURATION_NODE, countImageSlots, hasPromptNode, hasDurationNode, patchForClip } from "./patch.js";
+import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip } from "./patch.js";
 
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
@@ -142,6 +142,12 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
 
   const slots = countImageSlots(promptOutput);
   const maxNeeded = Math.max(0, ...manifest.clips.map((c) => c.references.length));
+  // `guides` (Add-Guide timeline anchors) only exists on a Scriptwriter
+  // export that actually used them — 0 for every normal, non-multiframe
+  // export, in which case guideSlots being 0 too (no PEClipGuideImage in the
+  // template) is expected and silent, not a warning.
+  const guideSlots = countGuideSlots(promptOutput);
+  const maxGuidesNeeded = Math.max(0, ...manifest.clips.map((c) => (c.guides || []).length));
   const promptOk = hasPromptNode(promptOutput);
 
   const minBtn = el("span", { title: "Minimize / expand" }, [document.createTextNode("▁")]);
@@ -173,6 +179,11 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
       `A clip needs ${maxNeeded} reference image(s), but your loaded workflow only has ${slots} ${IMAGE_NODE} node(s) (by highest index+1). Add more, or this clip's extra references will be skipped.`
     );
   }
+  if (maxGuidesNeeded > guideSlots) {
+    problems.push(
+      `A clip needs ${maxGuidesNeeded} Add-Guide timeline anchor(s), but your loaded workflow only has ${guideSlots} ${GUIDE_IMAGE_NODE} node(s) (by highest index+1). Add more, or this clip's extra guides will be skipped.`
+    );
+  }
   if (problems.length) {
     body.append(el("div", {
       style: { background: "#4a2a2a", border: "1px solid #a55", borderRadius: "6px", padding: "8px", marginBottom: "12px" },
@@ -196,6 +207,10 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
     const refLine = clip.references.length
       ? clip.references.map((r, i) => `#${i}: ${r.file.split("/").pop()}`).join("  ·  ")
       : "(no references — T2VA)";
+    const guides = clip.guides || [];
+    const guideLine = guides.length
+      ? guides.map((g, i) => `#${i}: ${g.file.split("/").pop()} @ ${g.atSeconds}s (frame ${g.frameIdx})`).join("  ·  ")
+      : null;
     const preview = (clip.promptText || "").slice(0, 220).replace(/\s+/g, " ");
     list.append(el("div", {
       style: { border: "1px solid #444", borderRadius: "6px", padding: "8px" },
@@ -204,6 +219,7 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
         `Clip ${clip.clipNumber} — ${clip.sceneTitle || ""} · ${clip.mode} · ${clip.durationSec}s`
       )]),
       el("div", { style: { color: "#aaa", margin: "4px 0" } }, [document.createTextNode(refLine)]),
+      ...(guideLine ? [el("div", { style: { color: "#8ab", margin: "0 0 4px" } }, [document.createTextNode("Add Guide: " + guideLine)])] : []),
       el("div", { style: { color: "#ccc", fontStyle: "italic" } }, [document.createTextNode(preview + "…")]),
       el("div", { class: "pe-status", style: { marginTop: "4px", color: "#7ab" } }, []),
     ]));

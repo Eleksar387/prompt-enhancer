@@ -112,10 +112,34 @@ function checkRefCrossReference(text, refImages) {
   return warnings
 }
 
+// Timeline-anchor cross-check (Add Guide, Scriptwriter-only): an anchored
+// <Picture N> should show up with ITS timestamp somewhere in the text, not
+// just be mentioned. Loose on purpose — the addendum's exact wording varies
+// ("at 00:01.500, the continuous movement reaches...") — this only checks
+// that the <Picture N> tag and its formatted MM:SS.mmm timestamp co-occur
+// somewhere in the body, never that they're adjacent or phrased a specific
+// way. A miss is a warning (the writer may have used the S.SS form, or
+// dropped the anchor entirely) — never an error, matching this module's
+// "over-strict trains users to ignore the badge" principle.
+function checkAnchorTimestamps(text, anchors) {
+  const warnings = []
+  for (const a of anchors || []) {
+    const tag = `<Picture ${a.pictureN}>`
+    if (!text.includes(tag)) continue // already covered by checkRefCrossReference
+    const mmss = new RegExp(String(a.atSeconds).replace('.', '\\.'))
+    if (!mmss.test(text) && !text.includes(String(a.atSeconds.toFixed(2)))) {
+      warnings.push(`Anchor ${tag} (pinned at ${a.atSeconds}s) has no matching timestamp near it in the text.`)
+    }
+  }
+  return warnings
+}
+
 // `mode` is one of T2VA/I2VA/L2VA/FL2VA/Ref2VA. `refImages`/`refAudios` are
-// only used for the Ref2VA cross-check. `ok` reflects errors only — warnings
-// never flip the badge from green, or it would rarely show green at all.
-export function checkH3Prompt(text, { mode, refImages = [] } = {}) {
+// only used for the Ref2VA cross-check. `anchors` (Scriptwriter Timeline
+// anchors, `[{ pictureN, atSeconds }]`) is optional and only checked for
+// Ref2VA. `ok` reflects errors only — warnings never flip the badge from
+// green, or it would rarely show green at all.
+export function checkH3Prompt(text, { mode, refImages = [], anchors = [] } = {}) {
   const body = text || ''
   if (!body.trim()) return { ok: false, errors: ['Output is empty.'], warnings: [] }
 
@@ -142,7 +166,10 @@ export function checkH3Prompt(text, { mode, refImages = [] } = {}) {
       }
     }
   }
-  if (mode === 'Ref2VA') warnings.push(...checkRefCrossReference(body, refImages))
+  if (mode === 'Ref2VA') {
+    warnings.push(...checkRefCrossReference(body, refImages))
+    if (anchors.length) warnings.push(...checkAnchorTimestamps(body, anchors))
+  }
   if (body.length > MAX_CHARS) {
     warnings.push(`Output is ${body.length} characters — over the ~${MAX_CHARS}-character guideline.`)
   }

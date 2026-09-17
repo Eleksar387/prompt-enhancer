@@ -57,14 +57,19 @@ def stage_zip(zip_bytes, runs_root):
         manifest = json.load(f)
 
     for clip in manifest.get("clips", []):
-        for ref in clip.get("references", []):
-            rel = ref.get("file", "")
-            abs_path = os.path.join(run_dir, *rel.split("/"))
-            if not os.path.isfile(abs_path):
-                raise ManifestError(
-                    f"manifest.json for clip {clip.get('clipNumber')} points at "
-                    f"'{rel}', which isn't in the zip. Re-export and try again."
-                )
-            ref["absPath"] = abs_path
+        # `guides` (Add-Guide timeline anchors, an optional, chronologically
+        # sorted array distinct from `references` — see PEClipGuideImage's
+        # docstring in nodes.py) is staged the same way: same file layout,
+        # same missing-file error, just a second key to walk.
+        for key in ("references", "guides"):
+            for ref in clip.get(key, []):
+                rel = ref.get("file", "")
+                abs_path = os.path.join(run_dir, *rel.split("/"))
+                if not os.path.isfile(abs_path):
+                    raise ManifestError(
+                        f"manifest.json for clip {clip.get('clipNumber')} points at "
+                        f"'{rel}', which isn't in the zip. Re-export and try again."
+                    )
+                ref["absPath"] = abs_path
 
     return run_id, run_dir, manifest

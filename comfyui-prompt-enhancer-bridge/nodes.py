@@ -1,8 +1,9 @@
-# Three small node classes that give the JS extension (web/pe_bridge.js) a
+# Four small node classes that give the JS extension (web/pe_bridge.js) a
 # stable, rename-proof way to find "where does this clip's prompt/reference/
-# duration go" in a user's own template workflow: it patches by class_type,
-# which is what ComfyUI's own /prompt payload carries (not node titles, which
-# live in a separate JSON and which a user is free to rename without warning).
+# guide-image/duration go" in a user's own template workflow: it patches by
+# class_type, which is what ComfyUI's own /prompt payload carries (not node
+# titles, which live in a separate JSON and which a user is free to rename
+# without warning).
 #
 # The user builds a template workflow ONCE — their MiniMax/H3-calling
 # node(s), one PEClipPrompt feeding its positive-prompt input, up to 6
@@ -10,6 +11,15 @@
 # PEClipDuration feeding whatever drives clip length, a Save node — and the
 # JS extension clones + patches that graph once per clip in the dropped
 # export's manifest.json.
+#
+# A SEPARATE, optional template shape (MiniMax H3's "Reference-to-Video +
+# chained Add Guide nodes" multiframe workflow) additionally wires one
+# PEClipGuideImage per Add-Guide chain position, each feeding one Add Guide
+# node's image input (and, where the Add Guide node accepts it, the same
+# PEClipGuideImage's frame_idx output). This is a separate node type, not a
+# PEClipImage mode switch, because the two slot kinds are indexed against two
+# different manifest arrays (`references` vs. chronologically-sorted
+# `guides`) — see PEClipGuideImage's own docstring.
 
 import os
 
@@ -98,6 +108,54 @@ class PEClipImage:
         return (torch.from_numpy(arr),)
 
 
+class PEClipGuideImage:
+    """Loads one Add-Guide timeline-anchor image, for a MiniMax H3
+    "Reference-to-Video + chained Add Guide nodes" multiframe template —
+    a separate, optional workflow shape from the plain flat reference set
+    PEClipImage feeds (see PEClipImage's own docstring).
+
+    Structurally identical to PEClipImage (0-based `index`, same absolute-path
+    load, same 1x1-black-placeholder fallback when a clip has fewer guides
+    than the template has slots) but reads from the manifest's `guides` list
+    instead of `references`. That list is a SEPARATE, chronologically sorted
+    view (index 0 = earliest time in the clip, not "1st reference image") —
+    the app's own manifest.json comment explains why: `references[]`'s order
+    is load-bearing for the prompt text's "Image N" numbering and must not be
+    repurposed for this. Also outputs the guide's frame index (already
+    computed by the app as round(atSeconds * 24) and stored in the manifest —
+    no time math happens here), for wiring into the Add Guide node's own
+    frame-position input.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "index": ("INT", {"default": 0, "min": 0, "max": 5, "step": 1}),
+                "image_path": ("STRING", {"default": ""}),
+                "frame_idx": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "INT")
+    RETURN_NAMES = ("image", "frame_idx")
+    FUNCTION = "load"
+    CATEGORY = "Prompt Enhancer Bridge"
+
+    def load(self, index, image_path, frame_idx):
+        if not _HAVE_IMAGING:
+            raise RuntimeError("PEClipGuideImage needs numpy/torch/Pillow, which a real ComfyUI install always provides.")
+        if not image_path or not os.path.isfile(image_path):
+            arr = np.zeros((1, 1, 1, 3), dtype=np.float32)
+            return (torch.from_numpy(arr), 0)
+        img = Image.open(image_path)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+        arr = np.array(img).astype(np.float32) / 255.0
+        arr = arr[None, ...]
+        return (torch.from_numpy(arr), frame_idx)
+
+
 class PEClipDuration:
     """Outputs a literal float (seconds). Wire it into whatever your template
     uses to control clip length — a PrimitiveFloat/PrimitiveInt feeding a
@@ -128,11 +186,13 @@ class PEClipDuration:
 NODE_CLASS_MAPPINGS = {
     "PEClipPrompt": PEClipPrompt,
     "PEClipImage": PEClipImage,
+    "PEClipGuideImage": PEClipGuideImage,
     "PEClipDuration": PEClipDuration,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PEClipPrompt": "PE Clip Prompt",
     "PEClipImage": "PE Clip Reference Image",
+    "PEClipGuideImage": "PE Clip Guide Image (Add Guide)",
     "PEClipDuration": "PE Clip Duration",
 }

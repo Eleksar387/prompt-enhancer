@@ -50,6 +50,33 @@ which one is "the" output, so it's left to you rather than guessed.
 Leave this workflow loaded in the ComfyUI editor — a run always patches
 **whatever graph is currently open**, so build it once and reuse it.
 
+### Optional: the multiframe "Reference-to-Video + Add Guide" template
+
+A Scriptwriter export can carry **Timeline anchors** (Add Guide) — one or
+more reference images the user hand-pinned to a specific second inside a
+clip, for a MiniMax H3 workflow built around a Reference-to-Video node plus a
+**chain of Add Guide nodes**, each anchoring a target composition at a
+specific point in the timeline. This is a separate, optional workflow shape
+from the plain flat-reference template above; a normal, non-multiframe
+export has zero anchors and needs none of the below.
+
+- **PE Clip Guide Image (Add Guide)** — outputs an `IMAGE` and an `INT`
+  `frame_idx`. Add one per Add-Guide chain position, set each one's `index`
+  widget to 0, 1, 2, … **in chronological order** (0 = the earliest anchor in
+  the clip), and wire its `image` output into that chain position's Add
+  Guide node, and its `frame_idx` output into that same node's frame-position
+  input if it exposes one. This is a **separate slot pool from PE Clip
+  Reference Image** — `index` 0 on a guide node has nothing to do with
+  `index` 0 on a reference node, because the manifest indexes them from two
+  different arrays (see "How it works" below).
+- Same empty-slot behavior as PE Clip Reference Image: a clip with fewer
+  anchors than your template has guide slots gets a 1×1 black placeholder
+  image and `frame_idx = 0` for the unused slot(s).
+
+If your template has no `PE Clip Guide Image` nodes at all, the review panel
+silently proceeds without them — most exports don't use anchors, and this
+pack never requires the multiframe shape.
+
 **A T2VA clip, or a clip with fewer references than your template has
 `PE Clip Reference Image` slots, leaves the unused slot(s) empty** — the
 node returns a 1×1 black placeholder image rather than erroring, so the
@@ -69,10 +96,10 @@ the symptom to watch for if that node doesn't tolerate an empty slot well.
    header — position remembered too) — it never covers the canvas (it's not
    a modal), so your graph and any preview node stay visible the whole time.
    It lists every clip — prompt (truncated), which staged reference file
-   lands in which slot, duration, mode (Ref2VA/T2VA) — and flags, before
-   anything runs: no `PE Clip Prompt` node found, or a clip needing more
-   reference slots than your template has. Click the header to
-   collapse/expand it.
+   lands in which slot, any Add-Guide timeline anchors, duration, mode
+   (Ref2VA/T2VA) — and flags, before anything runs: no `PE Clip Prompt` node
+   found, or a clip needing more reference or guide slots than your template
+   has. Click the header to collapse/expand it.
 3. **▶ Run all clips** submits each clip as its own ComfyUI queue entry
    (`POST /prompt`, the same public endpoint every other tool uses), then
    auto-collapses the panel so the canvas is fully visible, leaving just a
@@ -93,15 +120,23 @@ into one file** — that's a deliberate scope cut, left for later.
   actual generated prompt (this matters: MiniMax reads Ref2VA reference
   images positionally, so the wrong order silently attaches the wrong
   identity to the wrong clip).
+- A clip with Timeline anchors additionally carries a **separate `guides`
+  array**, `{ file, atSeconds, frameIdx }` per entry, sorted
+  **chronologically** (not by `Image N` order — a different ordering,
+  deliberately not the same array as `references`, which stays Image-N order
+  because that's load-bearing for the prompt text). `frameIdx` is
+  `round(atSeconds * 24)`, computed once by the app — this pack never does
+  its own time math.
 - Dropping the zip POSTs it to this pack's own route
   (`/prompt_enhancer/run_film`), which extracts it into
   `ComfyUI/input/prompt_enhancer_runs/<run-id>/` and hands the manifest back
   with every reference rewritten to its absolute staged path.
 - The browser side reads your **currently loaded** workflow via ComfyUI's
   own `app.graphToPrompt()`, clones it once per clip, sets every `PE Clip
-  Prompt`/`PE Clip Reference Image` node by `class_type` (not by node title —
-  titles are rename-sensitive and live in a different JSON than the one
-  `/prompt` actually consumes), and submits each clone.
+  Prompt`/`PE Clip Reference Image`/`PE Clip Guide Image` node by
+  `class_type` (not by node title — titles are rename-sensitive and live in
+  a different JSON than the one `/prompt` actually consumes), and submits
+  each clone.
 
 ## Tests (no ComfyUI required)
 

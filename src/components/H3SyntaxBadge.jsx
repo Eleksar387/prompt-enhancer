@@ -6,10 +6,12 @@ import { checkH3Prompt } from '../h3PromptCheck'
 // a generated (or hand-edited) H3 prompt. `mode` must be the H3 mode the text
 // was actually generated for (T2VA/I2VA/L2VA/FL2VA/Ref2VA), captured at
 // generation time — see h3ModeFor in src/adapt.js. `refImages` powers the
-// Ref2VA reference cross-check; unused for the other four modes.
-export default function H3SyntaxBadge({ text, mode, refImages = [] }) {
+// Ref2VA reference cross-check; unused for the other four modes. `anchors`
+// (Scriptwriter Timeline/Add Guide anchors, `[{ pictureN, atSeconds }]`) is
+// optional, Ref2VA-only.
+export default function H3SyntaxBadge({ text, mode, refImages = [], anchors = [] }) {
   const [open, setOpen] = useState(false)
-  const result = useMemo(() => checkH3Prompt(text, { mode, refImages }), [text, mode, refImages])
+  const result = useMemo(() => checkH3Prompt(text, { mode, refImages, anchors }), [text, mode, refImages, anchors])
   if (!text || !mode) return null
 
   const { ok, errors, warnings } = result

@@ -31,7 +31,11 @@ def sample_manifest():
                 "clipNumber": 1, "sceneTitle": "Reading the Dome's Chest",
                 "promptFile": "prompts/clip-01.txt", "promptText": "subject_definitions:\n<Subject 1> is ...",
                 "mode": "Ref2VA", "durationSec": 7, "outputName": "clip-01",
-                "references": [{"file": "references/c1-mara.jpg", "role": "subject_identity", "preserve": "exact"}],
+                "references": [
+                    {"file": "references/c1-mara.jpg", "role": "subject_identity", "preserve": "exact",
+                     "anchor": {"atSeconds": 1.5, "frameIdx": 36}},
+                ],
+                "guides": [{"file": "references/c1-mara.jpg", "atSeconds": 1.5, "frameIdx": 36}],
             },
             {
                 "clipNumber": 2, "sceneTitle": "Reading the Dome's Chest",
@@ -75,6 +79,25 @@ def test_happy_path():
         assert manifest["clips"][0]["references"][0]["absPath"] == os.path.join(run_dir, "references", "c1-mara.jpg")
         assert os.path.isfile(manifest["clips"][0]["references"][0]["absPath"])
         assert manifest["clips"][1]["references"] == []
+        # guides (Add-Guide timeline anchors) staged the same way, same file
+        assert manifest["clips"][0]["guides"][0]["absPath"] == os.path.join(run_dir, "references", "c1-mara.jpg")
+        assert manifest["clips"][0]["guides"][0]["frameIdx"] == 36
+    with_tmp_root(run)
+
+
+def test_missing_guide_file_raises():
+    def run(root):
+        m = sample_manifest()
+        m["clips"][0]["guides"] = [{"file": "references/does-not-exist.jpg", "atSeconds": 1.5, "frameIdx": 36}]
+        zb = make_zip({
+            "manifest.json": json.dumps(m),
+            "references/c1-mara.jpg": b"\xff\xd8\xff\xe0fakejpegbytes",
+        })
+        try:
+            staging.stage_zip(zb, root)
+            assert False, "expected ManifestError"
+        except staging.ManifestError as e:
+            assert "does-not-exist.jpg" in str(e)
     with_tmp_root(run)
 
 
@@ -129,6 +152,7 @@ if __name__ == "__main__":
     test("happy path stages files and rewrites absPath", test_happy_path)
     test("zip with no manifest.json raises ManifestError and cleans up", test_missing_manifest_raises)
     test("manifest pointing at a missing reference file raises ManifestError", test_missing_referenced_file_raises)
+    test("manifest pointing at a missing guide file raises ManifestError", test_missing_guide_file_raises)
     test("a non-zip upload raises BadZipFile and cleans up", test_bad_zip_raises)
     test("two runs of the same zip get distinct run folders", test_each_run_gets_its_own_folder)
     print(f"\n{n} passed")

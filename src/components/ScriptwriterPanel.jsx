@@ -9,7 +9,7 @@ import {
   // does not mean adding an import here.
   SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_SCRIPTWRITER_SOURCE, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
   VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
-  MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS,
+  MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, H3_MULTIFRAME_ADDENDUM,
   aspectParts, aspectSceneHint, aspectFramingHint,
   SCRIPTWRITER_NSFW_LINE, SCRIPTWRITER_NSFW_VISION_LINE,
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
@@ -273,6 +273,16 @@ const rehydrateVoiceRef = (d) => ({
 // in-memory `id` is regenerated on load). Used to pin an explicit reference set
 // on a clip (shot.refs).
 const refKey = (im) => im.hash || (im.caption || '').trim() || im.fileName || ''
+
+// MM:SS.mmm — the exact timestamp format SYSTEM_PROMPT_MINIMAX_H3's rule 5
+// cut-timestamp convention already uses ("At MM:SS.mmm, …"), reused here for
+// Timeline-anchor sentences so both share one clock format in the prompt.
+const formatTimestamp = (seconds) => {
+  const s = Math.max(0, Number(seconds) || 0)
+  const m = Math.floor(s / 60)
+  const rem = (s - m * 60).toFixed(3).padStart(6, '0')
+  return `${String(m).padStart(2, '0')}:${rem}`
+}
 
 // Tidy one finished H3 clip prompt. The writer model regularly (a) wraps the
 // output in a ```lang fence and (b) drops the leading field label, emitting a
@@ -1232,6 +1242,52 @@ export default function ScriptwriterPanel({
     persistState(undefined, undefined, nextCut)
   }
 
+  // Timeline anchors (Add Guide) — hand-pinned by the user, never proposed by
+  // the Director LLM: whether a given photo genuinely depicts a specific
+  // mid-clip composition is a fact about the image, not something derivable
+  // from the script. `shot.anchors` is `[{ refKey, atSeconds }]`; an anchor is
+  // only meaningful for a reference currently attached to the clip (present
+  // in shotRefs()'s result) — that's what lets the prompt address it as
+  // <Picture N> at all. A stale anchor left behind after the ref was detached
+  // is harmless: every reader filters anchors against the live attached set.
+  const shotAnchors = (shot) => Array.isArray(shot?.anchors) ? shot.anchors : []
+
+  const anchorFor = (shot, im) => {
+    const k = refKey(im)
+    return shotAnchors(shot).find(a => a.refKey === k)?.atSeconds
+  }
+
+  // atSeconds === null/undefined/'' removes the anchor (back to a plain
+  // semantic reference); any finite number sets/replaces it.
+  const setShotAnchor = (si, refKeyStr, atSeconds) => {
+    const shot = directorsCut?.shots?.[si]
+    if (!shot || shotBusy !== null || promptBusy !== null) return
+    const existing = shotAnchors(shot)
+    const clear = atSeconds === null || atSeconds === undefined || atSeconds === ''
+    const next = clear
+      ? existing.filter(a => a.refKey !== refKeyStr)
+      : [...existing.filter(a => a.refKey !== refKeyStr), { refKey: refKeyStr, atSeconds: Number(atSeconds) }]
+    const nextCut = { ...directorsCut, shots: directorsCut.shots.map((s, i) => i === si ? { ...s, anchors: next } : s) }
+    setDirectorsCut(nextCut)
+    persistState(undefined, undefined, nextCut)
+  }
+
+  // The anchors that actually apply to a clip's Ref2VA prompt: shot.anchors
+  // filtered to references still attached (`refs`, already resolved via
+  // shotRefs()), resolved to their Picture N position in that SAME array (the
+  // <Picture N> == Image N invariant SYSTEM_PROMPT_MINIMAX_H3 requires), and
+  // sorted chronologically — the order the prompt text and the manifest's
+  // guides[] both want, independent of `refs`' own (declaration/pin) order.
+  const activeAnchorsForRefs = (shot, refs) => {
+    const pics = shotAnchors(shot)
+      .map(a => {
+        const i = refs.findIndex(im => refKey(im) === a.refKey)
+        return i === -1 ? null : { pictureN: i + 1, atSeconds: a.atSeconds, refKey: a.refKey }
+      })
+      .filter(Boolean)
+    return pics.sort((a, b) => a.atSeconds - b.atSeconds)
+  }
+
   // An explicit [] means this clip is deliberately silent (every shot the
   // Director writes carries this field, per its schema and blankShot()) - only
   // a genuinely missing field (pre-dialogue-field legacy entries) falls back to
@@ -1332,6 +1388,7 @@ export default function ScriptwriterPanel({
     const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
     const refs = shotRefs(shot, scene, refsList)
     const isRef = refs.length > 0
+    const anchors = isRef ? activeAnchorsForRefs(shot, refs) : []
 
     const dialogues = shotDialogues(shot, scene)
     const dialogueBlock = dialogues.length
@@ -1368,7 +1425,10 @@ export default function ScriptwriterPanel({
         line += `\n   Requested use of this reference: ${use}`
         return line
       })
-      block = `Reference images:\n${lines.join('\n\n')}\n\n${voiceLine}`
+      const anchorBlock = anchors.length
+        ? `Timeline anchors (Add Guide — continuous, not automatically a cut):\n${anchors.map(a => `<Picture ${a.pictureN}> — target composition at ${formatTimestamp(a.atSeconds)}`).join('\n')}\n\n`
+        : ''
+      block = `Reference images:\n${lines.join('\n\n')}\n\n${anchorBlock}${voiceLine}`
     } else {
       head = 'MODE: T2VA'
       const chars = Array.isArray(shot.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
@@ -1408,6 +1468,19 @@ export default function ScriptwriterPanel({
       + `Style / mood: ${shot.lighting_mood || script?.look || 'natural'}${dialogueBlock}`
       + `\n\nAmbient / diegetic sound (overall_soundscape): ${soundscape}`
       + `\n\nAudience-only music (non_diegetic_music): ${music}`
+  }
+
+  // The system prompt for one shot's phase-3 call: the target's normal clip
+  // writer prompt, plus H3_MULTIFRAME_ADDENDUM only when this H3 clip actually
+  // carries a Timeline anchor still attached to the clip (mirrors
+  // buildH3ShotMessage's own anchors computation, so the addendum is present
+  // exactly when the "Timeline anchors" block it explains is present).
+  const clipSystemForShot = (shot) => {
+    const base = clipSystemFor(promptTarget)
+    if (promptTarget !== 'minimax_h3') return base
+    const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+    const refs = shotRefs(shot, scene)
+    return activeAnchorsForRefs(shot, refs).length ? base + H3_MULTIFRAME_ADDENDUM : base
   }
 
   // The phase-3 user message for one shot — H3 (Ref2VA/T2VA) or LTX. Shared by
@@ -1451,16 +1524,17 @@ export default function ScriptwriterPanel({
     setFinalPrompts(initial)
     setPhase('prompting')
 
-    const systemPrompt = clipSystemFor(promptTarget)
     const ratio = aspectRes(aspectRatio)
     const results = new Array(shots.length)
     const userMsgs = shots.map((shot) => buildShotPromptMsg(shot, refs, ratio))
+    // Per-shot, not one shared constant — an H3 clip carrying a Timeline
+    // anchor gets clipSystemFor(...) + H3_MULTIFRAME_ADDENDUM, every other
+    // clip (H3 or LTX) gets the plain target system prompt unchanged.
+    const systemPrompts = shots.map((shot) => clipSystemForShot(shot))
     if (import.meta.env.DEV && typeof window !== 'undefined') {
-      // system is the same for every shot (one writer prompt per target) —
-      // repeated per row anyway so each entry is self-contained to inspect.
       window.__peLastH3Messages = shots.map((s, i) => ({
         shot: s.shot_number, mode: (/^MODE:\s*(\w+)/.exec(userMsgs[i]) || [])[1] || null,
-        system: systemPrompt, msg: userMsgs[i],
+        system: systemPrompts[i], msg: userMsgs[i],
       }))
     }
     // Clip calls fire with bounded concurrency (below) — once sent, a refusal
@@ -1482,7 +1556,7 @@ export default function ScriptwriterPanel({
       // "Per-clip reference pinning" — so a live recompute would validate a
       // stale prompt against the wrong mode).
       const h3Mode = isH3 ? (isRefShot ? 'Ref2VA' : 'T2VA') : null
-      return callOllama(writerModel, userMsg, systemPrompt, cfg, 0.7)
+      return callOllama(writerModel, userMsg, systemPrompts[i], cfg, 0.7)
         .then(({ text: raw, usage }) => {
           if (looksLikeRefusal(raw)) throw Object.assign(new Error(raw.trim()), { isRefusal: true })
           const text = withLoraTriggers(isH3 ? normalizeH3Prompt(raw, isRefShot) : raw, lorasForShot(shot), promptTarget)
@@ -1959,7 +2033,7 @@ export default function ScriptwriterPanel({
       }
     }
     const ratio = aspectRes(aspectRatio)
-    const systemPrompt = clipSystemFor(promptTarget)
+    const systemPrompt = clipSystemForShot(shot)
     try {
       const userMsg = buildShotPromptMsg(shot, refs, ratio)
       const { text: raw, usage } = await callOllama(writerModel, userMsg, systemPrompt, cfg, 0.85)
@@ -2177,6 +2251,14 @@ export default function ScriptwriterPanel({
   const persistTimer = useRef(null)
   const persistArgs = useRef(null)
   const persistNowRef = useRef(null)   // always the current-render persistStateNow
+
+  // Scroll target for the Director's-Cut "no described references" banners'
+  // "↑ Jump to Reference Images" button — the panel is always on screen
+  // (column 2, gated only on phase !== 'prompting'), just possibly scrolled
+  // out of view; this brings it back rather than claiming a destination
+  // screen that doesn't exist.
+  const refImagesPanelRef = useRef(null)
+  const scrollToRefImages = () => refImagesPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   const persistStateNow = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride) => {
     const scr = scriptOverride || script
     if (!onSaveHistory || !scr) return
@@ -2453,11 +2535,15 @@ export default function ScriptwriterPanel({
     if (!isH3now || !shot) return `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot?.duration || 4}s`
     const hScene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
     const clipVoices = voicesForShot(shot, hScene, shotDialogues(shot, hScene))
+    const anchors = activeAnchorsForRefs(shot, refs)
     return [
       `— Clip ${p.shotNumber} · ${p.sceneTitle} · ${shot.duration || 7}s · ${refs.length ? 'Ref2VA' : 'T2VA'}`,
       refs.length
         ? `  Load references: ${refs.map(im => `${refEntityName(im, script) || im.note || roleLabel(im.role)} (${roleLabel(im.role)}, ${preserveLabel(im.preserve)})`).join('; ')}`
         : '  No references — text-to-video',
+      anchors.length
+        ? `  Add Guide timeline anchors: ${anchors.map(a => `<Picture ${a.pictureN}> @ ${formatTimestamp(a.atSeconds)}`).join('; ')}`
+        : '',
       clipVoices.length
         ? `  Load voice reference${clipVoices.length > 1 ? 's' : ''}: ${clipVoices.map(v => `${v.fileName}${v.speaker ? ` (${v.speaker})` : ''}`).join('; ')}`
         : '',
@@ -2560,12 +2646,26 @@ export default function ScriptwriterPanel({
           const voices = vv
             .map(v => voiceFileById.get(v.id) ? { file: voiceFileById.get(v.id), speaker: v.speaker || '' } : null)
             .filter(Boolean)
+          // Timeline anchors (Add Guide): additive `anchor` field on the
+          // matching references[] entry — that array's order/meaning (Image
+          // N numbering, matches the prompt text by construction) is
+          // otherwise untouched. `guides` is a SEPARATE, chronologically
+          // sorted view for the comfyui-prompt-enhancer-bridge's
+          // PEClipGuideImage nodes, which need "1st guide in time, 2nd guide
+          // in time, …", not "1st Image N, 2nd Image N, …".
           const references = (isH3now ? clipRefsFor(i) : [])
             .map(im => {
               const file = refFileByKey.get(refKey(im))
-              return file ? { file, role: im.role || '', preserve: im.preserve || '' } : null
+              if (!file) return null
+              const atSeconds = shot ? shotAnchors(shot).find(a => a.refKey === refKey(im))?.atSeconds : undefined
+              const anchor = atSeconds != null ? { atSeconds, frameIdx: Math.round(atSeconds * 24) } : null
+              return { file, role: im.role || '', preserve: im.preserve || '', ...(anchor ? { anchor } : {}) }
             })
             .filter(Boolean)
+          const guides = references
+            .filter(r => r.anchor)
+            .map(r => ({ file: r.file, atSeconds: r.anchor.atSeconds, frameIdx: r.anchor.frameIdx }))
+            .sort((a, b) => a.atSeconds - b.atSeconds)
           return {
             clipNumber: p.shotNumber || i + 1,
             sceneTitle: p.sceneTitle || '',
@@ -2579,6 +2679,7 @@ export default function ScriptwriterPanel({
             voices,
             outputName: `clip-${pad(p.shotNumber || i + 1)}`,
             references,
+            guides,
           }
         }),
       }
@@ -2803,6 +2904,8 @@ export default function ScriptwriterPanel({
         preserves={MINIMAX_H3_PRESERVE_OPTIONS}
         onLinkType={setRefLinkType}
         onField={updateRefField}
+        panelRef={refImagesPanelRef}
+        h3={isH3}
       />
 
       <ScriptwriterVoiceRefs
@@ -3341,15 +3444,23 @@ export default function ScriptwriterPanel({
               </span>
             </div>
           )}
-          {/* Reference status — tells the user whether clips will be Ref2VA or T2VA */}
+          {/* Reference status — tells the user whether clips will be Ref2VA or T2VA.
+              Two distinct "nothing will help" cases used to share one message
+              ("no described references") whether zero images were ever added or
+              some were added but never captioned — and pointed at a nonexistent
+              "Script screen" (the panel is always on screen, in column 2, just
+              possibly scrolled out of view — see refImagesPanelRef above). */}
           {isH3 && (() => {
+            const uploaded = (refImages || []).length
             const capt = (refImages || []).filter(im => im.caption && im.caption.trim()).length
             const sceneOf = (s) => script?.scenes?.find(x => String(x.id) === String(s.scene_id))
             const ref2 = directorsCut.shots.filter(s => shotRefs(s, sceneOf(s)).length > 0).length
             const total = directorsCut.shots.length
             const tone = capt === 0 ? 'danger' : ref2 < total ? 'ink-3' : 'ok'
-            const msg = capt === 0
-              ? '⚠ No described references — every clip generates as text-to-video (T2VA), so faces and locations will drift between clips. Add a described reference per character and location on the Script screen (upload a photo or Generate a portrait, then Describe).'
+            const msg = uploaded === 0
+              ? '⚠ No reference images yet — every clip generates as text-to-video (T2VA), so faces and locations will drift between clips. Add one in Reference Images, above the Story Idea box, for each recurring character/location.'
+              : capt === 0
+              ? `⚠ ${uploaded} reference image${uploaded === 1 ? '' : 's'} added but not yet described — every clip still generates as text-to-video (T2VA) until at least one is. Click "Describe images" in Reference Images to caption them now, or they'll be described automatically the next time you write/rewrite the script.`
               : ref2 < total
               ? `${ref2} of ${total} clips will generate with references (Ref2VA); the other ${total - ref2} run as T2VA.`
               : `✓ All ${total} clips generate as Ref2VA from ${capt} described reference${capt === 1 ? '' : 's'}.`
@@ -3359,6 +3470,12 @@ export default function ScriptwriterPanel({
                 background: tone === 'danger' ? 'var(--pe-danger-bg)' : tone === 'ok' ? 'var(--pe-ok-bg)' : 'var(--pe-rail)',
                 borderColor: tone === 'danger' ? 'var(--pe-danger-line)' : tone === 'ok' ? 'var(--pe-ok-bg)' : 'var(--pe-line)' }}>
                 {msg}
+                {capt === 0 && (
+                  <button onClick={scrollToRefImages}
+                    style={{ display: 'block', marginTop: 6, fontSize: 12, color: 'inherit', background: 'none', border: '1px solid currentColor', borderRadius: 5, padding: '2px 8px', cursor: 'pointer' }}>
+                    ↑ Jump to Reference Images
+                  </button>
+                )}
               </div>
             )
           })()}
@@ -3388,6 +3505,12 @@ export default function ScriptwriterPanel({
                   <span style={{ fontSize: 13, color: 'var(--pe-ink-3)', flexShrink: 0 }}>{shot.scene_title}</span>
                   {isH3 && shot.shot_type && (
                     <span style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', background: 'var(--pe-accent-bg)', border: '1px solid var(--pe-accent-line)', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>{shot.shot_type}</span>
+                  )}
+                  {isH3 && shotAnchors(shot).length > 0 && (
+                    <span title={`${shotAnchors(shot).length} Timeline anchor(s) (Add Guide) pinned on this clip`}
+                      style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', border: '1px solid var(--pe-line)', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>
+                      🕐 {shotAnchors(shot).length}
+                    </span>
                   )}
                   {!expanded && (
                     <span style={{ fontSize: 12, color: 'var(--pe-ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
@@ -3497,21 +3620,36 @@ export default function ScriptwriterPanel({
                       </div>
                     ) : editable ? (
                       <>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                           {captioned.map((im, ri) => {
                             const on = active.has(refKey(im))
+                            const anchorSec = on ? anchorFor(shot, im) : undefined
                             return (
-                              <button key={ri} onClick={() => toggleShotRef(si, im)}
-                                title={on ? 'Attached to this clip — click to drop it' : 'Not attached — click to add it to this clip'}
-                                style={{
-                                  fontSize: 12, borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-                                  border: `1px solid ${on ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
-                                  background: on ? 'var(--pe-accent-bg)' : 'transparent',
-                                  color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
-                                  textDecoration: on ? 'none' : 'line-through',
-                                }}>
-                                {on ? '✓ ' : ''}{refEntityName(im, script) || im.note || im.fileName || roleLabel(im.role)} · {roleLabel(im.role)}
-                              </button>
+                              <span key={ri} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                <button onClick={() => toggleShotRef(si, im)}
+                                  title={on ? 'Attached to this clip — click to drop it' : 'Not attached — click to add it to this clip'}
+                                  style={{
+                                    fontSize: 12, borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+                                    border: `1px solid ${on ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+                                    background: on ? 'var(--pe-accent-bg)' : 'transparent',
+                                    color: on ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
+                                    textDecoration: on ? 'none' : 'line-through',
+                                  }}>
+                                  {on ? '✓ ' : ''}{refEntityName(im, script) || im.note || im.fileName || roleLabel(im.role)} · {roleLabel(im.role)}
+                                </button>
+                                {on && (
+                                  <input type="number" min={0} max={shot.duration || 7} step={0.1}
+                                    value={anchorSec ?? ''} placeholder="not anchored"
+                                    title="Add Guide timeline anchor — the second inside this clip where this image's composition should be reached (optional; leave blank for a plain semantic reference)"
+                                    onChange={(e) => setShotAnchor(si, refKey(im), e.target.value === '' ? null : e.target.value)}
+                                    style={{
+                                      width: 76, fontSize: 11.5, borderRadius: 4, padding: '2px 5px',
+                                      border: `1px solid ${anchorSec != null ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
+                                      background: 'var(--pe-bg-2)', color: 'var(--pe-ink)',
+                                    }} />
+                                )}
+                                {on && anchorSec != null && <span style={{ fontSize: 11, color: 'var(--pe-ink-3)' }}>s</span>}
+                              </span>
                             )
                           })}
                         </div>
@@ -3519,7 +3657,20 @@ export default function ScriptwriterPanel({
                           {pinned
                             ? 'Pinned set — only the ticked references go into this clip. The Director pre-selects these (dropping e.g. a face reference where the face is hidden); click a chip to change it, or “reset to auto”.'
                             : 'Auto — every described reference for this clip’s characters. Click a chip to pin an exact set.'}
+                          {' '}An attached reference can also be given an Add Guide timeline anchor (a second inside this clip) if your ComfyUI workflow uses chained Add Guide nodes — leave blank for a plain reference.
                         </div>
+                        {(() => {
+                          const secs = captioned.filter(im => active.has(refKey(im))).map(im => anchorFor(shot, im)).filter(v => v != null)
+                          const dur = shot.duration || 7
+                          const warnings = []
+                          if (secs.some(s => s < 0 || s > dur)) warnings.push(`An anchor is outside this clip's 0–${dur}s duration.`)
+                          if (new Set(secs).size !== secs.length) warnings.push('Two anchors share the same time.')
+                          return warnings.length ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--pe-warn)', marginTop: 4 }}>
+                              ⚠ {warnings.join(' ')}
+                            </div>
+                          ) : null
+                        })()}
                         {phase === 'done' && (
                           <div style={{ fontSize: 11.5, color: 'var(--pe-accent-ink)', marginTop: 4 }}>
                             This clip’s prompt text above was written with the previous set — click ✦ Rewrite below to regenerate it with your change.
@@ -3895,7 +4046,7 @@ export default function ScriptwriterPanel({
                       // same signal buildH3ShotMessage itself uses (captioned
                       // references present -> Ref2VA, none -> T2VA).
                       const mode = p.h3Mode || (refs.length ? 'Ref2VA' : 'T2VA')
-                      return <H3SyntaxBadge text={p.text} mode={mode} refImages={refs} />
+                      return <H3SyntaxBadge text={p.text} mode={mode} refImages={refs} anchors={activeAnchorsForRefs(shot, refs)} />
                     })()}
                     </>}
                   </div>

@@ -1632,6 +1632,40 @@ shot's end equals the target duration); the ending condition is achieved; visibl
 from what was given; the dialogue is unchanged in content and meaning, rendered in the "Primary language:"
 language.`;
 
+// Appended to SYSTEM_PROMPT_MINIMAX_H3 only for a Ref2VA clip that carries one
+// or more "Timeline anchors" (a reference image hand-pinned to a specific
+// second inside the clip — the app's ComfyUI-side "Reference-to-Video +
+// chained Add Guide nodes" workflow, an optional alternative to a plain flat
+// reference set). This extends the EXISTING Ref2VA "Pose / Composition"
+// mechanic (a <Picture N> with no <Subject N>, scoped to named shots) with an
+// explicit time instead of only a shot list — it is not a new H3 mode, and
+// the six Ref2VA section names and the <Picture N> == source Image N
+// numbering rule are unchanged. The one real conflict with the base prompt is
+// rule 5's hard-cut-by-default: an anchor must NOT create a new [Shot N] by
+// itself, or every one of rule 5's contiguous-range and cut-timestamp
+// guarantees would need re-deriving per anchor.
+export const H3_MULTIFRAME_ADDENDUM = `
+
+TIMELINE ANCHORS (Add Guide). The user message's "Timeline anchors" block lists one or more <Picture N> — already
+defined above, numbered identically to their source "Image N", never renumbered — each pinned to a specific second
+inside the clip. An anchor is a required COMPOSITION the video must pass through at that moment, not automatically
+a cut: describe reaching it with continuous-transition wording, inside whichever [Shot N] (start–end s) range (rule
+5) already contains that second — never start a new [Shot N] solely because of an anchor. Only start a new [Shot N]
+at an anchor's time if rule 5's own criteria (new subject, space, state, viewpoint, or time) are independently met
+there; if they are, treat it exactly like any other cut.
+- subject_definitions: for each anchored <Picture N>, state the exact time in its definition sentence — "<Picture 2>
+  is a storyboard keyframe for the target composition at 00:01.500" (MM:SS.mmm) — in place of, or in addition to,
+  naming which shots it governs.
+- retention_analysis: "<Picture 2> (target composition at 00:01.500): <marker> - use it as the target pose,
+  framing, and scene state at that time."
+- detailed_description: at the anchor's second, inside the shot whose range contains it, write e.g. "at 00:01.500,
+  the continuous movement reaches the composition defined by <Picture 2>" — never "the video cuts to" for an
+  anchor unless that same moment is also a genuine rule-5 cut.
+- summary: an anchored reference is a concrete keyframe of the target video, not only a guiding reference — the
+  bracketed task-type marker should include "keyframe completion" alongside any other types that apply.
+Anchor times never appear as a separate frame-index number anywhere in the output — express them only in the
+MM:SS.mmm / S.SS forms rule 5 already uses.`;
+
 // Everything the app needs to know about a generation target, in one place.
 //
 // `show` says which CONTROLS render. `caps` says what the target can actually do,

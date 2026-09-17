@@ -1,12 +1,13 @@
 // Offline test for web/patch.js — no ComfyUI, no browser. Run with:
 //   node comfyui-prompt-enhancer-bridge/tests/test_patch.mjs
 import assert from "node:assert/strict";
-import { countImageSlots, hasPromptNode, hasDurationNode, patchForClip } from "../web/patch.js";
+import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip } from "../web/patch.js";
 
 // A minimal stand-in for what app.graphToPrompt().output looks like for a
-// template with one PEClipPrompt, three PEClipImage slots (0,1,2), one
-// PEClipDuration, one unrelated node with a filename_prefix widget (stands
-// in for a Save node), and one unrelated node with neither (a sampler).
+// template with one PEClipPrompt, three PEClipImage slots (0,1,2), two
+// PEClipGuideImage slots (0,1), one PEClipDuration, one unrelated node with a
+// filename_prefix widget (stands in for a Save node), and one unrelated node
+// with neither (a sampler).
 const template = {
   "1": { class_type: "PEClipPrompt", inputs: { text: "" } },
   "2": { class_type: "PEClipImage", inputs: { index: 0, image_path: "" } },
@@ -15,6 +16,8 @@ const template = {
   "5": { class_type: "SaveVideo", inputs: { filename_prefix: "old", images: ["4", 0] } },
   "6": { class_type: "SomeSampler", inputs: { seed: 1 } },
   "8": { class_type: "PEClipDuration", inputs: { seconds: 15 } },
+  "9": { class_type: "PEClipGuideImage", inputs: { index: 0, image_path: "", frame_idx: 0 } },
+  "10": { class_type: "PEClipGuideImage", inputs: { index: 1, image_path: "", frame_idx: 0 } },
 };
 
 let n = 0;
@@ -26,6 +29,14 @@ test("countImageSlots counts by highest index + 1", () => {
 
 test("countImageSlots on a template with no PEClipImage nodes is 0", () => {
   assert.equal(countImageSlots({ "1": { class_type: "PEClipPrompt", inputs: {} } }), 0);
+});
+
+test("countGuideSlots counts PEClipGuideImage by highest index + 1, independent of PEClipImage's own count", () => {
+  assert.equal(countGuideSlots(template), 2);
+});
+
+test("countGuideSlots on a template with no PEClipGuideImage nodes is 0 (the normal, non-multiframe case)", () => {
+  assert.equal(countGuideSlots({ "1": { class_type: "PEClipPrompt", inputs: {} } }), 0);
 });
 
 test("hasPromptNode detects PEClipPrompt presence", () => {
@@ -56,6 +67,10 @@ test("patchForClip sets prompt text, fills image slots in order, stamps output n
   assert.equal(patched["5"].inputs.filename_prefix, "clip-01");
   assert.equal(patched["6"].inputs.seed, 1); // untouched
   assert.equal(patched["8"].inputs.seconds, 7); // this clip's own durationSec, not the template's placeholder 15
+  // no `guides` on this clip at all — PEClipGuideImage slots stay empty/zero, same as an unused PEClipImage slot
+  assert.equal(patched["9"].inputs.image_path, "");
+  assert.equal(patched["9"].inputs.frame_idx, 0);
+  assert.equal(patched["10"].inputs.image_path, "");
 
   // original template must be unmodified (patchForClip must clone, not mutate)
   assert.equal(template["1"].inputs.text, "");
@@ -68,6 +83,25 @@ test("patchForClip on a T2VA clip (no references) leaves every image slot empty"
   assert.equal(patched["2"].inputs.image_path, "");
   assert.equal(patched["3"].inputs.image_path, "");
   assert.equal(patched["4"].inputs.image_path, "");
+});
+
+test("patchForClip fills PEClipGuideImage slots from clip.guides, in guides' own (chronological) order — a SEPARATE index space from clip.references", () => {
+  const clip = {
+    outputName: "clip-04", promptText: "subject_definitions:\n<Subject 1> is ...",
+    references: [
+      { file: "references/c1-mara.jpg", absPath: "/staged/references/c1-mara.jpg", role: "subject_identity", preserve: "exact",
+        anchor: { atSeconds: 1.5, frameIdx: 36 } },
+    ],
+    guides: [
+      { file: "references/c1-mara.jpg", absPath: "/staged/references/c1-mara.jpg", atSeconds: 1.5, frameIdx: 36 },
+    ],
+  };
+  const patched = patchForClip(template, clip);
+  assert.equal(patched["2"].inputs.image_path, "/staged/references/c1-mara.jpg"); // PEClipImage index 0, from references[0]
+  assert.equal(patched["9"].inputs.image_path, "/staged/references/c1-mara.jpg"); // PEClipGuideImage index 0, from guides[0]
+  assert.equal(patched["9"].inputs.frame_idx, 36);
+  assert.equal(patched["10"].inputs.image_path, ""); // guide index 1 — clip only has 1 guide
+  assert.equal(patched["10"].inputs.frame_idx, 0);
 });
 
 test("patchForClip leaves EVERY filename_prefix node untouched when there's more than one — ambiguous, don't guess", () => {

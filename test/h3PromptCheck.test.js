@@ -177,3 +177,40 @@ describe('checkH3Prompt — warnings (non-blocking)', () => {
     expect(res.warnings.some(w => /Subject 2/.test(w) && /never mentioned/.test(w))).toBe(true)
   })
 })
+
+describe('checkH3Prompt — Timeline anchors (Add Guide, Scriptwriter-only)', () => {
+  const refImages = [ref({ hash: 'a' }), ref({ hash: 'b', role: 'pose_composition' })]
+
+  it('no warning when an anchored <Picture N> co-occurs with its timestamp', () => {
+    const text = 'subject_definitions:\n<Subject 1> is the subject from <Picture 1>, preserving face shape.\n'
+      + '<Picture 2> is a storyboard keyframe for the target composition at 00:01.500.\n\n'
+      + 'summary:\n[keyframe completion + reference generation] <Subject 1> appears across the target video.\n\n'
+      + 'retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - locked.\n'
+      + '<Picture 2> (target composition at 00:01.500): weak_reference - use as target pose.\n\n'
+      + 'detailed_description:\n[Shot 1] <Subject 1> stands still. At 00:01.500, the continuous movement reaches the composition defined by <Picture 2>.\n\n'
+      + 'overall_soundscape: quiet.\n\n'
+      + 'non_diegetic_music: N/A'
+    const res = checkH3Prompt(text, { mode: 'Ref2VA', refImages, anchors: [{ pictureN: 2, atSeconds: 1.5 }] })
+    expect(res.warnings.some(w => /has no matching timestamp/.test(w))).toBe(false)
+  })
+
+  it('warns when an anchored <Picture N> is mentioned but never given a matching timestamp', () => {
+    const text = 'subject_definitions:\n<Subject 1> is the subject from <Picture 1>, preserving face shape.\n'
+      + '<Picture 2> is a storyboard reference for [Shot 1].\n\n'
+      + 'summary:\n[reference generation] <Subject 1> appears across the target video.\n\n'
+      + 'retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - locked.\n'
+      + '<Picture 2> (storyboard reference for [Shot 1]): weak_reference - guidance only.\n\n'
+      + 'detailed_description:\n[Shot 1] <Subject 1> stands near <Picture 2>.\n\n'
+      + 'overall_soundscape: quiet.\n\n'
+      + 'non_diegetic_music: N/A'
+    const res = checkH3Prompt(text, { mode: 'Ref2VA', refImages, anchors: [{ pictureN: 2, atSeconds: 1.5 }] })
+    expect(res.warnings.some(w => /<Picture 2>/.test(w) && /has no matching timestamp/.test(w))).toBe(true)
+    expect(res.ok).toBe(true) // a warning, never an error
+  })
+
+  it('anchors are ignored outside Ref2VA (no crash, no false warning)', () => {
+    const text = 'integrated_multimodal_description: [Shot 1] x\n\noverall_soundscape: quiet\n\nnon_diegetic_music: N/A'
+    const res = checkH3Prompt(text, { mode: 'T2VA', anchors: [{ pictureN: 1, atSeconds: 1.5 }] })
+    expect(res.warnings.some(w => /matching timestamp/.test(w))).toBe(false)
+  })
+})
