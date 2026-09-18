@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react'
+import { blobUrlToBase64 } from '../utils'
+import VoiceLibraryGallery from './VoiceLibraryGallery'
 
 // Presentational voice-reference panel for the Scriptwriter. All state lives in
 // ScriptwriterPanel; this component only renders and raises events.
@@ -25,10 +27,13 @@ const sel = {
 
 export default function ScriptwriterVoiceRefs({
   voices = [], editable, busy, max = 6, characters = [], onAdd, onRemove, onCharacter,
+  voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
+  onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
 }) {
   const inputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
   const [err, setErr] = useState('')
+  const [savedFlash, setSavedFlash] = useState(null)   // voice id whose "✓ saved" flash is showing
 
   if (!editable && voices.length === 0) return null
 
@@ -76,6 +81,30 @@ export default function ScriptwriterVoiceRefs({
     take(e.dataTransfer.files?.[0])
   }
 
+  // Pick an existing library sample — reuses the same single-item onAdd path
+  // a fresh upload already goes through (the parent's addVoiceRef handles
+  // id/characterId defaulting), so there is no second append mechanism here.
+  const pickFromVoiceLibrary = async (item) => {
+    if (busy || voices.length >= max) return
+    try {
+      const base64 = await blobUrlToBase64(item.url)
+      onAdd({ base64, mediaType: item.mediaType, fileName: item.fileName })
+    } catch {
+      setErr('Could not load that voice sample — try again.')
+    }
+  }
+
+  const contextNameFor = (v) => nameOf(v.characterId)
+
+  const saveToLibrary = async (v) => {
+    if (!onSaveAudioToVoiceLibrary) return
+    try {
+      await onSaveAudioToVoiceLibrary(v, contextNameFor(v))
+      setSavedFlash(v.id)
+      setTimeout(() => setSavedFlash(f => (f === v.id ? null : f)), 1800)
+    } catch { /* best-effort — no confirmation flash on failure */ }
+  }
+
   const full = voices.length >= max
 
   return (
@@ -91,23 +120,33 @@ export default function ScriptwriterVoiceRefs({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {voices.map((v, i) => (
-          <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 8 }}>
-            <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', flexShrink: 0 }}>Audio {i + 1}</span>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--pe-ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.fileName}</span>
-            <select
-              style={{ ...sel, flexShrink: 0, maxWidth: 180 }}
-              value={v.characterId || ''}
-              disabled={busy}
-              title={characters.length ? 'Which character speaks with this voice' : 'The cast appears once the script has been written'}
-              onChange={e => onCharacter(v.id, e.target.value)}
-            >
-              <option value="">Any speaker</option>
-              {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <button onClick={() => onRemove(v.id)} disabled={busy}
-              style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-danger-line)', background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>
-              Remove
-            </button>
+          <div key={v.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 12px', background: 'var(--pe-surface)', border: '1px solid var(--pe-accent-line)', borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', flexShrink: 0 }}>Audio {i + 1}</span>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--pe-ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.fileName}</span>
+              <select
+                style={{ ...sel, flexShrink: 0, maxWidth: 180 }}
+                value={v.characterId || ''}
+                disabled={busy}
+                title={characters.length ? 'Which character speaks with this voice' : 'The cast appears once the script has been written'}
+                onChange={e => onCharacter(v.id, e.target.value)}
+              >
+                <option value="">Any speaker</option>
+                {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {onSaveAudioToVoiceLibrary && (
+                <button onClick={() => saveToLibrary(v)} disabled={busy} title="Save this sample to the voice library, for reuse in other scripts"
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>
+                  💾 Save
+                </button>
+              )}
+              {savedFlash === v.id && <span style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', flexShrink: 0 }}>✓ saved</span>}
+              <button onClick={() => onRemove(v.id)} disabled={busy}
+                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-danger-line)', background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>
+                Remove
+              </button>
+            </div>
+            <audio controls src={`data:${v.mediaType || 'audio/mpeg'};base64,${v.base64}`} style={{ width: '100%', height: 32 }} />
           </div>
         ))}
       </div>
@@ -122,6 +161,16 @@ export default function ScriptwriterVoiceRefs({
       )}
 
       {err && <div style={{ fontSize: 13, color: 'var(--pe-danger)', marginTop: 6, lineHeight: 1.5 }}>{err}</div>}
+
+      <VoiceLibraryGallery
+        library={voiceLibrary}
+        onAddFiles={onAddVoiceLibraryFiles}
+        onRemove={onRemoveVoiceLibraryItem}
+        onRename={onRenameVoiceLibraryCharacter}
+        onPick={pickFromVoiceLibrary}
+        pickDisabled={busy || full}
+        pickHint="click to add as a new voice reference"
+      />
 
       <input ref={inputRef} type="file" accept="audio/*" style={{ display: 'none' }}
         onChange={(e) => { take(e.target.files?.[0]); e.target.value = '' }} />

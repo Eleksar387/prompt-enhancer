@@ -542,6 +542,8 @@ export default function ScriptwriterPanel({
   history = [],
   library = [], onAddLibraryImages = null, onRemoveLibraryImage = null,
   onSaveLibraryCaption = null, onSetLibraryRole = null, onDescribeLibraryImage = null,
+  voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
+  onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
   // The LoRA library is owned by App.jsx (shared with the standalone workspace
   // and persisted there); this panel only reads it and edits it through the
@@ -2922,6 +2924,8 @@ export default function ScriptwriterPanel({
         onAdd={addVoiceRef}
         onRemove={removeVoiceRef}
         onCharacter={setVoiceCharacter}
+        voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={onAddVoiceLibraryFiles} onRemoveVoiceLibraryItem={onRemoveVoiceLibraryItem}
+        onRenameVoiceLibraryCharacter={onRenameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={onSaveAudioToVoiceLibrary}
       />
 
       {/* Phase 1 — input */}

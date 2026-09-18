@@ -14,6 +14,7 @@ export const DIRS = {
   captions: join(DATA_DIR, 'captions'),
   queue: join(DATA_DIR, 'queue'),
   library: join(DATA_DIR, 'library'),
+  voiceLibrary: join(DATA_DIR, 'voiceLibrary'),
   trash: join(DATA_DIR, 'trash'),
   tmp: join(DATA_DIR, 'tmp'),
 }

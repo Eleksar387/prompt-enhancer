@@ -12,6 +12,9 @@ import {
   deleteQueue, clearQueue,
 } from './queueStore.mjs'
 import { loadLibraryIndex, listLibrary, putLibrary, patchLibrary, deleteLibrary } from './libraryStore.mjs'
+import {
+  loadVoiceLibraryIndex, listVoiceLibrary, putVoiceLibrary, patchVoiceLibrary, deleteVoiceLibrary,
+} from './voiceLibraryStore.mjs'
 
 const PORT = Number(process.env.PE_API_PORT || process.env.PORT || 8787)
 const MAX_BODY = 200 * 1024 * 1024 // one entry with a base64 video can be large
@@ -20,6 +23,7 @@ ensureTree()
 loadIndex()
 loadQueueIndex()
 loadLibraryIndex()
+loadVoiceLibraryIndex()
 
 const json = (res, code, obj) => {
   const body = Buffer.from(JSON.stringify(obj), 'utf8')
@@ -154,6 +158,28 @@ const server = createServer(async (req, res) => {
           json(res, 200, { id }); return
         }
         if (method === 'DELETE') { deleteLibrary(id); json(res, 200, { ok: true }); return }
+      }
+    }
+
+    // ── voice library ──────────────────────────────────────────────────────
+    // Standalone reusable voice-timbre samples — see voiceLibraryStore.mjs.
+    // Same route shape as /api/library; no /clear route for v1.
+    if (seg[0] === 'api' && seg[1] === 'voice-library') {
+      if (!seg[2]) {
+        if (method === 'GET') { json(res, 200, listVoiceLibrary()); return }
+      } else {
+        const id = decodeURIComponent(seg[2])
+        if (method === 'PUT') {
+          const item = await readBody(req)
+          if (!item || item.id !== id) { json(res, 400, { error: 'body id must match path' }); return }
+          json(res, 200, { id: putVoiceLibrary(item) }); return
+        }
+        if (method === 'PATCH') {
+          const patch = await readBody(req)
+          patchVoiceLibrary(id, patch || {})
+          json(res, 200, { id }); return
+        }
+        if (method === 'DELETE') { deleteVoiceLibrary(id); json(res, 200, { ok: true }); return }
       }
     }
 

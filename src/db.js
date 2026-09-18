@@ -134,6 +134,29 @@ export function deleteLibraryItem(id) {
   return apiFetch(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+// ── voice library ──────────────────────────────────────────────────────────
+// Standalone reusable voice-timbre samples ("Reuse voice"), persisted
+// server-side so they survive a reload — same contract as the image library.
+export function listVoiceLibrary() {
+  return apiFetch('/voice-library')
+}
+
+export function addVoiceLibraryItem(item) {
+  return apiFetch(`/voice-library/${encodeURIComponent(item.id)}`, {
+    method: 'PUT', body: JSON.stringify(item),
+  })
+}
+
+export function updateVoiceLibraryItem(id, patch) {
+  return apiFetch(`/voice-library/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  })
+}
+
+export function deleteVoiceLibraryItem(id) {
+  return apiFetch(`/voice-library/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 // ── projects (was localStorage — now async) ────────────────────────────────
 export async function loadProjects() {
   try { return await apiFetch('/projects') } catch { return [] }

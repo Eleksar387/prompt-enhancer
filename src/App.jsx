@@ -20,6 +20,7 @@ import {
   setHistoryEntryProject, loadProjects, saveProjects, importEntries,
   getCaption, putCaption, clearCaptions,
   listLibrary, addLibraryItem, updateLibraryItem, deleteLibraryItem,
+  listVoiceLibrary, addVoiceLibraryItem, updateVoiceLibraryItem, deleteVoiceLibraryItem,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg } from './utils'
@@ -184,6 +185,7 @@ export default function App() {
   const [savedEditFlash, setSavedEditFlash] = useState(false)
   const [history, setHistory]         = useState([])
   const [library, setLibrary]         = useState([])   // standalone reusable images — see "Reuse image from history"
+  const [voiceLibrary, setVoiceLibrary] = useState([])  // standalone reusable voice samples — see "Reuse voice"
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoringId, setRestoringId] = useState(null)   // entry whose inline fetch is in flight
   const [projects, setProjects]       = useState([])
@@ -299,6 +301,7 @@ export default function App() {
       // banner on its own.
       queue.refresh()
       listLibrary().then(setLibrary).catch(() => {})
+      listVoiceLibrary().then(setVoiceLibrary).catch(() => {})
     }
     boot()
     const ping = setInterval(() => {
@@ -372,6 +375,58 @@ export default function App() {
   }, [refreshLibrary])
 
   const removeLibraryImage = useCallback((id) => deleteLibraryItem(id).then(refreshLibrary), [refreshLibrary])
+
+  // ── voice library ("Reuse voice") ────────────────────────────────────────
+  const MAX_VOICE_LIBRARY_BYTES = 10 * 1024 * 1024 // matches MinimaxRefPanel/ScriptwriterVoiceRefs' own audio cap
+
+  const refreshVoiceLibrary = useCallback(() => listVoiceLibrary().then(setVoiceLibrary).catch(() => {}), [])
+
+  // Direct file-picker/drop upload straight into the library — no context to
+  // infer a character from, so characterName starts blank (the user types it
+  // by hand). No shrinkToJpeg-equivalent re-encode: audio is stored as-is.
+  const addVoiceLibraryFiles = useCallback((files) => {
+    const auds = Array.from(files || []).filter(f => f.type?.startsWith('audio/') && f.size <= MAX_VOICE_LIBRARY_BYTES)
+    if (!auds.length) return Promise.resolve()
+    return mapWithConcurrency(auds, 3, async (file) => {
+      const base64 = await blobToBase64(file)
+      return addVoiceLibraryItem({ id: generateId(), ts: Date.now(), fileName: file.name, mediaType: file.type || 'audio/mpeg', base64, characterName: '' })
+    }).finally(refreshVoiceLibrary)
+  }, [refreshVoiceLibrary])
+
+  const removeVoiceLibraryItem = useCallback((id) => deleteVoiceLibraryItem(id).then(refreshVoiceLibrary), [refreshVoiceLibrary])
+
+  const renameVoiceLibraryCharacter = useCallback((id, characterName) => {
+    return updateVoiceLibraryItem(id, { characterName }).then(() => {
+      setVoiceLibrary(prev => prev.map(x => (x.id === id ? { ...x, characterName } : x)))
+    })
+  }, [])
+
+  // Read through a ref (not a closure dependency) so this callback stays
+  // stable across renders even though it needs the live library array —
+  // same trick historyActionsRef uses.
+  const voiceLibraryRef = useRef([])
+  voiceLibraryRef.current = voiceLibrary
+
+  // Save a currently-in-use audio item ({ base64, mediaType, fileName } —
+  // id/subjectRef/characterId are irrelevant here) into the library.
+  // `contextName` is an already-resolved plain string from the caller (image
+  // note/role for MinimaxRefPanel, bible character name for
+  // ScriptwriterVoiceRefs) — this helper does no lookups of its own.
+  // Dedupes by content hash so re-saving the same sample never creates a
+  // duplicate row; it tops up a blank stored name from a non-blank context,
+  // but never overwrites a name the user already typed.
+  const saveAudioToVoiceLibrary = useCallback((audioItem, contextName) => {
+    const hash = imageHash(audioItem.base64)
+    const existing = voiceLibraryRef.current.find(v => v.hash === hash)
+    if (existing) {
+      if (contextName && !existing.characterName) return renameVoiceLibraryCharacter(existing.id, contextName)
+      return Promise.resolve()
+    }
+    return addVoiceLibraryItem({
+      id: generateId(), ts: Date.now(), fileName: audioItem.fileName,
+      mediaType: audioItem.mediaType, base64: audioItem.base64, characterName: contextName || '',
+    }).then(refreshVoiceLibrary)
+  }, [refreshVoiceLibrary, renameVoiceLibraryCharacter])
 
   // Apply ONE entry's change locally instead of re-listing everything.
   //
@@ -1659,7 +1714,9 @@ export default function App() {
       ) : frameMode === 'ref' ? (
         <>
           {ratioPicker}
-          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} manualMode={manualUI} />
+          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} manualMode={manualUI} duration={duration}
+            voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={addVoiceLibraryFiles} onRemoveVoiceLibraryItem={removeVoiceLibraryItem}
+            onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary} />
         </>
       ) : frameMode === 'firstmidlast' ? (
         <>
@@ -1809,6 +1866,8 @@ export default function App() {
           library={library} onAddLibraryImages={addLibraryImages} onRemoveLibraryImage={removeLibraryImage}
           onSaveLibraryCaption={galleryActions.saveLibraryCaption} onSetLibraryRole={galleryActions.setLibraryRole}
           onDescribeLibraryImage={galleryActions.describeLibraryImage}
+          voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={addVoiceLibraryFiles} onRemoveVoiceLibraryItem={removeVoiceLibraryItem}
+          onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary}
           comfyCfg={comfyCfg}
           setComfyCfg={setComfyCfg}
           loras={loras}

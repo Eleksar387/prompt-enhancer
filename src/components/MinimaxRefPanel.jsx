@@ -1,10 +1,11 @@
 import { useRef, useState, useEffect, memo } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
-import { imageHash } from '../utils'
+import { imageHash, blobUrlToBase64 } from '../utils'
 import { loraUsable } from '../loras'
 import { numberSubjects } from '../manualH3'
 import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
+import VoiceLibraryGallery from './VoiceLibraryGallery'
 
 const MAX_IMAGES = 6
 const MAX_DIM = 1536
@@ -157,11 +158,16 @@ const refFromData = (d) => ({
 // AI path reads `im.loraId` via App.jsx's `activeLoras` and the bound voice
 // via `captionImages()`'s audioBlock, Manual mode via `bindAudioToSubjects()`.
 // `manualMode` only still matters for the Note field's placeholder text below.
-function MinimaxRefPanel({ images, onChange, audios, onAudiosChange, loras = [], manualMode = false }) {
+function MinimaxRefPanel({
+  images, onChange, audios, onAudiosChange, loras = [], manualMode = false, duration,
+  voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
+  onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
+}) {
   const fileInputRef = useRef(null)
   const audioInputRef = useRef(null)
   const [audioError, setAudioError] = useState('')
   const [dragOver, setDragOver] = useState(false)
+  const [savedAudioFlash, setSavedAudioFlash] = useState(null)   // audio id whose "✓ saved" flash is showing
 
   const addImage = (file) => {
     if (!file || images.length >= MAX_IMAGES) return
@@ -197,6 +203,41 @@ function MinimaxRefPanel({ images, onChange, audios, onAudiosChange, loras = [],
   const onAudioFileChange = (e) => { takeAudio(e.target.files[0]); e.target.value = '' }
   const onAudioDrop = (e) => { e.preventDefault(); e.stopPropagation(); if (audios.length >= MAX_AUDIOS) return; const f = e.dataTransfer.files[0]; if (f?.type.startsWith('audio/')) takeAudio(f) }
   const removeAudio = (id) => { setAudioError(''); onAudiosChange(audios.filter(a => a.id !== id)) }
+
+  // Pick an existing library sample straight into a new, unbound audio slot —
+  // same shape (id/base64/mediaType/fileName/subjectRef:null) loadAudio()
+  // produces for a fresh upload, so nothing downstream needs to know the
+  // difference. blobUrlToBase64 fetches the library item's own /api/blob
+  // bytes (the library only ever hands back a url, never inline bytes).
+  const pickFromVoiceLibrary = async (item) => {
+    if (audios.length >= MAX_AUDIOS) return
+    setAudioError('')
+    try {
+      const base64 = await blobUrlToBase64(item.url)
+      onAudiosChange([...audios, { id: generateId(), base64, mediaType: item.mediaType, fileName: item.fileName, subjectRef: null }])
+    } catch {
+      setAudioError('Could not load that voice sample — try again.')
+    }
+  }
+
+  // Best available label for "which character this was" at save time — this
+  // is the whole point of the library's characterName field surviving the
+  // original session, so prefer the user's own note over the generic role
+  // label, which is closer to "what kind of reference" than a name.
+  const contextNameFor = (a) => {
+    const linked = subjectBearing.find(im => im.hash === a.subjectRef)
+    if (!linked) return ''
+    return (linked.note || '').trim() || (MINIMAX_H3_REF_ROLES.find(r => r.id === linked.role)?.label || '')
+  }
+
+  const saveAudioToLibrary = async (a) => {
+    if (!onSaveAudioToVoiceLibrary) return
+    try {
+      await onSaveAudioToVoiceLibrary(a, contextNameFor(a))
+      setSavedAudioFlash(a.id)
+      setTimeout(() => setSavedAudioFlash(f => (f === a.id ? null : f)), 1800)
+    } catch { /* best-effort — no confirmation flash on failure */ }
+  }
 
   // Subject-bearing references only — a Pose/Composition image never defines
   // a <Subject N>, so it's not a valid LoRA/audio binding target.
@@ -336,8 +377,16 @@ function MinimaxRefPanel({ images, onChange, audios, onAudiosChange, loras = [],
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ fontSize: 16 }}>🎙</span>
                 <div style={{ flex: 1, fontSize: 13.5, color: 'var(--pe-ink-3)' }}>Audio {i + 1} · <span style={{ color: 'var(--pe-ink-3)' }}>{a.fileName}</span></div>
+                {onSaveAudioToVoiceLibrary && (
+                  <button onClick={() => saveAudioToLibrary(a)} title="Save this sample to the voice library, for reuse in other generations"
+                    style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-accent-line)', background: 'var(--pe-accent-bg)', color: 'var(--pe-accent-ink)', fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
+                    💾 Save to voice library
+                  </button>
+                )}
+                {savedAudioFlash === a.id && <span style={{ fontSize: 12.5, color: 'var(--pe-accent-ink)', flexShrink: 0 }}>✓ saved</span>}
                 <button onClick={() => removeAudio(a.id)} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-danger-line)', background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>Remove</button>
               </div>
+              <audio controls src={`data:${a.mediaType || 'audio/mpeg'};base64,${a.base64}`} style={{ width: '100%', height: 32 }} />
               {/* The binding is set from the image's own card ("Voice" select
                   above) — this is just a read-only reflection so the audio
                   list stays scannable without hunting through every image. */}
@@ -366,6 +415,16 @@ function MinimaxRefPanel({ images, onChange, audios, onAudiosChange, loras = [],
         </div>
       )}
       {audioError && <div style={{ fontSize: 13, color: 'var(--pe-danger)', marginTop: 6, lineHeight: 1.5 }}>{audioError}</div>}
+
+      <VoiceLibraryGallery
+        library={voiceLibrary}
+        onAddFiles={onAddVoiceLibraryFiles}
+        onRemove={onRemoveVoiceLibraryItem}
+        onRename={onRenameVoiceLibraryCharacter}
+        onPick={pickFromVoiceLibrary}
+        pickDisabled={audios.length >= MAX_AUDIOS}
+        pickHint="click to add as a new voice reference"
+      />
 
       <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileChange} style={{ display: 'none' }} />
       <input ref={audioInputRef} type="file" accept="audio/*" onChange={onAudioFileChange} style={{ display: 'none' }} />
