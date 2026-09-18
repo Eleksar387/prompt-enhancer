@@ -62,4 +62,10 @@ describe('AdaptPanel', () => {
   it('survives a source target that cannot be adapted to', () => {
     expect(() => render({ sourceTarget: 'scriptwriter' })).not.toThrow()
   })
+
+  it('accepts the autoRun prop from the history "→ Text2Video" shortcut without throwing', () => {
+    // Effects (and so the actual auto-run call) don't fire under
+    // renderToStaticMarkup — this only guards against a prop-shape crash.
+    expect(() => render({ autoRun: true })).not.toThrow()
+  })
 })

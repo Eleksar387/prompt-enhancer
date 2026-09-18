@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   TARGETS, DURATION_OPTIONS, PROMPT_LENGTH_INJECT, systemPromptFor, caps,
 } from '../constants'
@@ -26,6 +26,7 @@ export default function AdaptPanel({
   workspace,
   activeLoras = [],
   onSaveAdapt, onClose,
+  autoRun = false,
 }) {
   const {
     style, creativity, negative, dialogue, delivery, promptLength,
@@ -121,6 +122,19 @@ export default function AdaptPanel({
       setResult({ text: '', usage: null, loading: false, error: e.message })
     }
   }
+
+  // The history card's "→ Text2Video" shortcut sets `autoRun` to skip the
+  // manual "✦ Adapt prompt" click — fires once the source data (caption / an
+  // in-flight vision re-read) is actually ready. This component is remounted
+  // per source entry (App.jsx keys it by `sourceTs`), so a plain one-shot ref
+  // is enough; no dedup across different entries is needed.
+  const autoRanRef = useRef(false)
+  useEffect(() => {
+    if (!autoRun || autoRanRef.current || captioning) return
+    autoRanRef.current = true
+    runAdapt()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, captioning])
 
   return (
     <div id="adapt-panel" style={{ marginTop: 24, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 16 }}>

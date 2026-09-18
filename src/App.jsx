@@ -1153,11 +1153,20 @@ export default function App() {
     (Array.isArray(h.refImages) && h.refImages.some(im => im && (im.url || im.blobRef || im.base64))) ||
     [h.firstImg, h.midImg, h.lastImg].some(im => im && typeof im === 'object' && (im.url || im.blobRef || im.base64))
 
-  const startAdapt = async (h) => {
+  // `opts.autoRun` is set by the history card's "→ Text2Video" shortcut — it
+  // rides along on `adaptSourceOverride` (added to `base` so every later
+  // setAdaptSourceOverride(...) call, including the async caption re-read,
+  // keeps carrying it) and tells <AdaptPanel> to fire itself once its source
+  // data (caption/original prompt) is ready, instead of waiting for a manual
+  // "✦ Adapt prompt" click. Destination target still comes from AdaptPanel's
+  // own default (the source target, when it's a valid adapt target — true for
+  // minimax_h3), so no separate "forced destination" plumbing is needed.
+  const startAdapt = async (h, opts = null) => {
     setHistoryOpen(false)
     const base = {
       scene: h.scene || '', frameMode: h.frameMode, sourceTarget: h.target,
       originalPrompt: h.outputs?.[0]?.text || '', ts: h.ts,
+      autoRun: !!opts?.autoRun,
     }
     if (h.caption) { setAdaptSourceOverride({ ...base, caption: h.caption }); return }
     if (!entryHasStoredImages(h)) { setAdaptSourceOverride({ ...base, caption: '' }); return }
@@ -1484,6 +1493,10 @@ export default function App() {
     restore: (h) => historyActionsRef.current.restore(h),
     remove: (id) => historyActionsRef.current.removeHistoryEntry(id),
     adapt: (h) => historyActionsRef.current.startAdapt(h),
+    // MiniMax H3 history cards with reference/frame images get a one-click
+    // shortcut straight to a text-only T2VA rewrite — same pipeline as
+    // "⇄ Adapt", just auto-run instead of requiring the extra click.
+    text2video: (h) => historyActionsRef.current.startAdapt(h, { autoRun: true }),
     assignProject: (id, value) => historyActionsRef.current.assignEntryProject(id, value),
     saveCaption: (id, text) => historyActionsRef.current.saveCaption(id, text),
     saveRefImageCaption: (id, imageIndex, text, roleId) => historyActionsRef.current.saveRefImageCaption(id, imageIndex, text, roleId),
@@ -2376,6 +2389,7 @@ export default function App() {
           originalPrompt={adaptSourceOverride?.originalPrompt ?? (results.find(r => r.text)?.text ?? '')}
           fromHistory={!!adaptSourceOverride}
           sourceTs={adaptSourceOverride?.ts}
+          autoRun={!!adaptSourceOverride?.autoRun}
           models={models} defaultModel={effectiveWriter} cfg={cfg}
           workspace={workspace} activeLoras={activeLoras}
           onSaveAdapt={(snap, outs) => saveHistory(snap, outs, false)}

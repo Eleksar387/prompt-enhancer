@@ -356,6 +356,9 @@ const StandardCard = memo(function StandardCard({ h, projects, restoringId, acti
           {h.outputs?.length > 0 && (
             <button onClick={() => actions.adapt(h)} title="Rewrite this generation's prompt for another model" style={accentBtn}>⇄ Adapt</button>
           )}
+          {h.target === 'minimax_h3' && hasImages && h.outputs?.length > 0 && (
+            <button onClick={() => actions.text2video(h)} title="One-click rewrite as a text-only MiniMax H3 prompt (T2VA) — no reference images needed" style={accentBtn}>→ Text2Video</button>
+          )}
           <button onClick={() => actions.restore(h)} disabled={!!restoringId} style={restoreBtn(restoringId, h.id)}>
             {restoringId === h.id ? 'Restoring…' : 'Restore settings'}
           </button>

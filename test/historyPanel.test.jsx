@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import HistoryPanel from '../src/components/HistoryPanel.jsx'
 
 const actions = {
-  restore: () => {}, remove: () => {}, adapt: () => {}, assignProject: () => {},
+  restore: () => {}, remove: () => {}, adapt: () => {}, text2video: () => {}, assignProject: () => {},
   saveCaption: () => {}, saveRefImageCaption: () => {}, clearAll: () => {}, exportAll: () => {}, importFiles: () => {},
 }
 const filters = { project: 'all', target: 'all', model: 'all', image: 'all', search: '' }
@@ -128,6 +128,16 @@ describe('StandardCard', () => {
     expect(html).toContain('⇄ Adapt')
     const noOut = { ...standard, outputs: [] }
     expect(render({ history: [noOut], visible: [noOut] })).not.toContain('⇄ Adapt')
+  })
+
+  it('offers the Text2Video shortcut only for a minimax_h3 entry with images and outputs', () => {
+    expect(html).toContain('→ Text2Video')
+    const nonH3 = { ...standard, target: 'ltx' }
+    expect(render({ history: [nonH3], visible: [nonH3] })).not.toContain('→ Text2Video')
+    const noImages = { ...standard, firstImg: null, refImages: [] }
+    expect(render({ history: [noImages], visible: [noImages] })).not.toContain('→ Text2Video')
+    const noOut = { ...standard, outputs: [] }
+    expect(render({ history: [noOut], visible: [noOut] })).not.toContain('→ Text2Video')
   })
 
   it('shows a restore-in-progress label on the entry being restored', () => {
