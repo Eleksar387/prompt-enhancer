@@ -46,6 +46,10 @@ export const modelProvider = (m) => {
   // MiniMax H3 Manual mode's sentinel model label (src/manualH3.js) — no
   // provider actually ran, so it must not read as "Ollama".
   if (s === 'manual') return 'Manual'
+  // The "✍ Manual Prompt" settings-derived template button (src/manualH3.js's
+  // buildH3Template) — also no provider ran, and distinct from raw-tag
+  // Manual mode above so the two are filterable separately in History.
+  if (s === 'template') return 'Template'
   if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
   if (s.includes('grok')) return 'Grok'
   return 'Ollama'

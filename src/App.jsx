@@ -9,8 +9,8 @@ import {
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
   DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE,
-  SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG,
-  systemPromptFor, caps,
+  SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
+  systemPromptFor, caps, aspectParts,
 } from './constants'
 import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
@@ -46,7 +46,7 @@ import {
 } from './workspace'
 import { buildStylePart, buildWriterUserText, h3ModeFor } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
-import { buildManualH3, buildManualSeed } from './manualH3'
+import { buildManualH3, buildManualSeed, buildH3Template } from './manualH3'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
   label: `${writer} · T${temp}`,
@@ -1337,6 +1337,36 @@ export default function App() {
     }
   }
 
+  // "✍ Manual Prompt" — a THIRD, independent action for minimax_h3, distinct
+  // from the raw-tag-syntax Manual mode above: instantly builds a full
+  // H3-schema draft from whatever the normal AI-mode fields already hold
+  // (Style/Dialogue/Spoken Language/Duration/Aspect Ratio/Soundscape/Music/
+  // references), with the free-prose description left as a placeholder to
+  // hand-edit. Zero AI calls — see src/manualH3.js's buildH3Template. Sits
+  // next to the main generate button (only when !manualUI) rather than
+  // touching enhance()/manualMode at all.
+  const buildTemplatePrompt = () => {
+    if (!canGenerateFrom(workspace)) return
+    abortAllVideos()
+    setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); admin.setPending(false)
+
+    const mode = h3ModeFor(frameMode, imgs.firstImg)
+    const ratio = selectedRatio ? aspectParts(selectedRatio) : null
+    const styleObj = STYLE_OPTIONS.find(s => s.id === style)
+    const { text } = buildH3Template({
+      mode, scene, duration, refImages: imgs.refImages, refAudios: imgs.refAudios,
+      soundscape, music, dialogue, delivery,
+      spokenLangTag: show.spokenLang ? spokenLangDef(spokenLangId).tag : null,
+      ratioToken: ratio?.token, ratioOrient: ratio?.orient,
+      styleHint: styleObj && styleObj.id !== 'auto' ? styleObj.label : '',
+      avoidHint: negative,
+    })
+    const withLoras = withLoraTriggers(text, activeLoras, target)
+    setResults([{ label: 'template', text: withLoras, saved: withLoras, usage: null, loading: false, error: '', h3Mode: mode }])
+    const snapshot = buildWorkspaceSnapshot(workspace, { model: 'template', vision: null, outputCount: 1, caption: null })
+    saveHistory(snapshot, [{ label: 'template', text: withLoras, h3Mode: mode }])
+  }
+
   // The history snapshot for the current workspace state. `frameDescription` is
   // the assembled vision caption (null for text-only); `count` is how many
   // outputs the entry carries. Used by runWriter() after a fresh generation and
@@ -2220,6 +2250,13 @@ export default function App() {
         <button onClick={enhance} disabled={genBtnDisabled} style={{ ...genBtnStyle, flex: 1 }}>
           {buttonLabel}
         </button>
+        {target === 'minimax_h3' && !manualUI && (
+          <button onClick={buildTemplatePrompt} disabled={genBtnDisabled}
+            title="Instantly build a full H3 template from your current settings, with the description left as a placeholder to write yourself — no AI call"
+            style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: genBtnDisabled ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 14, fontWeight: 600, cursor: genBtnDisabled ? 'not-allowed' : 'pointer' }}>
+            ✍ Manual Prompt
+          </button>
+        )}
         <button onClick={addToQueue} disabled={!canGenerate || queue.busy}
           title="Save this generation for later instead of running it now"
           style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: (!canGenerate || queue.busy) ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 14, fontWeight: 600, cursor: (!canGenerate || queue.busy) ? 'not-allowed' : 'pointer' }}>
@@ -2450,7 +2487,8 @@ export default function App() {
                   onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
               )}
               {target === 'minimax_h3' && r.text && !r.loading && !r.error && (
-                <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={imgs.refImages} />
+                <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={imgs.refImages}
+                  anchors={(imgs.refImages || []).map((im, i) => ({ pictureN: i + 1, atSeconds: im.atSeconds })).filter(a => a.atSeconds != null)} />
               )}
               {r.imgError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Render failed: {r.imgError}</div>}
               {r.images?.length > 0 && (

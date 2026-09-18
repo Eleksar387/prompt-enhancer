@@ -16,6 +16,7 @@ import {
   TARGETS, caps, targetsWithCap,
 } from '../constants'
 import { btn, shrinkToJpeg, imageHash, mapWithConcurrency } from '../utils'
+import { formatTimestamp } from '../manualH3'
 import { lorasByIds, loraInstruction, withLoraTriggers } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
@@ -274,15 +275,9 @@ const rehydrateVoiceRef = (d) => ({
 // on a clip (shot.refs).
 const refKey = (im) => im.hash || (im.caption || '').trim() || im.fileName || ''
 
-// MM:SS.mmm — the exact timestamp format SYSTEM_PROMPT_MINIMAX_H3's rule 5
-// cut-timestamp convention already uses ("At MM:SS.mmm, …"), reused here for
-// Timeline-anchor sentences so both share one clock format in the prompt.
-const formatTimestamp = (seconds) => {
-  const s = Math.max(0, Number(seconds) || 0)
-  const m = Math.floor(s / 60)
-  const rem = (s - m * 60).toFixed(3).padStart(6, '0')
-  return `${String(m).padStart(2, '0')}:${rem}`
-}
+// MM:SS.mmm timestamp formatting — single source of truth in manualH3.js
+// (also used by the main pipeline's own Add Guide anchor support), imported
+// rather than kept as a private copy.
 
 // Tidy one finished H3 clip prompt. The writer model regularly (a) wraps the
 // output in a ```lang fence and (b) drops the leading field label, emitting a

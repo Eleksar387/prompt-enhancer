@@ -43,6 +43,9 @@ export const refImagesToSnap = (list) => (list || []).map(im => ({
   // The character-kind LoRA (if any) assigned directly on this reference's own
   // card — see "Per-reference LoRA/voice binding" in MinimaxRefPanel.jsx.
   loraId: im.loraId || null,
+  // Add Guide timeline anchor (seconds) — see manualH3.js's anchorSentences /
+  // App.jsx's "Manual Prompt" template and Manual mode assembler.
+  atSeconds: im.atSeconds ?? null,
   hash: im.hash || imageHash(im.base64),
 }))
 
@@ -58,6 +61,7 @@ export const refImagesFromSnap = (list, newId) => (Array.isArray(list)
       preserve: im.preserve || 'strong',
       note: im.note || '',
       loraId: im.loraId || null,
+      atSeconds: im.atSeconds ?? null,
       hash: im.hash || imageHash(im.base64),
     }))
   : [])

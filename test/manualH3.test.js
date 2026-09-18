@@ -9,6 +9,8 @@ import {
   numberSubjects, bindAudioToSubjects, retentionReason, formatSeconds,
   assembleT2VA, assembleI2VA, assembleL2VA, assembleFL2VA, assembleRef2VA,
   assembleManualH3, validateManualH3, buildManualH3, buildManualSeed,
+  buildSubjectClauseParts, buildTemplateBody, buildH3Template,
+  formatTimestamp, anchorSentences,
 } from '../src/manualH3.js'
 
 const ref = (over = {}) => ({ hash: 'h1', role: 'subject_identity', preserve: 'exact', note: '', ...over })
@@ -404,5 +406,318 @@ describe('buildManualSeed', () => {
     const refImages = [ref({ hash: 'a', role: 'subject_identity' })]
     const refAudios = [{ id: 'audio1', subjectRef: null }]
     expect(buildManualSeed(refImages, refAudios)).toBe(buildManualSeed(refImages))
+  })
+})
+
+describe('buildSubjectClauseParts (extracted from buildManualSeed)', () => {
+  it('is null with no non-pose references, matching buildManualSeed\'s own fallback gate', () => {
+    expect(buildSubjectClauseParts([])).toBeNull()
+    expect(buildSubjectClauseParts([ref({ hash: 'p', role: 'pose_composition' })])).toBeNull()
+  })
+
+  it('weaves the same mainClause/opener buildManualSeed already relies on', () => {
+    const refImages = [
+      ref({ hash: 'a', role: 'subject_identity' }),
+      ref({ hash: 'b', role: 'wardrobe' }),
+      ref({ hash: 'c', role: 'environment' }),
+    ]
+    const parts = buildSubjectClauseParts(refImages)
+    expect(parts.mainClause).toBe("<Subject 1> stands by the window, wearing <Subject 2>'s jacket, framed against the backdrop from <Picture 3>")
+    expect(parts.opener).toBe('')
+    expect(parts.mainSubject.subjectM).toBe(1)
+  })
+})
+
+describe('buildTemplateBody (the "Manual Prompt" button)', () => {
+  const settings = { ratioOrient: 'landscape', ratioToken: '16:9', duration: '8 seconds', styleHint: 'Dramatic', avoidHint: 'neon signs' }
+
+  it('T2VA: one [Shot 1] block, a «» placeholder note, no reference weaving', () => {
+    const body = buildTemplateBody({ mode: 'T2VA', refImages: [], refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body.startsWith('[Shot 1] «TODO')).toBe(true)
+    expect(body).toContain('landscape 16:9, ~8.00s, style: Dramatic, avoid: neon signs')
+    expect(body).toContain('Describe the scene here.')
+    expect(parseShots(body)).toHaveLength(1)
+    expect(findMalformedTags(body)).toEqual([])
+  })
+
+  it('echoes the typed Scene text instead of the generic fallback note', () => {
+    const body = buildTemplateBody({ mode: 'T2VA', refImages: [], refAudios: [], scene: 'A queen betrayed by her advisor', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body).toContain('Starting notes from your Scene field: "A queen betrayed by her advisor"')
+    expect(body).not.toContain('Describe the scene here.')
+  })
+
+  it('renders typed dialogue + delivery with the given language tag, no subject tag in a non-ref mode', () => {
+    const body = buildTemplateBody({ mode: 'T2VA', refImages: [], refAudios: [], scene: '', dialogue: 'We need to leave now.', delivery: 'urgent, hushed', spokenLangTag: '[English]', ...settings })
+    expect(body).toContain('The subject says, [English] "We need to leave now.", delivery: urgent, hushed.')
+  })
+
+  it('omits the dialogue line entirely when nothing is typed', () => {
+    const body = buildTemplateBody({ mode: 'T2VA', refImages: [], refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: '[English]', ...settings })
+    expect(body).not.toContain('who says')
+    expect(body).not.toContain('The subject says')
+  })
+
+  it('the settings note never contains a bracket that could misparse as an H3 tag', () => {
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages: [ref({ hash: 'a' })], refAudios: [], scene: 'x', dialogue: 'hi', delivery: '', spokenLangTag: '[English]', ...settings })
+    const note = body.match(/«[^»]*»/)[0]
+    expect(note).not.toMatch(/[[\]<>]/)
+  })
+
+  it('Ref2VA with no dialogue still weaves the subject clause with no speaker tag', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', note: 'her face and build' })]
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body).toContain('<Subject 1> stands by the window')
+    expect(body).not.toContain('(S1)')
+  })
+
+  it('Ref2VA with dialogue and no bound audio attaches it to the main subject with a real (S1) tag', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', note: 'her face and build' })]
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios: [], scene: '', dialogue: 'We need to go.', delivery: '', spokenLangTag: '[English]', ...settings })
+    expect(body).toContain('<Subject 1> (S1), who says, [English] "We need to go."')
+    const { usage } = parseShotLabelUsage(body)
+    expect(usage['Subject 1']).toEqual([1])
+    expect(parseSubjectSpeakers(body)).toEqual({ 1: 'S1' })
+  })
+
+  it('Ref2VA with a bound voice reference attaches dialogue to the BOUND subject, not necessarily the main one', () => {
+    const refImages = [
+      ref({ hash: 'a', role: 'subject_identity' }),
+      ref({ hash: 'b', role: 'wardrobe' }),
+    ]
+    const refAudios = [{ subjectRef: 'b' }]
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios, scene: '', dialogue: 'Hold still.', delivery: '', spokenLangTag: '[English]', ...settings })
+    expect(body).toContain('<Subject 2> (S1), who says, [English] "Hold still."')
+    expect(body).not.toContain('<Subject 1> (S1)')
+  })
+
+  it('never emits a trailing placeholder second shot, in any mode', () => {
+    for (const mode of ['T2VA', 'I2VA', 'L2VA', 'FL2VA', 'Ref2VA']) {
+      const body = buildTemplateBody({ mode, refImages: [ref({ hash: 'a' })], refAudios: [], scene: '', dialogue: 'hi', delivery: '', spokenLangTag: '[English]', ...settings })
+      expect(parseShots(body)).toHaveLength(1)
+    }
+  })
+})
+
+describe('buildH3Template', () => {
+  it('reuses assembleManualH3 for the schema shape — T2VA, three labeled fields', () => {
+    const { text } = buildH3Template({
+      mode: 'T2VA', scene: 'A queen betrayed by her advisor', duration: '8 seconds',
+      refImages: [], refAudios: [], soundscape: 'quiet room tone', music: '',
+      dialogue: '', delivery: '', spokenLangTag: null,
+      ratioToken: '16:9', ratioOrient: 'landscape', styleHint: '', avoidHint: '',
+    })
+    expect(text).toContain('integrated_multimodal_description:')
+    expect(text).toContain('overall_soundscape: quiet room tone')
+    expect(text).toContain('non_diegetic_music: N/A')
+  })
+
+  it('substitutes a placeholder note for a blank soundscape instead of an empty field', () => {
+    const { text } = buildH3Template({
+      mode: 'T2VA', scene: '', duration: '8 seconds', refImages: [], refAudios: [],
+      soundscape: '', music: '', dialogue: '', delivery: '', spokenLangTag: null,
+      ratioToken: '16:9', ratioOrient: 'landscape', styleHint: '', avoidHint: '',
+    })
+    expect(text).not.toContain('overall_soundscape: \n')
+    expect(text).not.toMatch(/overall_soundscape: $/m)
+    expect(text).toContain('overall_soundscape: «describe the ambience')
+  })
+
+  it('Ref2VA: subject_definitions/retention_analysis reference the woven tag for real, not "not referenced"', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', note: 'her face and build' })]
+    const { text } = buildH3Template({
+      mode: 'Ref2VA', scene: '', duration: '8 seconds', refImages, refAudios: [],
+      soundscape: 'quiet', music: '', dialogue: 'We need to go.', delivery: '', spokenLangTag: '[English]',
+      ratioToken: '9:16', ratioOrient: 'portrait', styleHint: '', avoidHint: '',
+    })
+    expect(text).toContain('<Subject 1> (appears in [Shot 1]):')
+    expect(text).not.toContain('not referenced in the text')
+    const sections = text.split('\n\n').map(s => s.split(':')[0])
+    expect(sections).toEqual(['subject_definitions', 'summary', 'retention_analysis', 'detailed_description', 'overall_soundscape', 'non_diegetic_music'])
+  })
+
+  it('L2VA/FL2VA: the alignment sentence still anchors sensibly to the single real shot', () => {
+    const l2va = buildH3Template({
+      mode: 'L2VA', scene: '', duration: '8 seconds', refImages: [], refAudios: [],
+      soundscape: 'x', music: '', dialogue: '', delivery: '', spokenLangTag: null,
+      ratioToken: '16:9', ratioOrient: 'landscape', styleHint: '', avoidHint: '',
+    }).text
+    expect(l2va.split('\n\n')[0]).toBe('How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 8.00-second mark of the target video.')
+  })
+})
+
+describe('formatTimestamp', () => {
+  it('formats seconds as MM:SS.mmm', () => {
+    expect(formatTimestamp(1.5)).toBe('00:01.500')
+    expect(formatTimestamp(65)).toBe('01:05.000')
+    expect(formatTimestamp(0)).toBe('00:00.000')
+    expect(formatTimestamp(undefined)).toBe('00:00.000')
+  })
+})
+
+describe('anchorSentences (Add Guide timeline anchors)', () => {
+  it('is empty with no anchored references', () => {
+    expect(anchorSentences([ref({ hash: 'a' })])).toEqual([])
+    expect(anchorSentences([])).toEqual([])
+  })
+
+  it('emits one sentence per anchored reference, chronologically ordered', () => {
+    const refImages = [
+      ref({ hash: 'a', atSeconds: 3 }),
+      ref({ hash: 'b', role: 'pose_composition', atSeconds: 1.5 }),
+    ]
+    expect(anchorSentences(refImages)).toEqual([
+      'At 00:01.500, the continuous movement reaches the composition defined by <Picture 2>.',
+      'At 00:03.000, the continuous movement reaches the composition defined by <Picture 1>.',
+    ])
+  })
+
+  it('ignores an unset or non-finite atSeconds', () => {
+    expect(anchorSentences([ref({ hash: 'a', atSeconds: null }), ref({ hash: 'b', atSeconds: NaN })])).toEqual([])
+  })
+})
+
+describe('Add Guide anchors inside assembleRef2VA', () => {
+  it('adds a SEPARATE <Picture N> keyframe line, leaving the <Subject M> line unmodified — spec §2/§8', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', note: 'her face and build', atSeconds: 1.5 })]
+    const storyText = '[Shot 1] <Subject 1> stands in a doorway.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios: [] })
+    const lines = out.split('\n\n')[0].replace('subject_definitions:\n', '').split('\n')
+    expect(lines).toEqual([
+      '<Subject 1> is the subject from <Picture 1>, preserving her face and build.',
+      '<Picture 1> is a storyboard keyframe for the target composition at 00:01.500.',
+    ])
+  })
+
+  it('adds a SEPARATE <Picture N> retention line too, leaving the <Subject M> line\'s normal reason unmodified', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', preserve: 'strong', atSeconds: 1.5 })]
+    const storyText = '[Shot 1] <Subject 1> stands in a doorway.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios: [] })
+    const lines = out.split('\n\n')[2].replace('retention_analysis:\n', '').split('\n')
+    expect(lines[0]).toBe('<Subject 1> (appears in [Shot 1]): partially_preserved - Preserve defining attributes; minor incidental variation allowed')
+    // The <Picture N> line's marker also comes from the image's own preserve
+    // setting (partially_preserved for "strong"), but with the addendum's
+    // fixed anchor reason instead of retentionReason()'s normal hint text.
+    expect(lines[1]).toBe('<Picture 1> (target composition at 00:01.500): partially_preserved - use it as the target pose, framing, and scene state at that time.')
+  })
+
+  it('works for a Pose/Composition anchor too (Picture-only, no Subject)', () => {
+    const refImages = [ref({ hash: 'a', role: 'pose_composition', preserve: 'guide', atSeconds: 2 })]
+    const storyText = '[Shot 1] plain prose.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios: [] })
+    expect(out).toContain('<Picture 1> (target composition at 00:02.000): attribute_transfer - use it as the target pose, framing, and scene state at that time.')
+  })
+
+  it('adds "keyframe completion" to the summary marker only when something is anchored', () => {
+    const plain = [ref({ hash: 'a' })]
+    const anchored = [ref({ hash: 'a', atSeconds: 1 })]
+    const storyText = '[Shot 1] <Subject 1> stands.'
+    const plainOut = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages: plain, refAudios: [] })
+    const anchoredOut = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages: anchored, refAudios: [] })
+    expect(plainOut).toContain('[reference generation]')
+    expect(anchoredOut).toContain('[reference generation + keyframe completion]')
+  })
+
+  it('combines with an audio-reference marker: "reference generation + audio reference + keyframe completion"', () => {
+    const refImages = [ref({ hash: 'a', atSeconds: 1 })]
+    const refAudios = [{ subjectRef: 'a' }]
+    const storyText = '[Shot 1] <Subject 1> (S1) stands.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios })
+    expect(out).toContain('[reference generation + audio reference + keyframe completion]')
+  })
+
+  it('an unanchored reference alongside an anchored one: both keep their normal lines, plus one extra <Picture N> line for the anchor', () => {
+    const refImages = [
+      ref({ hash: 'a', role: 'subject_identity', preserve: 'exact', atSeconds: 1 }),
+      ref({ hash: 'b', role: 'wardrobe', preserve: 'strong' }),
+    ]
+    const storyText = '[Shot 1] <Subject 1> stands, wearing <Subject 2>\'s jacket.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios: [] })
+    const lines = out.split('\n\n')[2].replace('retention_analysis:\n', '').split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe('<Subject 1> (appears in [Shot 1]): fully_preserved - Fully preserve — no deviation')
+    expect(lines[1]).toBe('<Subject 2> (appears in [Shot 1]): partially_preserved - Preserve defining attributes; minor incidental variation allowed')
+    expect(lines[2]).toContain('<Picture 1> (target composition at 00:01.000)')
+  })
+
+  it('Pose/Composition still gets exactly ONE line — its wording switches to the anchor form, no extra line added', () => {
+    const refImages = [ref({ hash: 'a', role: 'pose_composition', preserve: 'guide', atSeconds: 2 })]
+    const storyText = '[Shot 1] plain prose.'
+    const out = assembleRef2VA({ storyText, soundscape: 'x', music: '', refImages, refAudios: [] })
+    const defLines = out.split('\n\n')[0].replace('subject_definitions:\n', '').split('\n')
+    const retLines = out.split('\n\n')[2].replace('retention_analysis:\n', '').split('\n')
+    expect(defLines).toHaveLength(1)
+    expect(retLines).toHaveLength(1)
+    expect(defLines[0]).toBe('<Picture 1> is a storyboard keyframe for the target composition at 00:02.000.')
+  })
+})
+
+describe('validateManualH3 — Add Guide anchor warnings (non-blocking)', () => {
+  const base = () => ({
+    mode: 'Ref2VA', storyText: '[Shot 1] <Subject 1> (S1) says hi.', soundscape: 'quiet',
+    refImages: [ref({ hash: 'a' })], refAudios: [], duration: '8 seconds',
+  })
+
+  it('is clean with an in-range anchor', () => {
+    const res = validateManualH3({ ...base(), refImages: [ref({ hash: 'a', atSeconds: 4 })] })
+    expect(res.errors).toEqual([])
+    expect(res.warnings).toEqual([])
+  })
+
+  it('warns (never errors) when an anchor is outside the duration', () => {
+    const res = validateManualH3({ ...base(), refImages: [ref({ hash: 'a', atSeconds: 20 })] })
+    expect(res.errors).toEqual([])
+    expect(res.warnings.some(w => /outside the 8\.00s duration/.test(w))).toBe(true)
+  })
+
+  it('warns when two anchors share the same time', () => {
+    const refImages = [ref({ hash: 'a', atSeconds: 2 }), ref({ hash: 'b', role: 'wardrobe', atSeconds: 2 })]
+    const res = validateManualH3({ ...base(), refImages })
+    expect(res.warnings.some(w => /share the same time/.test(w))).toBe(true)
+  })
+
+  it('skips the out-of-range check with no duration given', () => {
+    const res = validateManualH3({ ...base(), duration: undefined, refImages: [ref({ hash: 'a', atSeconds: 999 })] })
+    expect(res.warnings.some(w => /outside/.test(w))).toBe(false)
+  })
+})
+
+describe('buildTemplateBody — Add Guide anchors', () => {
+  const settings = { ratioOrient: 'landscape', ratioToken: '16:9', duration: '8 seconds', styleHint: '', avoidHint: '' }
+
+  it('appends anchor sentences after the woven Ref2VA body', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', atSeconds: 1.5 })]
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body).toContain('At 00:01.500, the continuous movement reaches the composition defined by <Picture 1>.')
+  })
+
+  it('still appends an anchor sentence when the only reference is Pose/Composition (no subject-bearing entries)', () => {
+    const refImages = [ref({ hash: 'a', role: 'pose_composition', atSeconds: 2 })]
+    const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body).toContain('At 00:02.000, the continuous movement reaches the composition defined by <Picture 1>.')
+    expect(parseShots(body)).toHaveLength(1)
+  })
+
+  it('emits nothing extra for non-Ref2VA modes, even if refImages happen to carry atSeconds', () => {
+    const refImages = [ref({ hash: 'a', atSeconds: 1.5 })]
+    const body = buildTemplateBody({ mode: 'T2VA', refImages, refAudios: [], scene: '', dialogue: '', delivery: '', spokenLangTag: null, ...settings })
+    expect(body).not.toContain('continuous movement reaches')
+  })
+})
+
+describe('buildManualSeed — demonstrates an Add Guide anchor when one is configured', () => {
+  it('appends the anchor sentence to the seed', () => {
+    const refImages = [ref({ hash: 'a', role: 'subject_identity', atSeconds: 1.5 })]
+    const seed = buildManualSeed(refImages)
+    expect(seed).toContain('At 00:01.500, the continuous movement reaches the composition defined by <Picture 1>.')
+    // Still a schema-valid single-shot seed otherwise.
+    expect(parseShots(seed).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('is unchanged (no anchor line) with nothing anchored — existing behavior preserved', () => {
+    expect(buildManualSeed([])).toBe(
+      '[Shot 1] Cinematic, live-action, a woman turns towards the door…\n'
+      + 'At 00:03.500, the camera cuts to her, who says, [German] "Wir müssen gehen."\n'
+      + '[Shot 2] …'
+    )
   })
 })

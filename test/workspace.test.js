@@ -115,6 +115,18 @@ describe('image (de)serialization', () => {
     expect(refImagesFromSnap(snap, newId)[0].loraId).toBe('lora-1')
   })
 
+  it('round-trips a reference image\'s Add Guide timeline anchor (atSeconds)', () => {
+    const snap = refImagesToSnap([{ ...img('ref.jpg'), atSeconds: 1.5 }])
+    expect(snap[0].atSeconds).toBe(1.5)
+    expect(refImagesFromSnap(snap, newId)[0].atSeconds).toBe(1.5)
+  })
+
+  it('defaults atSeconds to null when never anchored', () => {
+    const snap = refImagesToSnap([img('ref.jpg')])
+    expect(snap[0].atSeconds).toBeNull()
+    expect(refImagesFromSnap(snap, newId)[0].atSeconds).toBeNull()
+  })
+
   it('drops byte-less reference entries rather than rendering them broken', () => {
     expect(refImagesFromSnap(['old.jpg', { fileName: 'x' }, null, img()], newId)).toHaveLength(1)
     expect(refImagesFromSnap(null, newId)).toEqual([])

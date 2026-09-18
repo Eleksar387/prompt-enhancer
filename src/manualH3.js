@@ -148,10 +148,37 @@ export function numberSubjects(refImages) {
   })
 }
 
+// MM:SS.mmm — the exact timestamp format SYSTEM_PROMPT_MINIMAX_H3's rule 5
+// cut-timestamp convention already uses ("At MM:SS.mmm, …"), and the one
+// H3_MULTIFRAME_ADDENDUM (constants.js) prescribes for an Add Guide anchor's
+// definition/retention lines below. Single source of truth — ScriptwriterPanel.jsx
+// imports this instead of keeping its own private copy.
+export const formatTimestamp = (seconds) => {
+  const s = Math.max(0, Number(seconds) || 0)
+  const m = Math.floor(s / 60)
+  const rem = (s - m * 60).toFixed(3).padStart(6, '0')
+  return `${String(m).padStart(2, '0')}:${rem}`
+}
+
+const isAnchored = (image) => image.atSeconds != null && Number.isFinite(Number(image.atSeconds))
+
+// minimax-h3-multireference-prompt-spec.md §2: "A picture can play two roles
+// … If it plays both roles, describe both roles in subject_definitions" — but
+// the spec's own worked example (§2) and minimal template (§8) always do this
+// as TWO SEPARATE lines, one <Subject M> (semantic role, unmodified) and one
+// <Picture N> (keyframe role) — never merged into one sentence via "It is
+// also …". A Pose/Composition reference has no separate <Subject M> line to
+// begin with, so ITS one line simply switches wording (shot-list → anchor)
+// rather than gaining a second line — see buildAnchorDefinitionLine/
+// buildAnchorRetentionLine below for the subject-bearing case, added
+// separately in assembleRef2VA.
 function buildSubjectDefinitionLine(entry, { usage }) {
   const { image, pictureN, subjectM } = entry
   const picTag = `<Picture ${pictureN}>`
   if (image.role === 'pose_composition') {
+    if (isAnchored(image)) {
+      return `${picTag} is a storyboard keyframe for the target composition at ${formatTimestamp(image.atSeconds)}.`
+    }
     const shots = usage[`Picture ${pictureN}`] || []
     if (!shots.length) {
       return `${picTag} is a storyboard reference (not referenced in the text), defining its intended viewpoint, subject placement, and shot order.`
@@ -173,16 +200,42 @@ function buildSubjectDefinitionLine(entry, { usage }) {
 function buildRetentionLine(entry, { usage }) {
   const { image, pictureN, subjectM } = entry
   const marker = preserveById(image.preserve).marker
+  const label = image.role === 'pose_composition' ? `Picture ${pictureN}` : `Subject ${subjectM}`
+  if (image.role === 'pose_composition' && isAnchored(image)) {
+    return `<${label}> (target composition at ${formatTimestamp(image.atSeconds)}): ${marker} - use it as the target pose, framing, and scene state at that time.`
+  }
   const reason = retentionReason(image.preserve)
   if (image.role === 'pose_composition') {
     const shots = usage[`Picture ${pictureN}`] || []
     const paren = shots.length ? `storyboard reference for ${joinShotsComma(shots)}` : 'storyboard reference (not referenced in the text)'
-    return `<Picture ${pictureN}> (${paren}): ${marker} - ${reason}`
+    return `<${label}> (${paren}): ${marker} - ${reason}`
   }
-  const label = `Subject ${subjectM}`
   const shots = usage[label] || []
   const paren = shots.length ? `appears in ${joinShotsComma(shots)}` : 'not referenced in the text'
   return `<${label}> (${paren}): ${marker} - ${reason}`
+}
+
+// The separate <Picture N> lines a subject-bearing anchored reference ALSO
+// gets (spec §2/§5.3/§8) — appended after the per-entry lines above, never
+// replacing or merging into the <Subject M> line. Not called for
+// Pose/Composition (its one line already switches wording in place, above).
+const buildAnchorDefinitionLine = (entry) =>
+  `<Picture ${entry.pictureN}> is a storyboard keyframe for the target composition at ${formatTimestamp(entry.image.atSeconds)}.`
+
+const buildAnchorRetentionLine = (entry) =>
+  `<Picture ${entry.pictureN}> (target composition at ${formatTimestamp(entry.image.atSeconds)}): ${preserveById(entry.image.preserve).marker} - use it as the target pose, framing, and scene state at that time.`
+
+// Ordered "reached the composition" sentences — mirrors H3_MULTIFRAME_ADDENDUM's
+// own detailed_description example ("at 00:01.500, the continuous movement
+// reaches the composition defined by <Picture 2>"). Used by buildTemplateBody
+// (the "Manual Prompt" template) and buildManualSeed (so raw-tag Manual mode's
+// seed demonstrates the syntax too) — never by the AI writer path, which
+// ignores anchors entirely.
+export function anchorSentences(refImages) {
+  return numberSubjects(refImages || [])
+    .filter(e => isAnchored(e.image))
+    .sort((a, b) => Number(a.image.atSeconds) - Number(b.image.atSeconds))
+    .map(e => `At ${formatTimestamp(e.image.atSeconds)}, the continuous movement reaches the composition defined by <Picture ${e.pictureN}>.`)
 }
 
 const buildAudioSubjectLine = (audioN, subjectM, speakerId) =>
@@ -206,7 +259,10 @@ export function bindAudioToSubjects(refImages, refAudios) {
 }
 
 function buildSummary(entries, refAudios) {
-  const marker = (refAudios || []).length ? '[reference generation + audio reference]' : '[reference generation]'
+  const parts = ['reference generation']
+  if ((refAudios || []).length) parts.push('audio reference')
+  if (entries.some(e => isAnchored(e.image))) parts.push('keyframe completion')
+  const marker = `[${parts.join(' + ')}]`
   const labels = entries.map(e => e.subjectM ? `<Subject ${e.subjectM}>` : `<Picture ${e.pictureN}>`)
   if (!labels.length) return marker
   const verb = labels.length === 1 ? 'appears' : 'appear'
@@ -218,7 +274,7 @@ function buildSummary(entries, refAudios) {
 // warnings surface in the UI but never block — Manual mode still produces a
 // schema-valid prompt around them.
 
-export function validateManualH3({ mode, storyText, soundscape, refImages, refAudios }) {
+export function validateManualH3({ mode, storyText, soundscape, refImages, refAudios, duration }) {
   const errors = []
   const warnings = []
   const text = storyText || ''
@@ -284,6 +340,19 @@ export function validateManualH3({ mode, storyText, soundscape, refImages, refAu
         errors.push(`Audio ${i + 1} is bound to <Subject ${b.subjectM}>, but your text never gives that subject a speaker id like "(S1)".`)
       }
     })
+
+    // Add Guide timeline anchors — non-blocking, mirrors the Scriptwriter's
+    // own two checks (ScriptwriterPanel.jsx's per-clip anchor row).
+    const dur = parseFloat(duration) || 0
+    const anchored = (refImages || []).filter(isAnchored)
+    if (dur > 0) {
+      for (const im of anchored) {
+        const t = Number(im.atSeconds)
+        if (t < 0 || t > dur) warnings.push(`An Add Guide anchor at ${formatSeconds(t)}s is outside the ${formatSeconds(dur)}s duration.`)
+      }
+    }
+    const times = anchored.map(im => Number(im.atSeconds))
+    if (new Set(times).size !== times.length) warnings.push('Two Add Guide anchors share the same time.')
   }
 
   return { errors, warnings }
@@ -342,6 +411,16 @@ export function assembleRef2VA({ storyText, soundscape, music, refImages, refAud
 
   const subjectDefLines = entries.map(e => buildSubjectDefinitionLine(e, { usage }))
   const retentionLines = entries.map(e => buildRetentionLine(e, { usage }))
+  // A subject-bearing anchored reference gets its own separate <Picture N>
+  // line in BOTH sections, appended after the per-entry lines above (matches
+  // the spec's own ordering — every <Subject M> line first, then <Picture N>
+  // lines) — never merged into the <Subject M> line. Pose/Composition is
+  // excluded: its one line already switched wording in place, above.
+  for (const e of entries) {
+    if (e.image.role === 'pose_composition' || !isAnchored(e.image)) continue
+    subjectDefLines.push(buildAnchorDefinitionLine(e))
+    retentionLines.push(buildAnchorRetentionLine(e))
+  }
   bindings.forEach((b) => {
     if (!b) return
     const speakerId = speakers[b.subjectM] || `S${b.subjectM}`
@@ -369,7 +448,7 @@ export function assembleManualH3(mode, input) {
 
 // One entry point for App.jsx: validate, then assemble only if nothing blocks.
 export function buildManualH3({ mode, storyText, soundscape, music, duration, refImages, refAudios }) {
-  const { errors, warnings } = validateManualH3({ mode, storyText, soundscape, refImages, refAudios })
+  const { errors, warnings } = validateManualH3({ mode, storyText, soundscape, refImages, refAudios, duration })
   if (errors.length) return { ok: false, text: null, errors, warnings }
   const text = assembleManualH3(mode, { storyText, soundscape, music, duration, refImages, refAudios })
   return { ok: true, text, errors: [], warnings }
@@ -387,9 +466,15 @@ const PLAIN_SEED =
   + 'At 00:03.500, the camera cuts to her, who says, [German] "Wir müssen gehen."\n'
   + '[Shot 2] …'
 
-export function buildManualSeed(refImages, refAudios) {
+// Shared by buildManualSeed (below) and buildTemplateBody (the "Manual
+// Prompt" template builder, further down) — the subject-weaving clause
+// construction ("<Subject 2> stands by the window, wearing <Subject 1>'s
+// jacket, framed against…") is the same regardless of what fills in the
+// dialogue around it. Returns null when there's nothing to weave (no
+// non-pose reference images).
+export function buildSubjectClauseParts(refImages) {
   const entries = numberSubjects(refImages || []).filter(e => e.image.role !== 'pose_composition')
-  if (!entries.length) return PLAIN_SEED
+  if (!entries.length) return null
 
   const byRole = (role) => entries.find(e => e.image.role === role)
   const identity = byRole('subject_identity')
@@ -412,6 +497,19 @@ export function buildManualSeed(refImages, refAudios) {
   if (wardrobe && mainSubject) mainClause += `, wearing <Subject ${wardrobe.subjectM}>'s jacket`
   if (environment) mainClause += `, framed against the backdrop from <Picture ${environment.pictureN}>`
   const opener = style ? `In a look drawn from <Picture ${style.pictureN}>, ` : ''
+
+  return { entries, identity, wardrobe, product, environment, style, mainSubject, mainClause, opener }
+}
+
+export function buildManualSeed(refImages, refAudios) {
+  // Demonstrate the Add Guide anchor syntax in the seed too — unlike the
+  // "Manual Prompt" template, nothing else teaches this in the raw-tag path.
+  const anchorLines = anchorSentences(refImages)
+  const withAnchors = (text) => anchorLines.length ? `${text}\n${anchorLines.join('\n')}` : text
+
+  const parts = buildSubjectClauseParts(refImages)
+  if (!parts) return withAnchors(PLAIN_SEED)
+  const { mainSubject, mainClause, opener } = parts
 
   // Every subject a voice reference is explicitly bound to (the "Voice" select
   // on that reference's own card) needs its own speaker line — rule 6a: a
@@ -437,11 +535,98 @@ export function buildManualSeed(refImages, refAudios) {
       shotN++
     }
     out += `\n[Shot ${shotN}] …`
-    return out
+    return withAnchors(out)
   }
 
   const speakerTag = mainSubject ? `<Subject ${mainSubject.subjectM}> (S1)` : 'her'
-  return `[Shot 1] Cinematic, live-action, ${opener}${mainClause}…\n`
+  return withAnchors(`[Shot 1] Cinematic, live-action, ${opener}${mainClause}…\n`
     + `At 00:03.500, the camera cuts to ${speakerTag}, who says, [German] "${DIALOGUE_LINES[0]}"\n`
-    + `[Shot 2] …`
+    + `[Shot 2] …`)
+}
+
+// ── settings-derived template ("Manual Prompt" button) ─────────────────────
+// A THIRD, independent action from Manual mode above: instead of the user
+// writing tag syntax themselves, this instantly assembles a full H3-schema
+// draft from whatever the normal AI-mode fields (Style/Dialogue/Spoken
+// Language/Duration/Aspect Ratio/Soundscape/Music/references) already hold,
+// with the free descriptive-prose field left as an unmissable placeholder to
+// hand-edit. Still zero AI calls, and it reuses assembleManualH3 (above) for
+// the actual schema shape rather than re-deriving it.
+//
+// Scaffolding text uses «guillemets», never [ ]/< > — those are live H3
+// tokens (parseShots/findMalformedTags scan for them, and H3SyntaxBadge runs
+// on every result automatically in the UI), so a bracketed placeholder would
+// misparse as a real, broken tag on a fresh, unedited draft.
+
+const TEMPLATE_SOUNDSCAPE_PLACEHOLDER = '«describe the ambience — e.g. wind, distant traffic, room tone»'
+
+const templateNote = ({ ratioOrient, ratioToken, duration, styleHint, avoidHint, scene }) => {
+  const ratioPart = [ratioOrient, ratioToken].filter(Boolean).join(' ')
+  const bits = [ratioPart, `~${formatSeconds(duration)}s`]
+  if (styleHint) bits.push(`style: ${styleHint}`)
+  if (avoidHint) bits.push(`avoid: ${avoidHint}`)
+  const settingsLine = bits.filter(Boolean).join(', ')
+  const sceneNote = (scene || '').trim()
+    ? `Starting notes from your Scene field: "${scene.trim()}"`
+    : 'Describe the scene here.'
+  return `«TODO — replace this placeholder. ${settingsLine}. ${sceneNote} Add more shot blocks as this scene grows.»`
+}
+
+// The dialogue field is transcribed verbatim, tagged with the chosen spoken
+// language — never translated (same limitation as Manual mode above, which
+// doesn't translate either; the user is expected to already type it in the
+// target language, or fix it by hand in the draft).
+const templateDialogueLine = (spokenLangTag, dialogue, delivery) => {
+  const d = (dialogue || '').trim()
+  if (!d || !spokenLangTag) return ''
+  const deliveryNote = (delivery || '').trim() ? `, delivery: ${delivery.trim()}` : ''
+  return `${spokenLangTag} "${d}"${deliveryNote}`
+}
+
+// Everything below is wrapped in one `[Shot 1] …` block on purpose — no
+// trailing placeholder second shot in any mode, so parseShots never has to
+// treat a "…" continuation as a real shot boundary (this also keeps the
+// I2VA/L2VA/FL2VA alignment sentence anchored to a real, single shot).
+export function buildTemplateBody({ mode, refImages, refAudios, scene, dialogue, delivery, spokenLangTag, ratioToken, ratioOrient, duration, styleHint, avoidHint }) {
+  const note = templateNote({ ratioOrient, ratioToken, duration, styleHint, avoidHint, scene })
+  const spoken = templateDialogueLine(spokenLangTag, dialogue, delivery)
+  // Add Guide timeline anchors — Ref2VA only (no reference images in any
+  // other mode), any role, chronologically ordered.
+  const anchorLines = mode === 'Ref2VA' ? anchorSentences(refImages) : []
+  const withAnchors = (text) => anchorLines.length ? `${text}\n${anchorLines.join('\n')}` : text
+
+  const parts = mode === 'Ref2VA' ? buildSubjectClauseParts(refImages) : null
+  if (!parts) {
+    return withAnchors(spoken ? `[Shot 1] ${note}\nThe subject says, ${spoken}.` : `[Shot 1] ${note}`)
+  }
+
+  const { mainSubject, mainClause, opener } = parts
+  const bound = bindAudioToSubjects(refImages || [], refAudios || []).filter(Boolean)
+  // A subject with a bound voice reference gets the line if one exists;
+  // otherwise the main identity/product subject does — same priority
+  // buildManualSeed already uses for its own hardcoded example dialogue.
+  const speakingSubject = bound.length ? bound[0].subjectM : (mainSubject ? mainSubject.subjectM : null)
+
+  let body = `[Shot 1] ${note} ${opener}${mainClause}…`
+  if (spoken && speakingSubject != null) {
+    // The literal "(S1)" speaker tag here is required, not decorative:
+    // assembleRef2VA resolves a bound audio's speaker via
+    // parseSubjectSpeakers(storyText), which only matches "<Subject N> (Sk)"
+    // — without this line, subject_definitions would still assert a speaker
+    // id that the body itself never actually gives that subject.
+    body += `\nThe camera cuts to <Subject ${speakingSubject}> (S1), who says, ${spoken}.`
+  } else if (spoken) {
+    body += `\n${spoken}`
+  }
+  return withAnchors(body)
+}
+
+export function buildH3Template({ mode, scene, duration, refImages, refAudios, soundscape, music, dialogue, delivery, spokenLangTag, ratioToken, ratioOrient, styleHint, avoidHint }) {
+  const body = buildTemplateBody({ mode, refImages, refAudios, scene, dialogue, delivery, spokenLangTag, ratioToken, ratioOrient, duration, styleHint, avoidHint })
+  // Manual mode's own validateManualH3 requires soundscape non-blank; this
+  // path has no validation gate at all, so an empty setting must not
+  // silently produce "overall_soundscape: " with nothing after it.
+  const soundscapeText = (soundscape || '').trim() || TEMPLATE_SOUNDSCAPE_PLACEHOLDER
+  const text = assembleManualH3(mode, { storyText: body, soundscape: soundscapeText, music, duration, refImages, refAudios })
+  return { text }
 }

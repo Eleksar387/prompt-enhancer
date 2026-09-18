@@ -120,7 +120,7 @@ const loadAudio = (file, onLoaded, onError) => {
   reader.readAsDataURL(file)
 }
 
-function refWarnings(images) {
+function refWarnings(images, duration) {
   const out = []
   const roles = images.map(im => im.role)
   const hasWardrobe = roles.includes('wardrobe')
@@ -132,6 +132,17 @@ function refWarnings(images) {
     out.push('Multiple identity references — H3 tends to blend faces. Use one per character and describe the others in the scene text.')
   if (exactCount >= 2)
     out.push("Several “Exact” locks — H3 satisfies them loosely when they compete. Reserve “Exact” for the one that matters most.")
+
+  // Add Guide timeline anchors — non-blocking, mirrors the same two checks
+  // validateManualH3() runs (src/manualH3.js) and the Scriptwriter's own
+  // per-clip anchor row.
+  const anchored = images.filter(im => im.atSeconds != null && Number.isFinite(Number(im.atSeconds)))
+  const dur = parseFloat(duration) || 0
+  if (dur > 0 && anchored.some(im => Number(im.atSeconds) < 0 || Number(im.atSeconds) > dur))
+    out.push('An Add Guide anchor is outside the current duration.')
+  const times = anchored.map(im => Number(im.atSeconds))
+  if (new Set(times).size !== times.length)
+    out.push('Two Add Guide anchors share the same time.')
   return out
 }
 
@@ -266,7 +277,7 @@ function MinimaxRefPanel({
     }))
   }
 
-  const warnings = refWarnings(images)
+  const warnings = refWarnings(images, duration)
 
   return (
     <div
@@ -333,6 +344,20 @@ function MinimaxRefPanel({
                 </div>
               </div>
             )}
+            <div style={{ marginTop: 10 }}>
+              <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>
+                Timeline anchor (Add Guide) <span style={{ color: 'var(--pe-ink-3)' }}>(optional — only used by ✍ Manual mode / ✍ Manual Prompt, ignored by the AI writer)</span>
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="number" min={0} step={0.1} value={im.atSeconds ?? ''} placeholder="not anchored"
+                  title="Add Guide timeline anchor — the second where this image's composition should be reached. Leave blank for a plain reference."
+                  onChange={e => updateImage(im.id, { atSeconds: e.target.value === '' ? null : Number(e.target.value) })}
+                  style={{ ...noteInput, width: 90 }}
+                />
+                {im.atSeconds != null && <span style={{ fontSize: 12, color: 'var(--pe-ink-3)' }}>s into the video</span>}
+              </div>
+            </div>
             <div style={{ marginTop: 10 }}>
               <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>Note <span style={{ color: 'var(--pe-ink-3)' }}>(optional)</span></label>
               <input
