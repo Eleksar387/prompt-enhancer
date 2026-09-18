@@ -19,9 +19,10 @@ import {
   clearHistory as dbClearHistory, generateId, migrateFromLocalStorage, migrateFromIndexedDB,
   setHistoryEntryProject, loadProjects, saveProjects, importEntries,
   getCaption, putCaption, clearCaptions,
+  listLibrary, addLibraryItem, updateLibraryItem, deleteLibraryItem,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
-import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64 } from './utils'
+import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
 import ConfigBar from './components/ConfigBar'
 import ImagePanel from './components/ImagePanel'
@@ -182,6 +183,7 @@ export default function App() {
   const [copied, setCopied]           = useState(null)
   const [savedEditFlash, setSavedEditFlash] = useState(false)
   const [history, setHistory]         = useState([])
+  const [library, setLibrary]         = useState([])   // standalone reusable images — see "Reuse image from history"
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoringId, setRestoringId] = useState(null)   // entry whose inline fetch is in flight
   const [projects, setProjects]       = useState([])
@@ -292,9 +294,11 @@ export default function App() {
       } catch {
         if (alive) setHistoryDown(true)
       }
-      // Best-effort — a failed queue load just leaves the panel empty/stale,
-      // it must not trip the "history server unreachable" banner on its own.
+      // Best-effort — a failed queue/library load just leaves that panel
+      // empty/stale, it must not trip the "history server unreachable"
+      // banner on its own.
       queue.refresh()
+      listLibrary().then(setLibrary).catch(() => {})
     }
     boot()
     const ping = setInterval(() => {
@@ -347,6 +351,27 @@ export default function App() {
 
   // Full re-list. Only for boot, import and clear — see syncHistoryEntry below.
   const refreshHistory = useCallback(() => listHistory().then(h => { setHistory(h); setHistoryDown(false) }).catch(() => setHistoryDown(true)), [])
+
+  // Library items are a handful of fields, written only on an explicit user
+  // drop (rare, human-paced) — unlike history there's no debounced-autosave
+  // hot path to optimize for, so a full re-list after every add/remove (like
+  // queue.refresh()) is simplest and correct.
+  const refreshLibrary = useCallback(() => listLibrary().then(setLibrary).catch(() => {}), [])
+
+  // Turns each dropped image File into bytes (the same shrinkToJpeg pipeline
+  // ImagePanel's own file drop uses) and PUTs it as a new library item.
+  // Bounded concurrency — a multi-file drop shouldn't fire N canvas re-encodes
+  // and N multi-MB PUTs all at once.
+  const addLibraryImages = useCallback((files) => {
+    const imgs = Array.from(files || []).filter(f => f.type?.startsWith('image/'))
+    if (!imgs.length) return Promise.resolve()
+    return mapWithConcurrency(imgs, 3, async (file) => {
+      const { base64, mediaType } = await shrinkToJpeg(file)
+      return addLibraryItem({ id: generateId(), ts: Date.now(), fileName: file.name, mediaType, base64 })
+    }).finally(refreshLibrary)
+  }, [refreshLibrary])
+
+  const removeLibraryImage = useCallback((id) => deleteLibraryItem(id).then(refreshLibrary), [refreshLibrary])
 
   // Apply ONE entry's change locally instead of re-listing everything.
   //
@@ -1487,6 +1512,43 @@ export default function App() {
         { type: 'text', text: `Describe this reference image as instructed. ${role.visionFocus || ''}`.trim() },
       ], role.visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, effectiveVision)
     },
+    // Library-image counterparts of saveRefImageCaption/describeRefImage
+    // above — same role-keyed captions model, but the item's own id stands
+    // in for the entryId+index pair (a library item isn't part of any
+    // entry). Both PATCH the sidecar (server/libraryStore.mjs's patchLibrary
+    // does a plain shallow merge) and then apply the identical merge to
+    // local `library` state — safe since both sides merge the same way, and
+    // it means the info panel reflects the save immediately with no refetch.
+    saveLibraryCaption: (id, text, roleId) => {
+      const item = library.find(x => x.id === id)
+      if (!item) return Promise.reject(new Error('library image not found'))
+      const key = roleId || item.role || ROLE_NONE
+      const captions = { ...(item.captions || {}), [key]: text }
+      return updateLibraryItem(id, { captions }).then(() => {
+        setLibrary(prev => prev.map(x => (x.id === id ? { ...x, captions } : x)))
+      })
+    },
+    // The "role selection" a library image otherwise has no home for — a ref
+    // image gets this from its MinimaxRefPanel card at upload time; a
+    // library image has no such card, so it lives on the info panel instead.
+    setLibraryRole: (id, roleId) => {
+      const role = roleId || null
+      return updateLibraryItem(id, { role }).then(() => {
+        setLibrary(prev => prev.map(x => (x.id === id ? { ...x, role } : x)))
+      })
+    },
+    describeLibraryImage: async (id, roleId) => {
+      const item = library.find(x => x.id === id)
+      if (!item || !item.url) throw new Error('library image not found')
+      if (!effectiveVision) throw new Error('no vision model selected')
+      const base64 = await blobUrlToBase64(item.url)
+      const role = MINIMAX_H3_REF_ROLES.find(r => r.id === (roleId || item.role)) || MINIMAX_H3_REF_ROLES[0]
+      const stats = { fromCache: 0, fresh: 0 }
+      return cachedVision([
+        { type: 'image', source: { type: 'base64', media_type: item.mediaType || 'image/jpeg', data: base64 } },
+        { type: 'text', text: `Describe this reference image as instructed. ${role.visionFocus || ''}`.trim() },
+      ], role.visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, effectiveVision)
+    },
     importFiles: () => importInputRef.current?.click(),
   }
   const historyActions = useMemo(() => ({
@@ -1519,12 +1581,18 @@ export default function App() {
     saveCaption: historyActionsRef.current.saveCaption,
     saveRefImageCaption: historyActionsRef.current.saveRefImageCaption,
     describeRefImage: historyActionsRef.current.describeRefImage,
+    saveLibraryCaption: historyActionsRef.current.saveLibraryCaption,
+    setLibraryRole: historyActionsRef.current.setLibraryRole,
+    describeLibraryImage: historyActionsRef.current.describeLibraryImage,
   }
   const galleryActions = useMemo(() => ({
     pick: (data) => galleryActionsRef.current.pickHistoryImage(data),
     saveCaption: (id, text) => galleryActionsRef.current.saveCaption(id, text),
     saveRefImageCaption: (id, imageIndex, text, roleId) => galleryActionsRef.current.saveRefImageCaption(id, imageIndex, text, roleId),
     describeRefImage: (id, imageIndex, roleId) => galleryActionsRef.current.describeRefImage(id, imageIndex, roleId),
+    saveLibraryCaption: (id, text, roleId) => galleryActionsRef.current.saveLibraryCaption(id, text, roleId),
+    setLibraryRole: (id, roleId) => galleryActionsRef.current.setLibraryRole(id, roleId),
+    describeLibraryImage: (id, roleId) => galleryActionsRef.current.describeLibraryImage(id, roleId),
   }), [])
 
   // …and for the queue. This bundle replaces two hand-assembled copies of the
@@ -1577,7 +1645,10 @@ export default function App() {
     <>
       <HistoryImageGallery history={history} onPick={galleryActions.pick} pickHint={galleryPickHint}
         onSaveCaption={galleryActions.saveCaption} onSaveRefImageCaption={galleryActions.saveRefImageCaption}
-        onDescribeRefImage={galleryActions.describeRefImage} />
+        onDescribeRefImage={galleryActions.describeRefImage}
+        library={library} onAddLibraryImages={addLibraryImages} onRemoveLibraryImage={removeLibraryImage}
+        onSaveLibraryCaption={galleryActions.saveLibraryCaption} onSetLibraryRole={galleryActions.setLibraryRole}
+        onDescribeLibraryImage={galleryActions.describeLibraryImage} />
       {t.type === 'image' || frameMode === 'single' ? (
         <>
           {!imgs.firstImg && ratioPicker}
@@ -1735,6 +1806,9 @@ export default function App() {
           initialState={scriptwriterInitial}
           onSaveHistory={saveScriptHistory}
           history={history}
+          library={library} onAddLibraryImages={addLibraryImages} onRemoveLibraryImage={removeLibraryImage}
+          onSaveLibraryCaption={galleryActions.saveLibraryCaption} onSetLibraryRole={galleryActions.setLibraryRole}
+          onDescribeLibraryImage={galleryActions.describeLibraryImage}
           comfyCfg={comfyCfg}
           setComfyCfg={setComfyCfg}
           loras={loras}

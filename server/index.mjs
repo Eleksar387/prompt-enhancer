@@ -11,6 +11,7 @@ import {
   loadQueueIndex, listQueue, getQueue, putQueue, patchQueue,
   deleteQueue, clearQueue,
 } from './queueStore.mjs'
+import { loadLibraryIndex, listLibrary, putLibrary, patchLibrary, deleteLibrary } from './libraryStore.mjs'
 
 const PORT = Number(process.env.PE_API_PORT || process.env.PORT || 8787)
 const MAX_BODY = 200 * 1024 * 1024 // one entry with a base64 video can be large
@@ -18,6 +19,7 @@ const MAX_BODY = 200 * 1024 * 1024 // one entry with a base64 video can be large
 ensureTree()
 loadIndex()
 loadQueueIndex()
+loadLibraryIndex()
 
 const json = (res, code, obj) => {
   const body = Buffer.from(JSON.stringify(obj), 'utf8')
@@ -127,6 +129,31 @@ const server = createServer(async (req, res) => {
           json(res, 200, { id }); return
         }
         if (method === 'DELETE') { deleteQueue(id); json(res, 200, { ok: true }); return }
+      }
+    }
+
+    // ── library ────────────────────────────────────────────────────────────
+    // Standalone reusable images, not tied to any generation — see
+    // libraryStore.mjs. No /clear route for v1: nothing bulk-clears the
+    // library today. PATCH is for role/captions only (see patchLibrary) —
+    // items are otherwise only ever created whole (a dropped file) or
+    // removed whole.
+    if (seg[0] === 'api' && seg[1] === 'library') {
+      if (!seg[2]) {
+        if (method === 'GET') { json(res, 200, listLibrary()); return }
+      } else {
+        const id = decodeURIComponent(seg[2])
+        if (method === 'PUT') {
+          const item = await readBody(req)
+          if (!item || item.id !== id) { json(res, 400, { error: 'body id must match path' }); return }
+          json(res, 200, { id: putLibrary(item) }); return
+        }
+        if (method === 'PATCH') {
+          const patch = await readBody(req)
+          patchLibrary(id, patch || {}) // no-op if gone — matches history/queue's contract
+          json(res, 200, { id }); return
+        }
+        if (method === 'DELETE') { deleteLibrary(id); json(res, 200, { ok: true }); return }
       }
     }
 

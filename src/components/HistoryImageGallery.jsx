@@ -116,11 +116,47 @@ export function collectImages(history) {
   return { images: [...byKey.values()].sort((a, b) => b.ts - a.ts), stats }
 }
 
+// Maps standalone library items (dropped in via the gallery's own drop zone,
+// not tied to any generation — see App.jsx's addLibraryImages/library state)
+// into the SAME tile shape collectImages() produces, so Tile/ImageInfoPanel
+// need no per-source branching beyond `slot`. `key` is the library store's
+// own id (not a content hash) — onRemoveLibraryImage needs a real id back,
+// and a hash collision with a history-derived tile must never hide this
+// tile's own delete button (see the no-cross-dedup merge below).
+export function libraryTiles(library) {
+  return (library || []).filter(im => im && im.url).map(im => {
+    const captions = im.captions || {}
+    const ownRoleKey = im.role || ROLE_NONE
+    return {
+      key: im.id,
+      url: im.url,
+      mediaType: im.mediaType || 'image/jpeg',
+      fileName: im.fileName || 'image.jpg',
+      hash: im.hash || null,
+      role: im.role || null,
+      note: '',
+      render: null,
+      slot: 'library',
+      // Own-role description, same "which entry is the primary one" rule a
+      // ref image's caption already follows — everything else the image has
+      // been described under still lives in `captions`.
+      caption: captions[ownRoleKey] || '',
+      captions,
+      captionScope: 'library',
+      refImageIndex: null,
+      entryId: null,
+      ts: im.ts || 0,
+      uses: 1,
+    }
+  })
+}
+
 const SCOPE_LABEL = {
   single: 'Vision description of this image',
   multi: 'Vision description (covers all frames of that generation)',
   ref: 'Vision description (covers all reference images of that generation)',
   'ref-item': 'Vision description of this reference image',
+  library: 'Vision description of this library image',
   render: 'Revised prompt (from the image model)',
 }
 
@@ -137,10 +173,23 @@ const FLAT_ROLE = 'flat'
 // under a role it hasn't been described under yet. Every other slot
 // (single/multi frame, render) keeps the original single flat caption —
 // there's no role concept for those.
-function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage, onClose }) {
+export function ImageInfoPanel({
+  img, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage,
+  onSaveLibraryCaption, onSetLibraryRole, onDescribeLibraryImage,
+  onClose,
+}) {
+  // A library image is not tied to any entry (no entryId/refImageIndex), so
+  // it uses its own id (img.key) directly — same role-keyed captions model
+  // as a reference image, different save/describe target.
   const isRefItem = img.captionScope === 'ref-item' && img.refImageIndex != null
-  const canEdit = img.slot !== 'render' && !!img.entryId && (isRefItem ? !!onSaveRefImageCaption : !!onSaveCaption)
-  const canDescribe = isRefItem && !!onDescribeRefImage
+  const isLibraryItem = img.slot === 'library'
+  const supportsRoles = isRefItem || isLibraryItem
+  const canEdit = img.slot !== 'render' && (
+    isRefItem ? (!!img.entryId && !!onSaveRefImageCaption)
+    : isLibraryItem ? !!onSaveLibraryCaption
+    : (!!img.entryId && !!onSaveCaption)
+  )
+  const canDescribe = isRefItem ? !!onDescribeRefImage : isLibraryItem ? !!onDescribeLibraryImage : false
 
   const ownRoleKey = img.role || ROLE_NONE
 
@@ -162,10 +211,10 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
   // brand-new role runs describe() and sets editingRole/draft on success,
   // but without this, that role has no row to render its textarea into —
   // the state changes with no visible effect ("nothing happens").
-  const shownRoles = isRefItem
+  const shownRoles = supportsRoles
     ? [ownRoleKey, ...MINIMAX_H3_REF_ROLES.map(r => r.id).filter(id => id !== ownRoleKey && (img.captions?.[id] || id === editingRole))]
     : []
-  const pickableRoles = isRefItem ? MINIMAX_H3_REF_ROLES.filter(r => !shownRoles.includes(r.id)) : []
+  const pickableRoles = supportsRoles ? MINIMAX_H3_REF_ROLES.filter(r => !shownRoles.includes(r.id)) : []
 
   const startEdit = (roleId) => {
     setDraft(roleId === FLAT_ROLE ? img.caption : (img.captions?.[roleId] || ''))
@@ -180,8 +229,10 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
       // plain array-index + map-key update — App.jsx's saveRefImageCaption)
       // instead of the old whole-block save, so it can never touch or be
       // silently dropped by another reference's line — or another role's
-      // description on this same image — in the same entry.
+      // description on this same image — in the same entry. A library image
+      // has no entry/index at all — its own id (img.key) stands in.
       if (roleId === FLAT_ROLE) await onSaveCaption(img.entryId, draft)
+      else if (isLibraryItem) await onSaveLibraryCaption(img.key, draft, roleId)
       else await onSaveRefImageCaption(img.entryId, img.refImageIndex - 1, draft, roleId)
       setEditingRole(null)
       setFlashRole(roleId)
@@ -199,7 +250,9 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
     setDescribeError(''); setDescribeErrorRole(null)
     setDescribingRole(roleId)
     try {
-      const text = await onDescribeRefImage(img.entryId, img.refImageIndex - 1, roleId)
+      const text = isLibraryItem
+        ? await onDescribeLibraryImage(img.key, roleId)
+        : await onDescribeRefImage(img.entryId, img.refImageIndex - 1, roleId)
       setDraft(text)
       setEditingRole(roleId)
     } catch (e) {
@@ -232,8 +285,23 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
         {new Date(img.ts).toLocaleString()}{img.uses > 1 ? ` · used ${img.uses}× (most recent shown)` : ''}
       </div>
 
-      {isRefItem ? (
+      {supportsRoles ? (
         <>
+          {isLibraryItem && onSetLibraryRole && (
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Role</label>
+              <select
+                value={img.role || ROLE_NONE}
+                onChange={e => onSetLibraryRole(img.key, e.target.value === ROLE_NONE ? null : e.target.value)}
+                style={{ fontSize: 12.5, color: 'var(--pe-ink-2)', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 6px' }}
+              >
+                <option value={ROLE_NONE}>No role assigned</option>
+                {MINIMAX_H3_REF_ROLES.map(r => (
+                  <option key={r.id} value={r.id}>{r.icon} {r.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {shownRoles.map(roleId => {
             const editing = editingRole === roleId
             const text = img.captions?.[roleId] || ''
@@ -326,6 +394,9 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
         <>
           <div style={{ fontSize: 13, color: img.caption ? 'var(--pe-ink-2)' : 'var(--pe-ink-3)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
             {img.caption || (img.slot === 'render'
+              // A library image never reaches this branch — it's always
+              // `supportsRoles` (see above), so it renders through the
+              // role-row branch instead, even with zero captions yet.
               ? 'No revised prompt was stored for this render.'
               : 'No vision description was stored — this image was used in a text-only or pre-vision generation.')}
           </div>
@@ -347,7 +418,7 @@ function ImageInfoPanel({ img, onSaveCaption, onSaveRefImageCaption, onDescribeR
 // only thing that changes per keystroke elsewhere in the app is nothing at all —
 // `img` comes from a memoized collectImages() and every callback is stable, so a
 // tile re-renders only when it is the one whose info panel opened or closed.
-const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart }) {
+const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart, onRemove }) {
   const pick = onPick ? async () => {
     const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     if (!resolved) return
@@ -360,10 +431,10 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
       // THIS image, and the same content-addressed vision cache that
       // populated it means picking the matching role at generation time
       // reuses that exact description instead of a fresh vision call.
-      caption: img.slot === 'ref' ? img.caption : '',
-      role: img.slot === 'ref' ? img.role : null,
-      note: img.slot === 'ref' ? img.note : '',
-      captions: img.slot === 'ref' ? img.captions : {},
+      caption: (img.slot === 'ref' || img.slot === 'library') ? img.caption : '',
+      role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
+      note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
+      captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
     })
   } : undefined
 
@@ -374,7 +445,7 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
   // whatever it was at creation. No question-mark fallback: an image with
   // no description at all simply gets no badge, rather than a permanent
   // "no role" placeholder.
-  const describedRoles = img.slot === 'ref' ? MINIMAX_H3_REF_ROLES.filter(r => img.captions?.[r.id]) : []
+  const describedRoles = (img.slot === 'ref' || img.slot === 'library') ? MINIMAX_H3_REF_ROLES.filter(r => img.captions?.[r.id]) : []
 
   return (
     <div
@@ -408,6 +479,17 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
           padding: 0, textAlign: 'center', background: selected ? 'var(--pe-accent-ink)' : 'rgba(8,8,16,0.72)', color: '#fff',
         }}
       >i</button>
+      {img.slot === 'library' && onRemove && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(img.key) }}
+          title="Remove this image from the library"
+          style={{
+            position: 'absolute', top: 3, left: 3, width: 18, height: 18, borderRadius: '50%',
+            border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700, lineHeight: '18px',
+            padding: 0, textAlign: 'center', background: 'rgba(8,8,16,0.72)', color: '#fff',
+          }}
+        >✕</button>
+      )}
       {(describedRoles.length > 0 || img.render) && (
         <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 11, lineHeight: '16px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {img.render || describedRoles.map(r => r.icon).join(' ')}
@@ -417,17 +499,32 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
   )
 })
 
-function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage }) {
+function HistoryImageGallery({
+  history, onPick, pickHint, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage,
+  library = [], onAddLibraryImages = null, onRemoveLibraryImage = null,
+  onSaveLibraryCaption = null, onSetLibraryRole = null, onDescribeLibraryImage = null,
+}) {
   const [open, setOpen] = useState(false)
   const [infoFor, setInfoFor] = useState(null)  // img.key of the open info panel
+  const [dragOver, setDragOver] = useState(false)
   const touchedRef = useRef(false)
   const { images, stats } = useMemo(() => collectImages(history), [history])
+
+  // Library items merged in alongside the history-derived ones — no
+  // cross-source dedup by hash: if a collision let a history-sourced tile
+  // win, the surviving tile would have no library id and the ✕ button would
+  // never render, silently orphaning the library row with no way to delete
+  // it from the UI.
+  const merged = useMemo(
+    () => [...libraryTiles(library), ...images].sort((a, b) => b.ts - a.ts),
+    [library, images],
+  )
 
   // Open it the first time images are available so it's actually discoverable;
   // once the user toggles it themselves, respect that for the rest of the session.
   useEffect(() => {
-    if (!touchedRef.current && images.length > 0) setOpen(true)
-  }, [images.length])
+    if (!touchedRef.current && merged.length > 0) setOpen(true)
+  }, [merged.length])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -446,10 +543,10 @@ function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption, onSaveR
     // straight onto MinimaxRefPanel preserves them just like clicking does.
     setDragImage({
       url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash,
-      caption: img.slot === 'ref' ? img.caption : '',
-      role: img.slot === 'ref' ? img.role : null,
-      note: img.slot === 'ref' ? img.note : '',
-      captions: img.slot === 'ref' ? img.captions : {},
+      caption: (img.slot === 'ref' || img.slot === 'library') ? img.caption : '',
+      role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
+      note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
+      captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
     })
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')
@@ -459,49 +556,69 @@ function HistoryImageGallery({ history, onPick, pickHint, onSaveCaption, onSaveR
   }, [])
   const toggleInfo = useCallback((key) => setInfoFor(k => (k === key ? null : key)), [])
 
-  // No history at all — stay out of the way entirely.
-  if (images.length === 0 && stats.entries === 0) return null
+  // A real OS file drag, never the gallery's own in-app hasDragImage drag
+  // (dropping a tile dragged out of this same gallery back onto it must stay
+  // a no-op — it's a source, not something you re-add to itself).
+  const isFileDrag = (dt) => { try { return Array.from(dt?.types || []).includes('Files') } catch { return false } }
+  const onDragOver = (e) => { if (onAddLibraryImages && isFileDrag(e.dataTransfer)) { e.preventDefault(); setDragOver(true) } }
+  const onDragLeave = (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }
+  const onDrop = (e) => {
+    if (!onAddLibraryImages || !isFileDrag(e.dataTransfer)) return
+    e.preventDefault(); e.stopPropagation()
+    setDragOver(false)
+    onAddLibraryImages(e.dataTransfer.files)
+  }
+
+  // Nothing to show AND no way to add anything — stay out of the way entirely.
+  if (merged.length === 0 && stats.entries === 0 && !onAddLibraryImages) return null
 
   const toggle = () => { touchedRef.current = true; setOpen(v => !v) }
 
-  const shown = images.slice(0, CAP)
+  const shown = merged.slice(0, CAP)
   const infoImg = infoFor ? shown.find(i => i.key === infoFor) : null
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div
+      style={{ marginBottom: 16, borderRadius: 10, outline: dragOver ? '2px dashed var(--pe-accent-line)' : 'none', outlineOffset: 2 }}
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+    >
       <button
         onClick={toggle}
         style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--pe-ink-3)', fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.5px' }}
       >
         <span style={{ display: 'inline-block', transition: 'transform 0.2s', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
-        ♻ Reuse image from history ({images.length})
+        ♻ Reuse image ({merged.length})
       </button>
 
       {open && (
         <div style={{ marginTop: 10, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
-          {images.length === 0 ? (
+          {merged.length === 0 ? (
             <p style={{ fontSize: 13, color: stats.objWithBase64 > 0 ? 'var(--pe-warn)' : 'var(--pe-ink-3)', margin: 0, lineHeight: 1.6 }}>
               {stats.objWithBase64 > 0
                 ? `Found ${stats.objWithBase64} stored image${stats.objWithBase64 > 1 ? 's' : ''} but none could be read — this looks like a bug.`
+                : onAddLibraryImages
+                ? "No reusable images yet — run a generation with an image loaded, or drag image files in here, and they'll show up."
                 : "No reusable images yet — run a generation with an image loaded and it'll show up here."}
             </p>
           ) : (<>
           <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
-            Every image used in a past generation. Drag one onto an image slot below{onPick ? ', or click it' : ''}
+            Images used in past generations{onAddLibraryImages ? ', plus any you drag in here directly' : ''}. Drag one onto an image slot below{onPick ? ', or click it' : ''}
             {pickHint ? ` — ${pickHint}` : ''}. Click the <strong>i</strong> badge to read or edit an image's vision description.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
             {shown.map((img) => (
               <Tile key={img.key} img={img} selected={infoFor === img.key}
-                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} />
+                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} onRemove={onRemoveLibraryImage} />
             ))}
           </div>
           {infoImg && (
-            <ImageInfoPanel img={infoImg} onSaveCaption={onSaveCaption} onSaveRefImageCaption={onSaveRefImageCaption} onDescribeRefImage={onDescribeRefImage} onClose={() => setInfoFor(null)} />
+            <ImageInfoPanel img={infoImg} onSaveCaption={onSaveCaption} onSaveRefImageCaption={onSaveRefImageCaption} onDescribeRefImage={onDescribeRefImage}
+              onSaveLibraryCaption={onSaveLibraryCaption} onSetLibraryRole={onSetLibraryRole} onDescribeLibraryImage={onDescribeLibraryImage}
+              onClose={() => setInfoFor(null)} />
           )}
-          {images.length > CAP && (
+          {merged.length > CAP && (
             <p style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', margin: '8px 0 0' }}>
-              Showing {CAP} of {images.length} — older ones are still restorable from History.
+              Showing {CAP} of {merged.length} — older ones are still restorable from History.
             </p>
           )}
           </>)}

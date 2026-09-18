@@ -540,6 +540,8 @@ const STEPS = ['Script', "Director's Cut", 'Video Prompts']
 export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
   history = [],
+  library = [], onAddLibraryImages = null, onRemoveLibraryImage = null,
+  onSaveLibraryCaption = null, onSetLibraryRole = null, onDescribeLibraryImage = null,
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
   // The LoRA library is owned by App.jsx (shared with the standalone workspace
   // and persisted there); this panel only reads it and edits it through the
@@ -2880,6 +2882,9 @@ export default function ScriptwriterPanel({
           history={history}
           onPick={addRefFromHistory}
           pickHint="adds it as a reference image (link it to a character, wardrobe, location, style or prop below)"
+          library={library} onAddLibraryImages={onAddLibraryImages} onRemoveLibraryImage={onRemoveLibraryImage}
+          onSaveLibraryCaption={onSaveLibraryCaption} onSetLibraryRole={onSetLibraryRole}
+          onDescribeLibraryImage={onDescribeLibraryImage}
         />
       )}
 

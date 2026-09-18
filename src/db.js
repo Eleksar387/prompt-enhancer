@@ -110,6 +110,30 @@ export function clearQueue() {
   return apiFetch('/queue/clear', { method: 'POST' })
 }
 
+// ── library ────────────────────────────────────────────────────────────────
+// Standalone reusable images (dropped onto the "Reuse image from history"
+// gallery, not tied to any generation), persisted server-side so they survive
+// a reload. Metadata-only list (no bytes), same contract as history/queue.
+export function listLibrary() {
+  return apiFetch('/library')
+}
+
+export function addLibraryItem(item) {
+  return apiFetch(`/library/${encodeURIComponent(item.id)}`, {
+    method: 'PUT', body: JSON.stringify(item),
+  })
+}
+
+export function updateLibraryItem(id, patch) {
+  return apiFetch(`/library/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  })
+}
+
+export function deleteLibraryItem(id) {
+  return apiFetch(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 // ── projects (was localStorage — now async) ────────────────────────────────
 export async function loadProjects() {
   try { return await apiFetch('/projects') } catch { return [] }

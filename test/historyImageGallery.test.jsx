@@ -16,7 +16,8 @@
 // block (or OLD flat structural `caption` field) is already corrupted/legacy.
 
 import { describe, it, expect } from 'vitest'
-import { collectImages } from '../src/components/HistoryImageGallery.jsx'
+import { renderToStaticMarkup } from 'react-dom/server'
+import HistoryImageGallery, { collectImages, libraryTiles, ImageInfoPanel } from '../src/components/HistoryImageGallery.jsx'
 import { ROLE_NONE } from '../src/constants.js'
 
 const REF_CAPTION_BLOCK = [
@@ -250,5 +251,106 @@ describe('HistoryImageGallery — role-specific descriptions (multiple per image
     expect(imgXAfter.caption).toBe('')   // own role (ROLE_NONE) still empty
     expect(imgXAfter.captions[ROLE_NONE]).toBeUndefined()
     expect(imgXAfter.captions.product_object).toBe('A weathered leather armchair.')
+  })
+})
+
+// Standalone reusable images dropped directly onto the gallery (not tied to
+// any generation — see App.jsx's addLibraryImages/library state and the new
+// GET/PUT/DELETE /api/library sidecar routes). libraryTiles() maps them into
+// the same tile shape collectImages() produces so Tile/ImageInfoPanel need no
+// per-source branching beyond `slot`.
+describe('HistoryImageGallery — library items (dropped in directly, not from history)', () => {
+  it('maps a library item into the standard tile shape, tagged for no edit/describe UI', () => {
+    const [tile] = libraryTiles([
+      { id: 'lib1', ts: 2000, url: '/api/blob/x', mediaType: 'image/png', fileName: 'x.png', hash: 'hash-x' },
+    ])
+    expect(tile.key).toBe('lib1')       // the library store's own id, not a content hash
+    expect(tile.slot).toBe('library')
+    expect(tile.entryId).toBeNull()     // ImageInfoPanel's canEdit/canDescribe gate off this
+    expect(tile.url).toBe('/api/blob/x')
+    expect(tile.ts).toBe(2000)
+  })
+
+  it('skips a library item with no resolved blob url', () => {
+    expect(libraryTiles([{ id: 'lib1', ts: 1 }, null])).toEqual([])
+  })
+
+  it('merges library tiles alongside history-derived ones, newest first, with no cross-source dedup', () => {
+    const h = entry(REF_CAPTION_BLOCK)   // has hash-a/b/c, ts 1000
+    const lib = [{ id: 'lib1', ts: 5000, url: '/api/blob/lib', mediaType: 'image/jpeg', fileName: 'l.jpg' }]
+    const { images } = collectImages([h])
+    const merged = [...libraryTiles(lib), ...images].sort((a, b) => b.ts - a.ts)
+    expect(merged[0].key).toBe('lib1')          // newest (ts 5000) sorts first
+    expect(merged).toHaveLength(4)              // 1 library + 3 history refs — no dedup collapses them
+  })
+
+  it('renders (does not early-return null) with empty history when a library-capable caller is wired, even with zero library items yet', () => {
+    const html = renderToStaticMarkup(
+      <HistoryImageGallery history={[]} library={[]} onAddLibraryImages={() => {}} />,
+    )
+    expect(html).not.toBe('')
+    expect(html).toContain('Reuse image')
+  })
+
+  it('renders a library item even with empty history', () => {
+    const html = renderToStaticMarkup(
+      <HistoryImageGallery
+        history={[]}
+        library={[{ id: 'lib1', ts: 1, url: '/api/blob/lib', mediaType: 'image/jpeg', fileName: 'l.jpg' }]}
+        onAddLibraryImages={() => {}}
+        onRemoveLibraryImage={() => {}}
+      />,
+    )
+    expect(html).toContain('Reuse image (1)')
+  })
+
+  it('still returns null with no history and no library when the caller does not support adding library images', () => {
+    const html = renderToStaticMarkup(<HistoryImageGallery history={[]} library={[]} />)
+    expect(html).toBe('')
+  })
+
+  it('surfaces a real role/caption/captions from the source item instead of the old hardcoded empty values', () => {
+    const [tile] = libraryTiles([{
+      id: 'lib1', ts: 1, url: '/api/blob/x', fileName: 'x.jpg', mediaType: 'image/jpeg',
+      role: 'wardrobe', captions: { wardrobe: 'A red wool coat.', style: 'Muted autumn palette.' },
+    }])
+    expect(tile.role).toBe('wardrobe')
+    expect(tile.caption).toBe('A red wool coat.')   // own-role entry, same rule as a ref image
+    expect(tile.captions).toEqual({ wardrobe: 'A red wool coat.', style: 'Muted autumn palette.' })
+  })
+
+  it('defaults caption to empty for a library item with no captions yet', () => {
+    const [tile] = libraryTiles([{ id: 'lib1', ts: 1, url: '/api/blob/x', fileName: 'x.jpg' }])
+    expect(tile.role).toBeNull()
+    expect(tile.caption).toBe('')
+    expect(tile.captions).toEqual({})
+  })
+
+  it('ImageInfoPanel shows a role select and working edit/describe controls for a library image (they showed nothing before this feature)', () => {
+    const html = renderToStaticMarkup(
+      <ImageInfoPanel
+        img={libraryTiles([{ id: 'lib1', ts: 1, url: '/api/blob/x', fileName: 'x.jpg', mediaType: 'image/jpeg', role: 'wardrobe', captions: { wardrobe: 'A red coat.' } }])[0]}
+        onSaveLibraryCaption={() => {}}
+        onSetLibraryRole={() => {}}
+        onDescribeLibraryImage={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toContain('<select')                 // the new Role selector
+    expect(html).toContain('Wardrobe')                 // its own role, pre-selected
+    expect(html).toContain('A red coat.')               // the own-role caption text
+    expect(html).toContain('✎ Edit')                    // canEdit — gated on onSaveLibraryCaption
+    expect(html).toContain('Re-describe with AI')        // canDescribe — gated on onDescribeLibraryImage
+  })
+
+  it('ImageInfoPanel shows NO edit/describe controls for a library image when the callbacks are absent', () => {
+    const html = renderToStaticMarkup(
+      <ImageInfoPanel
+        img={libraryTiles([{ id: 'lib1', ts: 1, url: '/api/blob/x', fileName: 'x.jpg', mediaType: 'image/jpeg' }])[0]}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).not.toContain('✎ Edit')
+    expect(html).not.toContain('Describe with AI')
   })
 })

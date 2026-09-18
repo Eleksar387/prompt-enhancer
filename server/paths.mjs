@@ -13,6 +13,7 @@ export const DIRS = {
   blobs: join(DATA_DIR, 'blobs'),
   captions: join(DATA_DIR, 'captions'),
   queue: join(DATA_DIR, 'queue'),
+  library: join(DATA_DIR, 'library'),
   trash: join(DATA_DIR, 'trash'),
   tmp: join(DATA_DIR, 'tmp'),
 }
