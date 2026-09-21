@@ -17,8 +17,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import HistoryImageGallery, { collectImages, libraryTiles, ImageInfoPanel, reusableDescription } from '../src/components/HistoryImageGallery.jsx'
-import { ROLE_NONE } from '../src/constants.js'
+import HistoryImageGallery, { collectImages, libraryTiles, ImageInfoPanel, pickPayload } from '../src/components/HistoryImageGallery.jsx'
+import { ROLE_NONE, ROLE_GENERAL } from '../src/constants.js'
 
 const REF_CAPTION_BLOCK = [
   'Image 1 — role: Subject / Identity, preservation: Exact (fully_preserved): A woman in her thirties, dark hair.',
@@ -235,22 +235,30 @@ describe('HistoryImageGallery — role-specific descriptions (multiple per image
     })
   })
 
-  it('an image with no assigned role resolves under ROLE_NONE and is unaffected by describing it under a real role', () => {
+  it('an image with no assigned role is General, and describing it under a real role leaves General untouched', () => {
     let h = entry('', [
       { url: '/api/blob/x', fileName: 'x.jpg', hash: 'hash-x', role: null },
     ])
     const { images: before } = collectImages([h])
     const imgX = before[0]
-    expect(imgX.role).toBeNull()
+    expect(imgX.role).toBe('general')   // every image always has a role
     expect(imgX.caption).toBe('')
 
     h = saveRefImageCaption(h, 0, 'A weathered leather armchair.', 'product_object')
 
     const { images: after } = collectImages([h])
     const imgXAfter = after[0]
-    expect(imgXAfter.caption).toBe('')   // own role (ROLE_NONE) still empty
-    expect(imgXAfter.captions[ROLE_NONE]).toBeUndefined()
+    expect(imgXAfter.role).toBe('general')
+    expect(imgXAfter.caption).toBe('')   // its own role (General) still empty
+    expect(imgXAfter.captions[ROLE_GENERAL]).toBeUndefined()
     expect(imgXAfter.captions.product_object).toBe('A weathered leather armchair.')
+  })
+
+  it('a legacy "_unassigned" caption reads as the General description', () => {
+    const h = entry('', [{ url: '/api/blob/x', fileName: 'x.jpg', hash: 'hash-x', captions: { [ROLE_NONE]: 'An old caption.' } }])
+    const [img] = collectImages([h]).images
+    expect(img.role).toBe('general')
+    expect(img.caption).toBe('An old caption.')
   })
 })
 
@@ -321,7 +329,7 @@ describe('HistoryImageGallery — library items (dropped in directly, not from h
 
   it('defaults caption to empty for a library item with no captions yet', () => {
     const [tile] = libraryTiles([{ id: 'lib1', ts: 1, url: '/api/blob/x', fileName: 'x.jpg' }])
-    expect(tile.role).toBeNull()
+    expect(tile.role).toBe('general')
     expect(tile.caption).toBe('')
     expect(tile.captions).toEqual({})
   })
@@ -355,34 +363,91 @@ describe('HistoryImageGallery — library items (dropped in directly, not from h
   })
 })
 
-describe('HistoryImageGallery — reusable description for single-image targets', () => {
-  const single = (caption, frameMode = 'single') => ({
-    id: 's1', ts: 2000, frameMode, caption,
-    firstImg: { url: '/api/blob/s', fileName: 's.jpg', hash: 'hash-s' },
-    ...(frameMode === 'firstlast' ? { lastImg: { url: '/api/blob/t', fileName: 't.jpg', hash: 'hash-t' } } : {}),
+describe('HistoryImageGallery — one role + per-role descriptions per image, across every use', () => {
+  const frameEntry = (id, ts, caption, role, frameMode = 'single') => ({
+    id, ts, frameMode, caption,
+    firstImg: { url: '/api/blob/s', fileName: 's.jpg', hash: 'hash-s', ...(role ? { role } : {}) },
+  })
+  const refEntry = (ts) => ({
+    id: 'r1', ts, frameMode: 'ref', caption: '',
+    refImages: [{ url: '/api/blob/s', fileName: 's.jpg', hash: 'hash-s', role: 'pose_composition', captions: { pose_composition: 'Stands, weight on the left leg, arms crossed.' } }],
   })
 
-  it('a single-frame image hands its stored (possibly hand-edited) description to the pick payload', () => {
-    const [img] = collectImages([single('  A red fox in snow.  ')]).images
-    expect(reusableDescription(img)).toBe('A red fox in snow.')
+  it('a NEWER frame-slot (Klein) run does not hide an older reference entry\'s role captions', () => {
+    // This is the reported bug: the newest use of an image decided the whole tile.
+    const { images } = collectImages([refEntry(1000), frameEntry('k1', 2000, 'A woman in a red coat at a window.')])
+    expect(images.length).toBe(1)
+    const [img] = images
+    expect(img.captions.pose_composition).toBe('Stands, weight on the left leg, arms crossed.')
+    expect(img.captions.general).toBe('A woman in a red coat at a window.')   // the Klein caption, filed under General
+    expect(img.role).toBe('pose_composition')   // the newest EXPLICIT role — a role-less Klein use does not erase it
   })
 
-  it('an image with no stored description reuses nothing (so vision still runs)', () => {
-    const [img] = collectImages([single('')]).images
-    expect(reusableDescription(img)).toBe('')
+  it('files a frame entry\'s caption under the role that entry ran the image with', () => {
+    const [img] = collectImages([frameEntry('k1', 2000, 'Stands, arms crossed.', 'pose_composition')]).images
+    expect(img.role).toBe('pose_composition')
+    expect(img.captions).toEqual({ pose_composition: 'Stands, arms crossed.' })
+    expect(img.caption).toBe('Stands, arms crossed.')
   })
 
-  it('a multi-frame caption covers several images and is never reusable for one', () => {
-    const { images } = collectImages([single('FIRST FRAME: a fox. LAST FRAME: a den.', 'firstlast')])
-    expect(images.length).toBe(2)
-    for (const img of images) expect(reusableDescription(img)).toBe('')
+  it('newest use wins per role, not per image', () => {
+    const { images } = collectImages([frameEntry('a', 1000, 'old general text'), frameEntry('b', 3000, 'new general text'), refEntry(2000)])
+    expect(images[0].captions.general).toBe('new general text')
+    expect(images[0].captions.pose_composition).toContain('arms crossed')
   })
 
-  it('a reference image reuses its own-role caption', () => {
-    const h = entry(REF_CAPTION_BLOCK, [
-      { url: '/api/blob/a', fileName: 'a.jpg', hash: 'hash-a', role: 'subject_identity', captions: { subject_identity: 'A woman, dark hair.' } },
-    ])
-    const [img] = collectImages([h]).images
-    expect(reusableDescription(img)).toBe('A woman, dark hair.')
+  it('the per-image record wins over what uses recorded, for both role and text', () => {
+    const meta = { 'hash-s': { role: 'general', captions: { general: 'Edited in the gallery.', wardrobe: 'A red wool coat.' } } }
+    const [img] = collectImages([refEntry(1000), frameEntry('k1', 2000, 'Klein text')], meta).images
+    expect(img.role).toBe('general')
+    expect(img.caption).toBe('Edited in the gallery.')
+    expect(img.captions.wardrobe).toBe('A red wool coat.')
+    expect(img.captions.pose_composition).toContain('arms crossed')   // untouched roles survive
+  })
+
+  it('a multi-frame caption covers several images and is filed under none of them', () => {
+    const h = { ...frameEntry('m', 2000, 'FIRST FRAME: a fox. LAST FRAME: a den.', null, 'firstlast'), lastImg: { url: '/api/blob/t', fileName: 't.jpg', hash: 'hash-t' } }
+    for (const img of collectImages([h]).images) expect(img.captions).toEqual({})
+  })
+
+  it('a library tile also takes the per-image record over its own fields', () => {
+    const lib = [{ id: 'l1', ts: 1, url: '/api/blob/x', hash: 'hash-x', role: 'wardrobe', captions: { wardrobe: 'old' } }]
+    const [tile] = libraryTiles(lib, { 'hash-x': { role: 'style', captions: { wardrobe: 'new' } } })
+    expect(tile.role).toBe('style')
+    expect(tile.captions.wardrobe).toBe('new')
+  })
+})
+
+describe('HistoryImageGallery — pick / drag payload', () => {
+  const tile = (over) => ({ slot: 'first', role: 'general', caption: '', note: '', captions: {}, ...over })
+  it('always carries the real image role and the role → text map', () => {
+    const p = pickPayload(tile({ role: 'pose_composition', captions: { pose_composition: 'Stands.' } }), { url: 'u' })
+    expect(p.imageRole).toBe('pose_composition')
+    expect(p.captions).toEqual({ pose_composition: 'Stands.' })
+  })
+  it('never hands General (or an unknown id) to an H3 reference slot as its role', () => {
+    expect(pickPayload(tile({ slot: 'ref', role: 'general' }), {}).role).toBeNull()
+    expect(pickPayload(tile({ slot: 'library', role: 'style' }), {}).role).toBe('style')
+  })
+  it('keeps caption/note ref-slot-only', () => {
+    const p = pickPayload(tile({ slot: 'first', caption: 'frame text', note: 'n' }), {})
+    expect(p.caption).toBe('')
+    expect(p.note).toBe('')
+  })
+})
+
+describe('ImageInfoPanel — every image has a role', () => {
+  const frame = { key: 'k', url: '/api/blob/s', fileName: 's.jpg', hash: 'hash-s', slot: 'first', captionScope: 'single', role: 'general', caption: '', captions: {}, ts: 1, uses: 1, entryId: 'e1' }
+  it('shows a role select and edit/describe controls on a plain frame image', () => {
+    const html = renderToStaticMarkup(<ImageInfoPanel img={frame} onSaveImageCaption={() => {}} onSetImageRole={() => {}} onDescribeImage={() => {}} onClose={() => {}} />)
+    expect(html).toContain('Role')
+    expect(html).toContain('Pose / Composition')
+    expect(html).toContain('General (whole image)')
+    expect(html).toContain('Describe with AI')
+  })
+  it('a hash-less tile (old render) keeps the flat read-only revised prompt', () => {
+    const html = renderToStaticMarkup(<ImageInfoPanel img={{ ...frame, hash: null, slot: 'render', caption: 'a revised prompt' }} onClose={() => {}} />)
+    expect(html).toContain('a revised prompt')
+    expect(html).not.toContain('Pose / Composition')
   })
 })

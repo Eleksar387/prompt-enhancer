@@ -9,6 +9,7 @@ import {
   deleteHistory, clearHistory, historyCount,
   saveProjects, loadProjects, putCaption, getCaption,
 } from './store.mjs'
+import { loadImageMeta, listImageMeta, patchImageMeta } from './imageMetaStore.mjs'
 
 if (!process.env.PE_DATA_DIR || !DATA_DIR.includes('smoke')) {
   console.error('refusing to run: point PE_DATA_DIR at a scratch path containing "smoke"')
@@ -20,6 +21,20 @@ ensureTree(); loadIndex()
 // projects
 saveProjects(['Alpha', 'Beta', '', '  '])
 assert.deepEqual(loadProjects(), ['Alpha', 'Beta'])
+
+// image meta — per-role merge, unknown hash created, role replace/clear
+loadImageMeta()
+patchImageMeta('h1', { role: 'pose_composition', captions: { pose_composition: 'stands, arms crossed' } })
+patchImageMeta('h1', { captions: { general: 'a woman in a red coat' } })
+assert.equal(listImageMeta().h1.role, 'pose_composition')
+assert.deepEqual(listImageMeta().h1.captions, { pose_composition: 'stands, arms crossed', general: 'a woman in a red coat' })
+patchImageMeta('h1', { captions: { pose_composition: 'sits, hands folded' } })
+assert.equal(listImageMeta().h1.captions.general, 'a woman in a red coat')
+assert.equal(listImageMeta().h1.captions.pose_composition, 'sits, hands folded')
+patchImageMeta('h1', { role: null })
+assert.equal(listImageMeta().h1.role, null)
+loadImageMeta()
+assert.equal(listImageMeta().h1.captions.general, 'a woman in a red coat') // survived a reload
 
 // captions — one file per key
 putCaption('v2|model|s:abc|i:xyz', 'a described frame')

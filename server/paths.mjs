@@ -20,6 +20,7 @@ export const DIRS = {
 }
 
 export const PROJECTS_FILE = join(DATA_DIR, 'projects.json')
+export const IMAGE_META_FILE = join(DATA_DIR, 'image-meta.json')
 
 // Create the tree on boot; wipe leftover tmp scratch from a previous crash.
 export function ensureTree() {

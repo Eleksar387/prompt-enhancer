@@ -419,21 +419,22 @@ describe('snapshotToWorkspace — reusing the saved description for a single ima
 
   it('attaches the snapshot caption to the loaded image (trimmed)', () => {
     const back = snapshotToWorkspace(snapOf({ frameMode: 'single', caption: '  A red fox in snow.  ' }), { newId })
-    expect(back.firstImg.caption).toBe('A red fox in snow.')
+    expect(back.firstImg.captions).toEqual({ general: 'A red fox in snow.' })
   })
 
   it('attaches nothing when there is no caption, or no image to attach it to', () => {
-    expect(snapshotToWorkspace(snapOf({ frameMode: 'single', caption: null }), { newId }).firstImg.caption).toBeUndefined()
+    expect(snapshotToWorkspace(snapOf({ frameMode: 'single', caption: null }), { newId }).firstImg.captions).toBeUndefined()
     expect(snapshotToWorkspace({ frameMode: 'single', caption: 'A fox.' }, { newId }).firstImg).toBeNull()
   })
 
   it('never attaches a multi-frame or reference-mode caption to one image', () => {
     for (const frameMode of ['firstlast', 'firstmidlast', 'ref']) {
-      expect(snapshotToWorkspace(snapOf({ frameMode, caption: 'FIRST FRAME: … LAST FRAME: …' }), { newId }).firstImg.caption).toBeUndefined()
+      expect(snapshotToWorkspace(snapOf({ frameMode, caption: 'FIRST FRAME: … LAST FRAME: …' }), { newId }).firstImg.captions).toBeUndefined()
     }
   })
 
   it('is read from the snapshot each time — imgToSnap never persists it onto the image record', () => {
+    expect(imgToSnap({ ...img(), caption: 'A fox.', captions: { general: 'A fox.' } })).not.toHaveProperty('captions')
     expect(imgToSnap({ ...img(), caption: 'A fox.' })).not.toHaveProperty('caption')
   })
 })
@@ -449,7 +450,23 @@ describe('description reuse covers every still-image target', () => {
       expect(hasRequiredImages(w)).toBe(true)
       const snap = { ...buildSnapshot(w, meta), caption: 'A knight in dented plate armor, sword raised.' }
       const back = snapshotToWorkspace(snap, { newId })
-      expect(back.firstImg.caption).toBe('A knight in dented plate armor, sword raised.')
+      expect(back.firstImg.captions.general).toBe('A knight in dented plate armor, sword raised.')
     })
   }
+})
+
+describe('image role in snapshots', () => {
+  it('imgToSnap / imgFromSnap keep the role, and omit it when there is none', () => {
+    expect(imgFromSnap(imgToSnap({ ...img(), role: 'pose_composition' })).role).toBe('pose_composition')
+    expect(imgToSnap(img())).not.toHaveProperty('role')
+    expect(imgFromSnap(imgToSnap(img()))).not.toHaveProperty('role')
+  })
+
+  it('restore files the entry caption under the role the entry ran the image with', () => {
+    const w = { ...fluxWorkspace(), firstImg: { ...img('in.jpg'), role: 'pose_composition' } }
+    const snap = { ...buildSnapshot(w, meta), caption: 'Stands, arms crossed.' }
+    const back = snapshotToWorkspace(snap, { newId })
+    expect(back.firstImg.role).toBe('pose_composition')
+    expect(back.firstImg.captions).toEqual({ pose_composition: 'Stands, arms crossed.' })
+  })
 })

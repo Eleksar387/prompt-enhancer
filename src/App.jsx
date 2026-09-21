@@ -8,11 +8,11 @@ import {
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
   DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
-  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE,
+  MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE, ROLE_GENERAL, normalizeRole, imageRoleDef,
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isOpenRouter, isCloud } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
   listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
@@ -20,6 +20,7 @@ import {
   setHistoryEntryProject, loadProjects, saveProjects, importEntries,
   getCaption, putCaption, clearCaptions,
   listLibrary, addLibraryItem, updateLibraryItem, deleteLibraryItem,
+  listImageMeta, patchImageMetaRecord,
   listVoiceLibrary, addVoiceLibraryItem, updateVoiceLibraryItem, deleteVoiceLibraryItem,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
@@ -185,6 +186,7 @@ export default function App() {
   const [copied, setCopied]           = useState(null)
   const [savedEditFlash, setSavedEditFlash] = useState(false)
   const [history, setHistory]         = useState([])
+  const [imageMeta, setImageMeta]     = useState({})   // per-image role + per-role descriptions, by content hash — see server/imageMetaStore.mjs
   const [library, setLibrary]         = useState([])   // standalone reusable images — see "Reuse image from history"
   const [voiceLibrary, setVoiceLibrary] = useState([])  // standalone reusable voice samples — see "Reuse voice"
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -302,6 +304,7 @@ export default function App() {
       // banner on its own.
       queue.refresh()
       listLibrary().then(setLibrary).catch(() => {})
+      listImageMeta().then(m => setImageMeta(m && typeof m === 'object' ? m : {})).catch(() => {})
       listVoiceLibrary().then(setVoiceLibrary).catch(() => {})
     }
     boot()
@@ -331,17 +334,43 @@ export default function App() {
   const histFilters = useHistoryFilters(history)
   const visibleHistory = histFilters.visible
 
+  // The writer/vision model the user last chose, kept per provider in cfg.models
+  // ({ anthropic: { writer, vision }, … }) so switching backends brings back that
+  // backend's own pick instead of the auto-picker's. Only explicit choices are
+  // stored — an auto-pick isn't, so a better default can still replace it later.
+  const rememberModel = (kind, id) => {
+    const slot = providerOf(cfg.base)
+    setCfg(c => ({ ...c, models: { ...c.models, [slot]: { ...c.models?.[slot], [kind]: id } } }))
+  }
+  const pickedProviderRef = useRef(null)  // which provider the current selection was made under
+
   const reloadModels = async () => {
     setModelStatus({ loading: true, ok: false, error: '' })
+    const slot = providerOf(cfg.base)
+    const saved = cfg.models?.[slot] || {}
+    const switched = pickedProviderRef.current !== slot
+    // Same provider (key change, manual refresh): keep the live selection, e.g. one a
+    // history restore set. New provider: the live selection belongs to the old one.
+    const choose = (prev, savedId, pick, ids) =>
+      (!switched && prev && ids.includes(prev)) ? prev
+        : (savedId && ids.includes(savedId)) ? savedId
+        : (prev && ids.includes(prev)) ? prev
+        : pick(ids)
     try {
       const ids = await fetchModels(cfg)
       setModels(ids)
       setModelStatus({ loading: false, ok: true, error: '' })
-      setWriterModel(prev => (prev && ids.includes(prev)) ? prev : pickWriter(ids))
-      setVisionModel(prev => (prev && ids.includes(prev)) ? prev : pickVision(ids))
+      setWriterModel(prev => choose(prev, saved.writer, pickWriter, ids))
+      setVisionModel(prev => choose(prev, saved.vision, pickVision, ids))
+      pickedProviderRef.current = slot
     } catch (e) {
       setModels([])
       setModelStatus({ loading: false, ok: false, error: e.message })
+      if (switched) {
+        if (saved.writer) setWriterManual(saved.writer)
+        if (saved.vision) setVisionManual(saved.vision)
+        pickedProviderRef.current = slot
+      }
     }
   }
   useEffect(() => { reloadModels() }, [cfg.base, cfg.apiKey]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -361,6 +390,23 @@ export default function App() {
   // hot path to optimize for, so a full re-list after every add/remove (like
   // queue.refresh()) is simplest and correct.
   const refreshLibrary = useCallback(() => listLibrary().then(setLibrary).catch(() => {}), [])
+
+  // One role + per-role descriptions record per image, keyed by content hash.
+  // Merged into local state at once (the gallery and the Reference Image panel
+  // read it) and PATCHed to the sidecar, which merges `captions` per role key.
+  // The returned promise rejects on a failed write so a caller's own try/catch
+  // can show it — a save must never look like it worked when it did not.
+  const patchImageMeta = useCallback((hash, patch) => {
+    if (!hash) return Promise.resolve()
+    setImageMeta(prev => {
+      const cur = prev[hash] || { role: null, captions: {} }
+      const next = { ...cur }
+      if ('role' in patch) next.role = patch.role || null
+      if (patch.captions) next.captions = { ...(cur.captions || {}), ...patch.captions }
+      return { ...prev, [hash]: next }
+    })
+    return patchImageMetaRecord(hash, patch)
+  }, [])
 
   // Turns each dropped image File into bytes (the same shrinkToJpeg pipeline
   // ImagePanel's own file drop uses) and PUTs it as a new library item.
@@ -936,7 +982,10 @@ export default function App() {
     // snapshot's caption slot so the queued run reuses it instead of calling the
     // vision model (see snapshotToWorkspace). Image targets only — the only
     // place captionImages() reads it.
-    const knownCaption = t.type === 'image' ? (imgs.firstImg?.caption || '') : ''
+    const queuedRole = imageRoleOf(imgs.firstImg)
+    const knownCaption = t.type === 'image'
+      ? (imageMeta[imgs.firstImg?.hash]?.captions?.[queuedRole] || imgs.firstImg?.captions?.[queuedRole] || '')
+      : ''
     const snapshot = buildSnapshot(knownCaption || null, hasImg, outputCount)
     queue.add({ id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, snapshot })
   }
@@ -1138,6 +1187,33 @@ export default function App() {
     return text
   }
 
+  // The role an image currently has: the one picked on the Reference Image card
+  // (or carried on a restored/queued image), else the per-image record's, else
+  // General. Every image always resolves to a real role.
+  const imageRoleOf = (im) => (im ? normalizeRole(im.role || imageMeta[im.hash]?.role) : ROLE_GENERAL)
+
+  // Picking a role on the Reference Image card sets it on the loaded image AND
+  // remembers it as that image's role (the per-image record), so it sticks the
+  // next time the image is used anywhere.
+  const onImageRoleChange = (roleId) => {
+    imgs.setFirstImg(prev => (prev ? { ...prev, role: roleId } : prev))
+    const h = imgs.firstImg?.hash
+    if (h) patchImageMeta(h, { role: roleId }).catch(() => {})
+  }
+
+  // One vision call for one image under one role. General = a whole-image
+  // description; every other role narrows it with that role's focus (Pose even
+  // swaps the system prompt), exactly as a reference image's caption is written
+  // in H3 ref mode — so the gallery's 🤖 Describe and a still-image generation
+  // share cache keys for the same image + role.
+  const describeUnderRole = (base64, mediaType, roleId, stats, model) => {
+    const role = MINIMAX_H3_REF_ROLES.find(r => r.id === roleId)
+    return cachedVision([
+      { type: 'image', source: { type: 'base64', media_type: mediaType || 'image/jpeg', data: base64 } },
+      { type: 'text', text: `Describe this reference image as instructed. ${role?.visionFocus || ''}`.trim() },
+    ], role?.visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model)
+  }
+
   // src overrides the live workspace state — passed by captionForEntry(h) to
   // re-describe a stored history entry's images without touching the workspace.
   const captionImages = async (src = null) => {
@@ -1182,17 +1258,31 @@ export default function App() {
     }
     let system, content
     if (s.targetType === 'image') {
-      // A description that came with the image from "Reuse image" (possibly
-      // hand-edited there) is used as-is — no vision request at all.
-      const known = (s.firstImg.caption || '').trim()
+      const im = s.firstImg
+      const hash = im.hash || imageHash(im.base64)
+      const rec = imageMeta[hash]
+      const role = imageRoleOf({ ...im, hash })
+      // The description this image already has UNDER THIS ROLE — the per-image
+      // record (gallery edits, earlier runs), else what came with the pick /
+      // restore / queue — is used as-is: no vision request at all.
+      const known = (rec?.captions?.[role] || im.captions?.[role] || '').trim()
       if (known) return { text: known, stats: { fromCache: 0, fresh: 0, reused: 1 } }
-      system = s.visionPromptSingle
-      // Deliberately scene-free: the typed text is applied as edits by the
-      // writer, so the caption must describe what the image actually shows.
-      content = [
-        { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
-        { type: 'text', text: 'Describe this reference image in precise, prompt-ready language.' },
-      ]
+      let text
+      if (role === ROLE_GENERAL) {
+        // Deliberately scene-free: the typed text is the brief, so the caption
+        // must describe what the image actually shows.
+        text = await cachedVision([
+          { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+          { type: 'text', text: 'Describe this reference image in precise, prompt-ready language.' },
+        ], s.visionPromptSingle, stats, model)
+      } else {
+        text = await describeUnderRole(im.base64, im.mediaType, role, stats, model)
+      }
+      // Remember it on the image, per role — described once, reused everywhere,
+      // and never able to replace a different role's text or an edit (a role
+      // with text returned above before getting here).
+      patchImageMeta(hash, { captions: { [role]: text }, ...(rec?.role ? {} : { role }) }).catch(() => {})
+      return { text, stats }
     } else if (s.frameMode === 'firstmidlast') {
       system = VISION_PROMPT_LTX_FIRSTMIDLAST
       content = [
@@ -1382,7 +1472,12 @@ export default function App() {
   // the assembled vision caption (null for text-only); `count` is how many
   // outputs the entry carries. Used by runWriter() after a fresh generation and
   // by saveResultsEdit() to persist hand-edited result text as a new entry.
-  const buildSnapshot = (frameDescription, hasImg, count) => buildWorkspaceSnapshot(workspace, {
+  // A still-image run stamps the image's EFFECTIVE role (card choice, else the
+  // per-image record, else General) onto the saved frame image, so the entry's
+  // caption — which was written under that role — is filed under it later
+  // instead of being taken for a General description.
+  const buildSnapshot = (frameDescription, hasImg, count) => buildWorkspaceSnapshot(
+    t.type === 'image' && workspace.firstImg ? { ...workspace, firstImg: { ...workspace.firstImg, role: imageRoleOf(workspace.firstImg) } } : workspace, {
     model: effectiveWriter,
     vision: hasImg ? effectiveVision : null,
     outputCount: count,
@@ -1395,6 +1490,7 @@ export default function App() {
       frameDescription, hasImg,
       ratio: selectedRatio, soundscape, music,
       stylePart, lengthPart,
+      refRole: t.type === 'image' && hasImg ? imageRoleOf(imgs.firstImg) : null,
     })
 
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
@@ -1672,7 +1768,21 @@ export default function App() {
   // Same treatment for the image gallery, which renders up to 60 draggable tiles
   // and used to re-run all of them on every unrelated keystroke.
   const galleryActionsRef = useRef({})
+  // Per-image record actions for the gallery (every tile has a role and per-role
+  // descriptions). A tile without a stored content hash gets one computed from
+  // its bytes at save time, so a save can never silently land nowhere.
+  const hashOfTile = async (img) => img.hash || imageHash(await blobUrlToBase64(img.url))
   galleryActionsRef.current = {
+    saveImageCaption: async (img, text, roleId) => patchImageMeta(await hashOfTile(img), { captions: { [roleId]: text } }),
+    setImageRole: async (img, roleId) => patchImageMeta(await hashOfTile(img), { role: roleId }),
+    // Runs the vision model for ONE role on a stored image and returns the text —
+    // it does not save; the panel drops it into the same edit/Save flow as a
+    // hand-typed description, so an AI text never overwrites a stored one unseen.
+    describeImage: async (img, roleId) => {
+      if (!effectiveVision) throw new Error('no vision model selected')
+      const base64 = await blobUrlToBase64(img.url)
+      return describeUnderRole(base64, img.mediaType, roleId, { fromCache: 0, fresh: 0 }, effectiveVision)
+    },
     pickHistoryImage,
     saveCaption: historyActionsRef.current.saveCaption,
     saveRefImageCaption: historyActionsRef.current.saveRefImageCaption,
@@ -1683,6 +1793,9 @@ export default function App() {
   }
   const galleryActions = useMemo(() => ({
     pick: (data) => galleryActionsRef.current.pickHistoryImage(data),
+    saveImageCaption: (img, text, roleId) => galleryActionsRef.current.saveImageCaption(img, text, roleId),
+    setImageRole: (img, roleId) => galleryActionsRef.current.setImageRole(img, roleId),
+    describeImage: (img, roleId) => galleryActionsRef.current.describeImage(img, roleId),
     saveCaption: (id, text) => galleryActionsRef.current.saveCaption(id, text),
     saveRefImageCaption: (id, imageIndex, text, roleId) => galleryActionsRef.current.saveRefImageCaption(id, imageIndex, text, roleId),
     describeRefImage: (id, imageIndex, roleId) => galleryActionsRef.current.describeRefImage(id, imageIndex, roleId),
@@ -1744,11 +1857,14 @@ export default function App() {
         onDescribeRefImage={galleryActions.describeRefImage}
         library={library} onAddLibraryImages={addLibraryImages} onRemoveLibraryImage={removeLibraryImage}
         onSaveLibraryCaption={galleryActions.saveLibraryCaption} onSetLibraryRole={galleryActions.setLibraryRole}
-        onDescribeLibraryImage={galleryActions.describeLibraryImage} />
+        onDescribeLibraryImage={galleryActions.describeLibraryImage}
+        imageMeta={imageMeta} onSaveImageCaption={galleryActions.saveImageCaption}
+        onSetImageRole={galleryActions.setImageRole} onDescribeImage={galleryActions.describeImage} />
       {t.type === 'image' || frameMode === 'single' ? (
         <>
           {!imgs.firstImg && ratioPicker}
-          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first} />
+          <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first}
+            roleValue={t.type === 'image' ? imageRoleOf(imgs.firstImg) : undefined} onRoleChange={t.type === 'image' ? onImageRoleChange : undefined} />
         </>
       ) : frameMode === 'last' ? (
         <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
@@ -1867,8 +1983,8 @@ export default function App() {
             Writer model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· builds the prompt</span>
           </label>
           {models.length > 0
-            ? <ModelSelect models={models} value={writerModel} onChange={e => setWriterModel(e.target.value)} />
-            : <input style={selStyle} value={writerManual} onChange={e => setWriterManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
+            ? <ModelSelect models={models} value={writerModel} onChange={e => { setWriterModel(e.target.value); rememberModel('writer', e.target.value) }} />
+            : <input style={selStyle} value={writerManual} onChange={e => { setWriterManual(e.target.value); rememberModel('writer', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
@@ -1876,8 +1992,8 @@ export default function App() {
               Vision model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· reads image inputs</span>
             </label>
             {models.length > 0
-              ? <ModelSelect models={models} value={visionModel} onChange={e => setVisionModel(e.target.value)} />
-              : <input style={selStyle} value={visionManual} onChange={e => setVisionManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
+              ? <ModelSelect models={models} value={visionModel} onChange={e => { setVisionModel(e.target.value); rememberModel('vision', e.target.value) }} />
+              : <input style={selStyle} value={visionManual} onChange={e => { setVisionManual(e.target.value); rememberModel('vision', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
           </div>
         )}
       </div>
@@ -1907,6 +2023,8 @@ export default function App() {
           library={library} onAddLibraryImages={addLibraryImages} onRemoveLibraryImage={removeLibraryImage}
           onSaveLibraryCaption={galleryActions.saveLibraryCaption} onSetLibraryRole={galleryActions.setLibraryRole}
           onDescribeLibraryImage={galleryActions.describeLibraryImage}
+          imageMeta={imageMeta} onSaveImageCaption={galleryActions.saveImageCaption}
+          onSetImageRole={galleryActions.setImageRole} onDescribeImage={galleryActions.describeImage}
           voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={addVoiceLibraryFiles} onRemoveVoiceLibraryItem={removeVoiceLibraryItem}
           onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary}
           comfyCfg={comfyCfg}

@@ -214,6 +214,38 @@ describe('buildWriterUserText — the generate-mode user message', () => {
     expect(out).not.toContain('BASE')
   })
 
+  describe('still-image reference role', () => {
+    const img = { ...base, target: 'flux2klein', targetType: 'image', hasImg: true, frameDescription: 'Stands, weight on the left leg, arms crossed; full-length, eye-level.' }
+    it('pose role: the reference is limited to the pose and the message says not to describe the rest', () => {
+      const out = buildWriterUserText({ ...img, refRole: 'pose_composition' })
+      expect(out.indexOf('Image description (this is the brief')).toBe(0)
+      expect(out).toContain('ROLE: Pose / Composition')
+      expect(out).toContain('ONLY the body pose and the framing only')
+      expect(out).toContain('do NOT describe anything else from the reference image')
+      expect(out).toContain(img.frameDescription)
+    })
+    it('every non-General role names its own contribution', () => {
+      for (const [role, phrase] of [['wardrobe', 'garments only'], ['environment', 'location/setting'], ['style', 'palette, light quality'], ['subject_identity', 'appearance'], ['product_object', 'geometry']]) {
+        expect(buildWriterUserText({ ...img, refRole: role })).toContain(phrase)
+      }
+    })
+    it('General (or no role) keeps the plain supporting-details wording', () => {
+      const plain = buildWriterUserText(img)
+      expect(buildWriterUserText({ ...img, refRole: 'general' })).toBe(plain)
+      expect(plain).toContain('Reference image — supporting details only')
+      expect(plain).not.toContain('ROLE:')
+    })
+    it('a role with no typed description asks for an invented scene, using the reference only for that aspect', () => {
+      const out = buildWriterUserText({ ...img, scene: '', refRole: 'pose_composition' })
+      expect(out).toContain('No image description provided — invent a fitting subject and setting')
+      expect(out.indexOf('Reference image — ROLE')).toBe(0)
+    })
+    it('a role has no effect without a reference description', () => {
+      const out = buildWriterUserText({ ...img, frameDescription: null, hasImg: false, refRole: 'pose_composition' })
+      expect(out).not.toContain('ROLE:')
+    })
+  })
+
   it('puts the ratio line in only when the ratio is actually chosen', () => {
     // T2VA and Ref2VA name a concrete ratio; every image-driven mode inherits it.
     expect(buildWriterUserText(h3)).toContain(MINIMAX_H3_RESOLUTIONS[1].label)

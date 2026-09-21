@@ -12,6 +12,7 @@ import {
   deleteQueue, clearQueue,
 } from './queueStore.mjs'
 import { loadLibraryIndex, listLibrary, putLibrary, patchLibrary, deleteLibrary } from './libraryStore.mjs'
+import { loadImageMeta, listImageMeta, patchImageMeta } from './imageMetaStore.mjs'
 import {
   loadVoiceLibraryIndex, listVoiceLibrary, putVoiceLibrary, patchVoiceLibrary, deleteVoiceLibrary,
 } from './voiceLibraryStore.mjs'
@@ -24,6 +25,7 @@ loadIndex()
 loadQueueIndex()
 loadLibraryIndex()
 loadVoiceLibraryIndex()
+loadImageMeta()
 
 const json = (res, code, obj) => {
   const body = Buffer.from(JSON.stringify(obj), 'utf8')
@@ -158,6 +160,19 @@ const server = createServer(async (req, res) => {
           json(res, 200, { id }); return
         }
         if (method === 'DELETE') { deleteLibrary(id); json(res, 200, { ok: true }); return }
+      }
+    }
+
+    // ── image meta ─────────────────────────────────────────────────────────
+    // One role + per-role descriptions record per image, keyed by content hash
+    // — see imageMetaStore.mjs. GET returns the whole map (small: text only).
+    if (seg[0] === 'api' && seg[1] === 'image-meta') {
+      if (!seg[2]) {
+        if (method === 'GET') { json(res, 200, listImageMeta()); return }
+      } else if (method === 'PATCH') {
+        const hash = decodeURIComponent(seg[2])
+        const patch = await readBody(req)
+        json(res, 200, patchImageMeta(hash, patch || {})); return
       }
     }
 

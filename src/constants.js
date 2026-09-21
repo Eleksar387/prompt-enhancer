@@ -107,7 +107,10 @@ export const SYSTEM_PROMPT_LTX = [LTX_INTRO, LTX_MODE_FIRSTLAST, LTX_MODE_FIRSTM
 const REFERENCE_RULE_IMAGE = `If a reference-image description is provided, the user's own image description is the LEAD: it decides the
 scene, mood, lighting, palette and style of the prompt. The reference supplies only the subject's appearance, the
 location/setting and the pose/composition, to fill in what the user's description leaves open or points at. Never
-reproduce the reference description wholesale; where the two conflict, follow the user's description.`;
+reproduce the reference description wholesale; where the two conflict, follow the user's description.
+If the reference block names a ROLE other than General (Pose, Location, Wardrobe, Style, Subject, Object), it supplies
+ONLY that aspect: use the description for that aspect alone and never describe the rest of the reference image — the
+user's description (or your own fitting invention) supplies everything else.`;
 
 export const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
 
@@ -186,27 +189,20 @@ Output only the description, with no preamble.`;
 
 export const SYSTEM_PROMPT_FLUX2_KLEIN = `You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.
 
-ABOUT FLUX.2 [klein]
-FLUX.2 [klein] encodes prompts with a Qwen3 large-language-model text encoder — NOT the
-T5+CLIP pair used by FLUX.1. Because the encoder behaves like an LLM, it parses full
-natural-language descriptions, multi-clause sentences, spatial relationships, and logical
-conditions far better than a CLIP-based model. Write as if briefing a person on a finished
-image, in clear connected prose — NOT keyword soup.
+FLUX.2 [klein] reads full natural-language prose. Write as if briefing a person on a finished
+image, in clear connected sentences — NOT keyword soup. There is no CLIP-style token cap, so
+don't front-load keywords or cram.
 
 LENGTH & STRUCTURE
 - One coherent, natural-language paragraph in present tense. No bullets, markdown, or headers.
 - Aim for ~40–120 words. Klein rewards detail: short, vague prompts ("a woman in a red dress")
   waste the encoder. But stay coherent — a tight, well-ordered prompt beats a bloated one.
-- The Qwen3 encoder reads up to ~512 tokens, so there is NO ~77-token CLIP cap to design
-  around — you have real room for detail, and there is no need to cram key words to the front
-  to beat a token limit.
 - Order for clarity and logical flow: subject + key attributes → action/pose →
   composition/framing → setting → lighting, color, mood → medium/style and technical detail
   (lens, film stock, render type).
 - Be specific: "a weathered fisherman in his sixties with deep smile lines" beats "a man."
-- USE THE ENCODER'S STRENGTH: state relationships and conditions explicitly — "the sign's text
-  is the same blue as her eyes", "the taller figure stands behind and to the left of the other".
-  Klein actually attempts these; FLUX.1 and SD largely cannot.
+- State relationships and conditions explicitly — "the sign's text is the same blue as her
+  eyes", "the taller figure stands behind and to the left of the other". Klein attempts these.
 
 WHAT WORKS: natural-language detail and full sentences; photographic vocabulary for realism
 (lens, aperture, film stock, lighting setup); art-medium vocabulary for art; explicit spatial
@@ -1233,7 +1229,38 @@ export const ROLE_NONE = '_unassigned'
 
 // Small icon for a role id, for the "🤖 Describe with AI" role picker and the
 // gallery thumbnail badge — ❓ whenever the role is unset or unrecognized.
-export const roleIcon = (id) => MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.icon || '❓'
+export const roleIcon = (id) => (id === ROLE_GENERAL ? GENERAL_ROLE.icon : MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.icon) || '❓'
+
+// ── still-image roles ──────────────────────────────────────────────────────
+// Every image in the app has a role. The six MINIMAX_H3_REF_ROLES narrow what a
+// reference contributes; 'general' (the default for an image nobody assigned
+// one to) means "describe the whole image" — the behaviour before roles existed.
+// General deliberately lives OUTSIDE MINIMAX_H3_REF_ROLES: those feed H3's
+// reference dropdowns, subject numbering and vision focus, none of which has a
+// "whole image" notion.
+export const ROLE_GENERAL = 'general'
+export const GENERAL_ROLE = { id: ROLE_GENERAL, label: 'General (whole image)', icon: '🖼', hint: 'No narrowing — the whole image may inform the prompt' }
+
+// What each role contributes to a STILL-image prompt (the phrase the writer is
+// told the reference is limited to). General has none — it keeps the plain
+// "subject appearance, location, pose" wording.
+const IMAGE_ROLE_USE = {
+  subject_identity: 'the subject\'s appearance (face, hair, age, build, distinguishing marks)',
+  wardrobe: 'the garments only (cut, fabric, colour, pattern, fit)',
+  product_object: 'the object\'s geometry, materials, finish and labels',
+  environment: 'the location/setting, its layout and the light in the space',
+  style: 'the palette, light quality, medium and overall aesthetic',
+  pose_composition: 'the body pose and the framing only',
+}
+export const IMAGE_ROLES = [
+  GENERAL_ROLE,
+  ...MINIMAX_H3_REF_ROLES.map(r => ({ ...r, imageUse: IMAGE_ROLE_USE[r.id] })),
+]
+
+// Any stored role value → a real role id. Unset / the legacy '_unassigned'
+// sentinel / an unknown id all read as General.
+export const normalizeRole = (id) => (IMAGE_ROLES.some(r => r.id === id) ? id : ROLE_GENERAL)
+export const imageRoleDef = (id) => IMAGE_ROLES.find(r => r.id === normalizeRole(id))
 
 export const MINIMAX_H3_PRESERVE_OPTIONS = [
   { id: 'exact',       label: 'Exact',       marker: 'fully_preserved',     hint: 'Fully preserve — no deviation' },

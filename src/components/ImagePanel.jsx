@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, memo } from 'react'
 import { presetById, snap32, btn, recommendRes, ratioLabel, imageHash, shrinkToJpeg } from '../utils'
 import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
+import { IMAGE_ROLES, imageRoleDef } from '../constants'
 
-function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed }) {
+function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, seed, roleValue, onRoleChange }) {
   const [image, setImage]           = useState(null)
   const [targetRes, setTargetRes]   = useState(presets[1] ? presets[1].id : presets[0].id)
   const [cropOpen, setCropOpen]     = useState(false)
@@ -48,10 +49,12 @@ function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, 
         previewUrl: dataUrl, originalUrl: dataUrl,
         nativeW: img.naturalWidth, nativeH: img.naturalHeight,
         fileName: d.fileName || 'from-history.jpg', hash: d.hash || imageHash(d.base64),
-        // Stored description from "Reuse image" — captionImages() uses it in
-        // place of a fresh vision call (image targets). Session-only: never
-        // written to a history/queue snapshot (imgToSnap drops it).
-        caption: (d.description || '').trim(),
+        // From "Reuse image": the image's role and its role → description map.
+        // captionImages() uses the description under the current role in place
+        // of a fresh vision call. Session-only data — imgToSnap keeps the role
+        // but never the descriptions.
+        ...(d.imageRole ? { role: d.imageRole } : {}),
+        captions: d.captions || {},
       }
       setImage(obj)
       setTargetRes(recommendRes(img.naturalWidth, img.naturalHeight, presets))
@@ -144,6 +147,20 @@ function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, 
             <button onClick={removeImage} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--pe-danger-line)', background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, cursor: 'pointer' }}>Remove</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--pe-ink-3)' }}>👁 Read by your Vision model at generate time, then handed to the Writer.</div>
+          {onRoleChange && (
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Role</label>
+              <select value={roleValue} onChange={e => onRoleChange(e.target.value)}
+                style={{ fontSize: 13.5, color: 'var(--pe-ink-2)', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 6, padding: '4px 8px' }}>
+                {IMAGE_ROLES.map(r => <option key={r.id} value={r.id}>{r.icon} {r.label}</option>)}
+              </select>
+              <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
+                {imageRoleDef(roleValue).id === 'general'
+                  ? 'the whole image may inform the prompt'
+                  : `only ${imageRoleDef(roleValue).imageUse} is taken from this image — your description leads`}
+              </span>
+            </div>
+          )}
 
           <div style={{ marginTop: 12, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '14px 16px' }}>
             <div style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', marginBottom: 12 }}>

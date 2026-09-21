@@ -537,6 +537,7 @@ export default function ScriptwriterPanel({
   history = [],
   library = [], onAddLibraryImages = null, onRemoveLibraryImage = null,
   onSaveLibraryCaption = null, onSetLibraryRole = null, onDescribeLibraryImage = null,
+  imageMeta = null, onSaveImageCaption = null, onSetImageRole = null, onDescribeImage = null,
   voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
   onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
   comfyCfg: comfyCfgProp = null, setComfyCfg: setComfyCfgProp = null,
@@ -2882,6 +2883,8 @@ export default function ScriptwriterPanel({
           library={library} onAddLibraryImages={onAddLibraryImages} onRemoveLibraryImage={onRemoveLibraryImage}
           onSaveLibraryCaption={onSaveLibraryCaption} onSetLibraryRole={onSetLibraryRole}
           onDescribeLibraryImage={onDescribeLibraryImage}
+          imageMeta={imageMeta} onSaveImageCaption={onSaveImageCaption}
+          onSetImageRole={onSetImageRole} onDescribeImage={onDescribeImage}
         />
       )}
 

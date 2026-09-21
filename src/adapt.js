@@ -1,4 +1,4 @@
-import { TARGETS, STYLE_OPTIONS, spokenLanguageDirective, caps, ROLE_NONE } from './constants'
+import { TARGETS, STYLE_OPTIONS, spokenLanguageDirective, caps, ROLE_NONE, ROLE_GENERAL, normalizeRole, imageRoleDef } from './constants'
 import { loraInstruction } from './loras'
 
 // Destination targets for "Adapt to text-only prompt" — every writer-capable
@@ -246,6 +246,7 @@ export function buildWriterUserText({
   frameDescription = null, hasImg = false,
   ratio = null, soundscape = '', music = '',
   stylePart = '', lengthPart = '',
+  refRole = null,
 }) {
   if (caps(target).structured) {
     const mode = h3ModeFor(frameMode, hasImg)
@@ -278,6 +279,16 @@ export function buildWriterUserText({
     // the image is only a source of subject / location / pose details — not a
     // template to reproduce (treating it as the base made the writer just
     // rewrite the vision description).
+    // A role other than General narrows what the reference may contribute — the
+    // description was already written under that role, and the message says so,
+    // so a Pose reference adds a pose and does not re-describe the whole image.
+    const roleDef = frameDescription && refRole && normalizeRole(refRole) !== ROLE_GENERAL ? imageRoleDef(refRole) : null
+    if (roleDef && scene.trim()) {
+      return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\nReference image — ROLE: ${roleDef.label}. It contributes ONLY ${roleDef.imageUse}, and the description below is already limited to that. Work it into the prompt; do NOT describe anything else from the reference image (its other subject matter, clothing, background, lighting or style) — the image description above supplies all of that:\n${frameDescription}${stylePart}${lengthPart}`
+    }
+    if (roleDef) {
+      return `Reference image — ROLE: ${roleDef.label}. It contributes ONLY ${roleDef.imageUse}:\n${frameDescription}\n\nNo image description provided — invent a fitting subject and setting for the prompt, and use the reference ONLY for ${roleDef.imageUse}. Do NOT describe anything else from the reference image.${stylePart}${lengthPart}`
+    }
     if (frameDescription && scene.trim()) {
       return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\nReference image — supporting details only. Take from it ONLY the subject's appearance, the location/setting and the pose/composition, and only where the description above is silent or points at the reference. Do not copy its lighting, palette, style or wording; do not transcribe it; where it conflicts with the description, the description wins:\n${frameDescription}${stylePart}${lengthPart}`
     }

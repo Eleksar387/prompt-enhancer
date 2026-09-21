@@ -134,6 +134,20 @@ export function deleteLibraryItem(id) {
   return apiFetch(`/library/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+// ── image meta ─────────────────────────────────────────────────────────────
+// One role + per-role descriptions record per image, keyed by content hash and
+// shared by every generation and the gallery (server/imageMetaStore.mjs).
+// `captions` in a patch merges per role key server-side.
+export function listImageMeta() {
+  return apiFetch('/image-meta')
+}
+
+export function patchImageMetaRecord(hash, patch) {
+  return apiFetch(`/image-meta/${encodeURIComponent(hash)}`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  })
+}
+
 // ── voice library ──────────────────────────────────────────────────────────
 // Standalone reusable voice-timbre samples ("Reuse voice"), persisted
 // server-side so they survive a reload — same contract as the image library.

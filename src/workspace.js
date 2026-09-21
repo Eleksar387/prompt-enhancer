@@ -14,7 +14,7 @@
 // Everything in this file is pure — no React, no DOM — so it is unit-testable and
 // the round trip can be asserted directly.
 
-import { TARGETS, DEFAULT_SPOKEN_LANG, MINIMAX_H3_REF_ROLES, caps } from './constants'
+import { TARGETS, DEFAULT_SPOKEN_LANG, MINIMAX_H3_REF_ROLES, caps, normalizeRole } from './constants'
 import { imageHash, presetById } from './utils'
 
 // ── image (de)serialization ────────────────────────────────────────────────
@@ -24,7 +24,7 @@ import { imageHash, presetById } from './utils'
 // back as absent, not as a broken image, which is what the `.base64` gate does.
 
 export const imgToSnap = (im) => (im
-  ? { base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, hash: im.hash || imageHash(im.base64) }
+  ? { base64: im.base64, mediaType: im.mediaType, fileName: im.fileName, hash: im.hash || imageHash(im.base64), ...(im.role ? { role: im.role } : {}) }
   : null)
 
 export const imgFromSnap = (v) => ((v && typeof v === 'object' && v.base64)
@@ -34,6 +34,7 @@ export const imgFromSnap = (v) => ((v && typeof v === 'object' && v.base64)
       previewUrl: `data:${v.mediaType || 'image/jpeg'};base64,${v.base64}`,
       fileName: v.fileName,
       hash: v.hash || imageHash(v.base64),
+      ...(v.role ? { role: v.role } : {}),
     }
   : null)
 
@@ -191,13 +192,15 @@ export function snapshotToWorkspace(snap, { newId } = {}) {
   // A single-image snapshot's own `caption` IS that image's description (a
   // history entry's vision text, possibly hand-edited since; a queued item's
   // "Reuse image" description). Attach it to the loaded image so captionImages()
-  // reuses it instead of asking the vision model again. Read fresh from the
-  // snapshot every time — never stored on the image record itself, so a later
+  // reuses it instead of asking the vision model again — filed under the
+  // image's role (a snapshot's caption describes the image as that role saw it;
+  // General for one saved before roles). Read fresh from the snapshot every
+  // time — never stored on the image record itself, so a later
   // edit of the entry's description can't leave a stale copy behind. Multi-frame
   // and reference-mode captions cover several images and are never attached.
   const cap = typeof snap.caption === 'string' ? snap.caption.trim() : ''
   if (cap && out.firstImg && (!snap.frameMode || snap.frameMode === 'single' || snap.frameMode === 'last')) {
-    out.firstImg = { ...out.firstImg, caption: cap }
+    out.firstImg = { ...out.firstImg, captions: { [normalizeRole(out.firstImg.role)]: cap } }
   }
   return out
 }

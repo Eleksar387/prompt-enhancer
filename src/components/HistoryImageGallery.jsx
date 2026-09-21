@@ -1,9 +1,21 @@
 import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react'
-import { MINIMAX_H3_REF_ROLES, ROLE_NONE, roleIcon } from '../constants'
+import { MINIMAX_H3_REF_ROLES, IMAGE_ROLES, ROLE_NONE, ROLE_GENERAL, roleIcon, normalizeRole } from '../constants'
 import { resolveRefCaption } from '../adapt'
 import { DRAG_MIME, setDragImage, resolveDragImage } from '../imageDrag'
 
-const roleLabel = (id) => (!id || id === ROLE_NONE) ? 'No role assigned' : (MINIMAX_H3_REF_ROLES.find(r => r.id === id)?.label || id)
+const roleLabel = (id) => IMAGE_ROLES.find(r => r.id === normalizeRole(id))?.label || id
+
+// H3's reference dropdowns only know MINIMAX_H3_REF_ROLES — 'general' (and
+// anything unknown) must reach a ref-mode pick as "no role", never as an id.
+const h3RoleOrNull = (id) => (MINIMAX_H3_REF_ROLES.some(r => r.id === id) ? id : null)
+
+// role-keyed text map with every key normalised ('_unassigned' → 'general') and
+// blank entries dropped
+const normCaptions = (m) => {
+  const out = {}
+  for (const [k, v] of Object.entries(m || {})) if (typeof v === 'string' && v.trim()) out[normalizeRole(k)] = v
+  return out
+}
 
 const CAP = 60  // most thumbnails to render at once
 
@@ -22,17 +34,6 @@ const captionScope = (frameMode, slot) => {
   return 'single'
 }
 
-// The description a picked/dragged tile carries to a single-image target
-// (FLUX.2 Klein etc.), so that target reuses it instead of re-describing the
-// image with the vision model. Sent as `description` — a separate field from
-// `caption`, which stays ref-slot-only (a frame/render text must never be read
-// as a reference-slot caption). A multi-frame caption ("FIRST FRAME … LAST
-// FRAME …") covers several images, so it is never reusable for one.
-export const reusableDescription = (img) => {
-  if (img.captionScope === 'multi') return ''
-  return (img.caption || '').trim()
-}
-
 // Walk every history entry and collect the unique images it stored — both the
 // input images (first/mid/last/ref frames) and any Grok-rendered output images
 // (`outputs[].images[]`, which key their bytes under `b64`). Returns
@@ -41,9 +42,24 @@ export const reusableDescription = (img) => {
 // the base64 gate, so they are silently skipped. Each collected image also
 // carries the vision description from the newest generation that used it
 // (`caption` + `captionScope`/`entryId` so it can be read and edited in place).
-export function collectImages(history) {
+export function collectImages(history, imageMeta = {}) {
   const byKey = new Map()
+  // Everything any USE of an image (any entry, any slot) says about its role
+  // and per-role descriptions, newest use winning per role. A tile is one image
+  // shown once, but its descriptions must not be decided by which entry happens
+  // to be newest — a later generation that used the image as a plain frame
+  // (e.g. a FLUX.2 Klein run) used to replace the tile wholesale and hide the
+  // role-keyed descriptions an older reference-mode entry had stored.
+  const agg = new Map() // key → { captions: { role: { text, ts } }, role: { id, ts } | null }
   const stats = { entries: (history || []).length, rawFields: 0, objWithBase64: 0, collected: 0 }
+  const note = (key, ts, role, caps) => {
+    let a = agg.get(key)
+    if (!a) { a = { captions: {}, role: null }; agg.set(key, a) }
+    if (role && (!a.role || ts >= a.role.ts)) a.role = { id: role, ts }
+    for (const [r, text] of Object.entries(caps)) {
+      if (!a.captions[r] || ts >= a.captions[r].ts) a.captions[r] = { text, ts }
+    }
+  }
   const consider = (im, ts, slot, ctx) => {
     if (im == null || typeof im !== 'object') return
     stats.rawFields++
@@ -51,8 +67,6 @@ export function collectImages(history) {
     if (!url) return
     stats.objWithBase64++
     const key = keyOf(im, url)
-    const prev = byKey.get(key)
-    if (prev && prev.ts >= ts) { prev.uses++; return }
     const isRender = slot === 'render'
     // A ref-mode entry's caption used to be ONE block covering every
     // reference image (see adapt.js's REF_IMAGE_LINE_RE comment), then a
@@ -62,48 +76,45 @@ export function collectImages(history) {
     // (adapt.js) is the one shared place that knows the full fallback order
     // (structural map → legacy flat `caption` → legacy shared-block
     // extraction) — used here for the image's OWN assigned role only; every
-    // other role's text, if any, comes straight from im.captions. Saving
-    // always goes through onSaveRefImageCaption (a plain array-index +
-    // map-key write — see ImageInfoPanel.save() below), never back through
-    // the shared block or the flat field, so a failed/empty resolution here
-    // can only ever produce an empty starting field, never lost or
-    // cross-wired data.
+    // other role's text, if any, comes straight from im.captions.
     const refImageIndex = slot === 'ref' && ctx.refIndex != null ? ctx.refIndex + 1 : null
     const ownRoleKey = im.role || ROLE_NONE
-    const captions = (!isRender && refImageIndex != null) ? { ...(im.captions || {}) } : {}
-    if (refImageIndex != null && captions[ownRoleKey] == null) {
+    const refCaptions = (!isRender && refImageIndex != null) ? { ...(im.captions || {}) } : {}
+    if (refImageIndex != null && refCaptions[ownRoleKey] == null) {
       const legacy = resolveRefCaption(im, ownRoleKey, ctx.caption, refImageIndex)
-      if (legacy) captions[ownRoleKey] = legacy
+      if (legacy) refCaptions[ownRoleKey] = legacy
     }
-    const caption = isRender ? (im.revisedPrompt || '')
-      : refImageIndex != null ? (captions[ownRoleKey] || '')
-      : (ctx.caption || '')
+    // This use's role-keyed descriptions. A frame slot's entry-level caption
+    // describes that one image under the role the entry ran it with (its
+    // firstImg.role, or General for entries saved before roles existed); a
+    // multi-frame caption covers several images, so it belongs to none.
+    const scope = captionScope(ctx.frameMode, slot)
+    const useCaps = isRender ? (im.revisedPrompt ? { [ROLE_GENERAL]: im.revisedPrompt } : {})
+      : refImageIndex != null ? normCaptions(refCaptions)
+      : (scope === 'single' && ctx.caption) ? { [normalizeRole(im.role)]: ctx.caption }
+      : {}
+    note(key, ts, im.role ? normalizeRole(im.role) : null, useCaps)
+
+    const prev = byKey.get(key)
+    if (prev && prev.ts >= ts) { prev.uses++; return }
     byKey.set(key, {
       key,
       url,
       mediaType: im.mediaType || 'image/jpeg',
       fileName: im.fileName || (isRender ? `grok-render.${(im.mediaType || 'image/png').split('/')[1] || 'png'}` : 'image.jpg'),
       hash: im.hash || null,
-      role: im.role || null,
       note: im.note || '',
       render: isRender ? (im.upscaled ? '🎨 2K' : '🎨') : null,
       slot,
-      // Description shown/edited in the info panel, for the image's OWN
-      // assigned role (this is what onPick still forwards — alternate-role
-      // descriptions are browse/edit-only in this panel for now, not yet
-      // selectable at pick time). Renders use the model's revised prompt
-      // (read-only).
-      caption,
-      // Every role this image has ever been described under, role id →
-      // text — ref-slot images only. Powers the multi-role rows + the
-      // "describe as another role" icon picker in ImageInfoPanel.
-      captions,
+      // role / caption / captions are filled in below, once every use of the
+      // image has been seen (aggregation + the per-image record overlay).
+      role: ROLE_GENERAL, caption: '', captions: {},
       // 'ref-item' means "this image's position within its entry is known" —
       // it must NOT depend on whether a caption already has text (that's
-      // just which VALUE to display, decided above). Gating scope on
-      // "already described" was a real regression once (see git history) —
-      // every ref-slot image with a known index is 'ref-item', full stop.
-      captionScope: refImageIndex != null ? 'ref-item' : captionScope(ctx.frameMode, slot),
+      // just which VALUE to display). Gating scope on "already described" was
+      // a real regression once (see git history) — every ref-slot image with
+      // a known index is 'ref-item', full stop.
+      captionScope: refImageIndex != null ? 'ref-item' : scope,
       refImageIndex,
       entryId: ctx.entryId || null,
       ts,
@@ -123,8 +134,24 @@ export function collectImages(history) {
       }
     }
   }
+  for (const tile of byKey.values()) applyRecord(tile, agg.get(tile.key), imageMeta)
   stats.collected = byKey.size
   return { images: [...byKey.values()].sort((a, b) => b.ts - a.ts), stats }
+}
+
+// Settle a tile's role + descriptions from (a) what its uses recorded and (b)
+// the per-image record, which wins: it is what the app treats as the image's
+// CURRENT role and per-role text (edits and fresh descriptions land there).
+// Role: record → newest use that had one → General. `caption` is the text under
+// the tile's own role, for callers that want a single string.
+function applyRecord(tile, a, imageMeta) {
+  const rec = tile.hash ? imageMeta?.[tile.hash] : null
+  const captions = {}
+  if (a) for (const [r, v] of Object.entries(a.captions)) captions[r] = v.text
+  Object.assign(captions, normCaptions(rec?.captions))
+  tile.captions = captions
+  tile.role = rec?.role ? normalizeRole(rec.role) : (a?.role?.id || ROLE_GENERAL)
+  tile.caption = captions[tile.role] || ''
 }
 
 // Maps standalone library items (dropped in via the gallery's own drop zone,
@@ -134,31 +161,30 @@ export function collectImages(history) {
 // own id (not a content hash) — onRemoveLibraryImage needs a real id back,
 // and a hash collision with a history-derived tile must never hide this
 // tile's own delete button (see the no-cross-dedup merge below).
-export function libraryTiles(library) {
+export function libraryTiles(library, imageMeta = {}) {
   return (library || []).filter(im => im && im.url).map(im => {
-    const captions = im.captions || {}
-    const ownRoleKey = im.role || ROLE_NONE
-    return {
+    const tile = {
       key: im.id,
       url: im.url,
       mediaType: im.mediaType || 'image/jpeg',
       fileName: im.fileName || 'image.jpg',
       hash: im.hash || null,
-      role: im.role || null,
       note: '',
       render: null,
       slot: 'library',
-      // Own-role description, same "which entry is the primary one" rule a
-      // ref image's caption already follows — everything else the image has
-      // been described under still lives in `captions`.
-      caption: captions[ownRoleKey] || '',
-      captions,
+      role: ROLE_GENERAL, caption: '', captions: {},
       captionScope: 'library',
       refImageIndex: null,
       entryId: null,
       ts: im.ts || 0,
       uses: 1,
     }
+    // The library record's own role/captions are one "use" of the image, like a
+    // history entry's; the per-image record (imageMeta) still wins over them.
+    const own = {}
+    for (const [r, text] of Object.entries(normCaptions(im.captions))) own[r] = { text, ts: 0 }
+    applyRecord(tile, { captions: own, role: im.role ? { id: normalizeRole(im.role), ts: 0 } : null }, imageMeta)
+    return tile
   })
 }
 
@@ -187,6 +213,7 @@ const FLAT_ROLE = 'flat'
 export function ImageInfoPanel({
   img, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage,
   onSaveLibraryCaption, onSetLibraryRole, onDescribeLibraryImage,
+  onSaveImageCaption, onSetImageRole, onDescribeImage,
   onClose,
 }) {
   // A library image is not tied to any entry (no entryId/refImageIndex), so
@@ -194,15 +221,17 @@ export function ImageInfoPanel({
   // as a reference image, different save/describe target.
   const isRefItem = img.captionScope === 'ref-item' && img.refImageIndex != null
   const isLibraryItem = img.slot === 'library'
-  const supportsRoles = isRefItem || isLibraryItem
-  const canEdit = img.slot !== 'render' && (
-    isRefItem ? (!!img.entryId && !!onSaveRefImageCaption)
-    : isLibraryItem ? !!onSaveLibraryCaption
-    : (!!img.entryId && !!onSaveCaption)
-  )
-  const canDescribe = isRefItem ? !!onDescribeRefImage : isLibraryItem ? !!onDescribeLibraryImage : false
+  // Every image with a content hash has a role and per-role descriptions (the
+  // per-image record). Only a hash-less tile (an old Grok render) is left with
+  // the flat, read-only revised prompt.
+  const supportsRoles = isRefItem || isLibraryItem || !!img.hash
+  const canEdit = supportsRoles
+    ? (!!onSaveImageCaption || (isRefItem && !!img.entryId && !!onSaveRefImageCaption) || (isLibraryItem && !!onSaveLibraryCaption))
+    : img.slot !== 'render' && !!img.entryId && !!onSaveCaption
+  const canDescribe = supportsRoles && (!!onDescribeImage || (isRefItem && !!onDescribeRefImage) || (isLibraryItem && !!onDescribeLibraryImage))
+  const canSetRole = supportsRoles && (!!onSetImageRole || (isLibraryItem && !!onSetLibraryRole))
 
-  const ownRoleKey = img.role || ROLE_NONE
+  const ownRoleKey = normalizeRole(img.role)
 
   const [editingRole, setEditingRole] = useState(null)   // role id (or FLAT_ROLE) being edited, or null
   const [draft, setDraft] = useState('')
@@ -223,9 +252,9 @@ export function ImageInfoPanel({
   // but without this, that role has no row to render its textarea into —
   // the state changes with no visible effect ("nothing happens").
   const shownRoles = supportsRoles
-    ? [ownRoleKey, ...MINIMAX_H3_REF_ROLES.map(r => r.id).filter(id => id !== ownRoleKey && (img.captions?.[id] || id === editingRole))]
+    ? [ownRoleKey, ...IMAGE_ROLES.map(r => r.id).filter(id => id !== ownRoleKey && (img.captions?.[id] || id === editingRole))]
     : []
-  const pickableRoles = supportsRoles ? MINIMAX_H3_REF_ROLES.filter(r => !shownRoles.includes(r.id)) : []
+  const pickableRoles = supportsRoles ? IMAGE_ROLES.filter(r => !shownRoles.includes(r.id)) : []
 
   const startEdit = (roleId) => {
     setDraft(roleId === FLAT_ROLE ? img.caption : (img.captions?.[roleId] || ''))
@@ -243,8 +272,15 @@ export function ImageInfoPanel({
       // description on this same image — in the same entry. A library image
       // has no entry/index at all — its own id (img.key) stands in.
       if (roleId === FLAT_ROLE) await onSaveCaption(img.entryId, draft)
-      else if (isLibraryItem) await onSaveLibraryCaption(img.key, draft, roleId)
-      else await onSaveRefImageCaption(img.entryId, img.refImageIndex - 1, draft, roleId)
+      else {
+        // The entry / library record keep their own copy (the History card
+        // editor reads those); the per-image record is what the rest of the
+        // app reads. 'general' maps to the legacy "no role" key those two use.
+        const legacyRole = roleId === ROLE_GENERAL ? ROLE_NONE : roleId
+        if (isLibraryItem && onSaveLibraryCaption) await onSaveLibraryCaption(img.key, draft, legacyRole)
+        else if (isRefItem && img.entryId && onSaveRefImageCaption) await onSaveRefImageCaption(img.entryId, img.refImageIndex - 1, draft, legacyRole)
+        if (onSaveImageCaption) await onSaveImageCaption(img, draft, roleId)
+      }
       setEditingRole(null)
       setFlashRole(roleId)
       setTimeout(() => setFlashRole(null), 1800)
@@ -261,8 +297,8 @@ export function ImageInfoPanel({
     setDescribeError(''); setDescribeErrorRole(null)
     setDescribingRole(roleId)
     try {
-      const text = isLibraryItem
-        ? await onDescribeLibraryImage(img.key, roleId)
+      const text = onDescribeImage ? await onDescribeImage(img, roleId)
+        : isLibraryItem ? await onDescribeLibraryImage(img.key, roleId)
         : await onDescribeRefImage(img.entryId, img.refImageIndex - 1, roleId)
       setDraft(text)
       setEditingRole(roleId)
@@ -298,16 +334,19 @@ export function ImageInfoPanel({
 
       {supportsRoles ? (
         <>
-          {isLibraryItem && onSetLibraryRole && (
+          {canSetRole && (
             <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
               <label style={{ fontSize: 11.5, color: 'var(--pe-ink-3)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Role</label>
               <select
-                value={img.role || ROLE_NONE}
-                onChange={e => onSetLibraryRole(img.key, e.target.value === ROLE_NONE ? null : e.target.value)}
+                value={ownRoleKey}
+                onChange={async e => {
+                  const next = e.target.value
+                  if (isLibraryItem && onSetLibraryRole) await onSetLibraryRole(img.key, next === ROLE_GENERAL ? null : next)
+                  if (onSetImageRole) await onSetImageRole(img, next)
+                }}
                 style={{ fontSize: 12.5, color: 'var(--pe-ink-2)', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 6px' }}
               >
-                <option value={ROLE_NONE}>No role assigned</option>
-                {MINIMAX_H3_REF_ROLES.map(r => (
+                {IMAGE_ROLES.map(r => (
                   <option key={r.id} value={r.id}>{r.icon} {r.label}</option>
                 ))}
               </select>
@@ -425,6 +464,25 @@ export function ImageInfoPanel({
   )
 }
 
+// What a picked/dragged tile carries to its drop target. Two consumers read it:
+//  - a still-image target's ImagePanel takes `imageRole` (the image's role,
+//    always a real IMAGE_ROLES id) and `captions` (its role → text map) so the
+//    description under the CURRENT role is reused instead of re-asked;
+//  - an H3 reference slot takes `role` — only a real H3 role (General and
+//    unknown ids arrive as null, so its dropdown keeps defaulting), `note`,
+//    and the same `captions` map (marks which roles are already described).
+// `caption`/`note` stay ref-slot/library-only as before: a frame/render text is
+// not a reference-slot caption.
+export const pickPayload = (img, base) => ({
+  ...base,
+  caption: (img.slot === 'ref' || img.slot === 'library') ? img.caption : '',
+  role: (img.slot === 'ref' || img.slot === 'library') ? h3RoleOrNull(img.role) : null,
+  note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
+  captions: img.captions || {},
+  imageRole: normalizeRole(img.role),
+})
+
+
 // One thumbnail. Memoized because the grid renders up to CAP of them and the
 // only thing that changes per keystroke elsewhere in the app is nothing at all —
 // `img` comes from a memoized collectImages() and every callback is stable, so a
@@ -433,21 +491,7 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
   const pick = onPick ? async () => {
     const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     if (!resolved) return
-    onPick({
-      ...resolved,
-      // Only a per-reference caption/role carries meaning to another
-      // reference slot; a frame/render description does not. `captions`
-      // (the full role→text map) travels too — MinimaxRefPanel's Role
-      // dropdown uses it to mark which roles are already described for
-      // THIS image, and the same content-addressed vision cache that
-      // populated it means picking the matching role at generation time
-      // reuses that exact description instead of a fresh vision call.
-      caption: (img.slot === 'ref' || img.slot === 'library') ? img.caption : '',
-      role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
-      note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
-      captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
-      description: reusableDescription(img),
-    })
+    onPick(pickPayload(img, resolved))
   } : undefined
 
   // Every role this image has actually been described under (img.captions,
@@ -457,14 +501,15 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
   // whatever it was at creation. No question-mark fallback: an image with
   // no description at all simply gets no badge, rather than a permanent
   // "no role" placeholder.
-  const describedRoles = (img.slot === 'ref' || img.slot === 'library') ? MINIMAX_H3_REF_ROLES.filter(r => img.captions?.[r.id]) : []
+  const describedRoles = IMAGE_ROLES.filter(r => r.id !== ROLE_GENERAL && img.captions?.[r.id])
+  const badge = [img.role !== ROLE_GENERAL ? roleIcon(img.role) : null, ...describedRoles.filter(r => r.id !== img.role).map(r => r.icon)].filter(Boolean)
 
   return (
     <div
       draggable
       onDragStart={(e) => onDragStart(e, img)}
       onClick={pick}
-      title={`${img.fileName}${img.render ? ' · Grok render' : ''}${describedRoles.length ? ` · ${describedRoles.map(r => `${r.icon} ${r.label}`).join(', ')}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
+      title={`${img.fileName}${img.render ? ' · Grok render' : ''} · ${roleIcon(img.role)} ${roleLabel(img.role)}${describedRoles.length ? ` · described: ${describedRoles.map(r => `${r.icon} ${r.label}`).join(', ')}` : ''}${img.note ? ` · "${img.note}"` : ''}\n${new Date(img.ts).toLocaleString()}${img.uses > 1 ? ` · used ${img.uses}×` : ''}`}
       style={{
         position: 'relative', aspectRatio: '4 / 3', borderRadius: 6, overflow: 'hidden',
         border: `1px solid ${selected ? 'var(--pe-accent-line)' : 'var(--pe-line)'}`,
@@ -502,9 +547,9 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
           }}
         >✕</button>
       )}
-      {(describedRoles.length > 0 || img.render) && (
+      {(badge.length > 0 || img.render) && (
         <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: 11, lineHeight: '16px', padding: '1px 4px', background: 'rgba(8,8,16,0.78)', color: 'var(--pe-accent-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {img.render || describedRoles.map(r => r.icon).join(' ')}
+          {img.render || badge.join(' ')}
         </span>
       )}
     </div>
@@ -515,12 +560,13 @@ function HistoryImageGallery({
   history, onPick, pickHint, onSaveCaption, onSaveRefImageCaption, onDescribeRefImage,
   library = [], onAddLibraryImages = null, onRemoveLibraryImage = null,
   onSaveLibraryCaption = null, onSetLibraryRole = null, onDescribeLibraryImage = null,
+  imageMeta = null, onSaveImageCaption = null, onSetImageRole = null, onDescribeImage = null,
 }) {
   const [open, setOpen] = useState(false)
   const [infoFor, setInfoFor] = useState(null)  // img.key of the open info panel
   const [dragOver, setDragOver] = useState(false)
   const touchedRef = useRef(false)
-  const { images, stats } = useMemo(() => collectImages(history), [history])
+  const { images, stats } = useMemo(() => collectImages(history, imageMeta || {}), [history, imageMeta])
 
   // Library items merged in alongside the history-derived ones — no
   // cross-source dedup by hash: if a collision let a history-sourced tile
@@ -528,8 +574,8 @@ function HistoryImageGallery({
   // never render, silently orphaning the library row with no way to delete
   // it from the UI.
   const merged = useMemo(
-    () => [...libraryTiles(library), ...images].sort((a, b) => b.ts - a.ts),
-    [library, images],
+    () => [...libraryTiles(library, imageMeta || {}), ...images].sort((a, b) => b.ts - a.ts),
+    [library, images, imageMeta],
   )
 
   // Open it the first time images are available so it's actually discoverable;
@@ -553,14 +599,7 @@ function HistoryImageGallery({
     // resolveDragImage(). role/note/captions travel too (ref-slot images
     // only), same as the click-to-pick path in Tile above, so dropping
     // straight onto MinimaxRefPanel preserves them just like clicking does.
-    setDragImage({
-      url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash,
-      caption: (img.slot === 'ref' || img.slot === 'library') ? img.caption : '',
-      role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
-      note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
-      captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
-      description: reusableDescription(img),
-    })
+    setDragImage(pickPayload(img, { url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash }))
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')
       e.dataTransfer.setData('text/plain', img.fileName || 'image')
@@ -627,6 +666,7 @@ function HistoryImageGallery({
           {infoImg && (
             <ImageInfoPanel img={infoImg} onSaveCaption={onSaveCaption} onSaveRefImageCaption={onSaveRefImageCaption} onDescribeRefImage={onDescribeRefImage}
               onSaveLibraryCaption={onSaveLibraryCaption} onSetLibraryRole={onSetLibraryRole} onDescribeLibraryImage={onDescribeLibraryImage}
+              onSaveImageCaption={onSaveImageCaption} onSetImageRole={onSetImageRole} onDescribeImage={onDescribeImage}
               onClose={() => setInfoFor(null)} />
           )}
           {merged.length > CAP && (
