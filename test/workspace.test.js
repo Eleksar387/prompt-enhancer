@@ -191,8 +191,22 @@ describe('buildSnapshot', () => {
     expect(s.soundscape).toBe('')
     expect(s.music).toBe('')
     expect(s.ratio).toBeNull()
-    expect(s.refImages).toBeNull()
     expect(s.refAudio).toBeNull()
+  })
+
+  it('a still-image target keeps its additional references (any frame mode); audio stays H3-only', () => {
+    const w = { ...fluxWorkspace(), refImages: [{ ...img('pose.jpg'), role: 'pose_composition' }, { ...img('look.jpg'), role: 'style' }] }
+    const s = buildSnapshot(w, meta)
+    expect(s.refImages.map(r => r.role)).toEqual(['pose_composition', 'style'])
+    expect(s.refAudio).toBeNull()
+    const back = snapshotToWorkspace(s, { newId: () => 'id' })
+    expect(back.refImages.map(r => r.role)).toEqual(['pose_composition', 'style'])
+    expect(buildSnapshot(fluxWorkspace(), meta).refImages).toEqual([])
+  })
+
+  it('a target with no reference support still blanks refImages', () => {
+    const w = { ...fluxWorkspace(), target: 'dramabox', targetType: 'text', show: TARGETS.dramabox.show }
+    expect(buildSnapshot(w, meta).refImages).toBeNull()
   })
 
   it('keeps reference images only in H3 ref mode', () => {
@@ -331,6 +345,10 @@ describe('hasRequiredImages', () => {
   it('an image target asks only about the one reference image', () => {
     expect(hasRequiredImages(w({ targetType: 'image', firstImg: img() }))).toBe(true)
     expect(hasRequiredImages(w({ targetType: 'image' }))).toBe(false)
+  })
+
+  it('an image target also counts additional references (no primary needed)', () => {
+    expect(hasRequiredImages(w({ targetType: 'image', refImages: [img()] }))).toBe(true)
   })
 
   it('ignores frameMode entirely for an image target', () => {

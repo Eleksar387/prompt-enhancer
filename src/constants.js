@@ -110,7 +110,10 @@ location/setting and the pose/composition, to fill in what the user's descriptio
 reproduce the reference description wholesale; where the two conflict, follow the user's description.
 If the reference block names a ROLE other than General (Pose, Location, Wardrobe, Style, Subject, Object), it supplies
 ONLY that aspect: use the description for that aspect alone and never describe the rest of the reference image — the
-user's description (or your own fitting invention) supplies everything else.`;
+user's description (or your own fitting invention) supplies everything else.
+If SEVERAL reference images are listed, each one is limited to its own role in exactly the same way; merge them into
+ONE coherent image (a Pose reference and a Style reference and a Subject reference are three different aspects of the
+same picture, not three pictures), and let the role — not the order — decide which reference speaks to which aspect.`;
 
 export const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
 
@@ -1252,6 +1255,11 @@ const IMAGE_ROLE_USE = {
   style: 'the palette, light quality, medium and overall aesthetic',
   pose_composition: 'the body pose and the framing only',
 }
+// How many ADDITIONAL reference images a still-image target takes beside its
+// primary Reference Image card (so 1 + this many in total). Capped at 4 because
+// the xAI image-edit endpoint the 🎨 Render button feeds accepts at most 5.
+export const MAX_IMAGE_REFS = 4
+
 export const IMAGE_ROLES = [
   GENERAL_ROLE,
   ...MINIMAX_H3_REF_ROLES.map(r => ({ ...r, imageUse: IMAGE_ROLE_USE[r.id] })),
@@ -1760,7 +1768,7 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a detailed FLUX.dev prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true, frameTarget: true, refBlockInFrames: true },
     short: 'Flux.dev',
   },
   flux2klein: {
@@ -1769,7 +1777,7 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a detailed FLUX.2 [klein] prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true, frameTarget: true, refBlockInFrames: true },
     short: 'Klein',
   },
   krea2turbo: {
@@ -1778,7 +1786,7 @@ export const TARGETS = {
     subtitle: 'Describe your image → get a natural-language Krea 2 Turbo prompt',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true },
   },
   // Key is `zimage`, not `z_image_turbo`: it is the default model for the
   // Scriptwriter's character portraits and that id is persisted inside saved
@@ -1789,7 +1797,7 @@ export const TARGETS = {
     subtitle: 'Describe your image \u2192 get a natural-language Z-Image Turbo prompt (prose only, no negatives)',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true, frameTarget: true, refBlockInFrames: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true, frameTarget: true, refBlockInFrames: true },
     short: 'Z-Image Turbo',
   },
   grokimage: {
@@ -1799,7 +1807,7 @@ export const TARGETS = {
     resolutions: GROK_IMAGE_RESOLUTIONS,
     presetNote: 'Grok picks the final pixel dimensions; the selected aspect ratio is passed to the 🎨 Render call.',
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true },
   },
   sdxl: {
     id: 'sdxl', label: 'SDXL · Image', type: 'image', system: SYSTEM_PROMPT_SDXL,
@@ -1807,7 +1815,7 @@ export const TARGETS = {
     subtitle: 'Describe your image → get Danbooru-tagged SDXL prompts (positive + negative)',
     resolutions: SDXL_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true, posNeg: true, frameTarget: true, refBlockInFrames: false },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true, posNeg: true, frameTarget: true, refBlockInFrames: false },
     short: 'SDXL',
     // A missing trigger goes in as a leading tag of POSITIVE — never NEGATIVE,
     // where it would suppress the LoRA instead of firing it.
@@ -1819,7 +1827,7 @@ export const TARGETS = {
     subtitle: 'Describe a character → get a FLUX prompt optimized for Image-to-3D miniature printing',
     resolutions: FLUX_RESOLUTIONS,
     show: { duration: false, camera: false, dialogue: false, frameMode: false, twoStage: false },
-    caps: { loras: true },
+    caps: { imageRefs: MAX_IMAGE_REFS, loras: true },
   },
   dramabox: {
     id: 'dramabox', label: 'DramaBox · TTS', type: 'text', system: SYSTEM_PROMPT_DRAMABOX,

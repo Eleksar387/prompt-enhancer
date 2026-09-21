@@ -32,6 +32,7 @@ import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
 import MinimaxRefPanel from './components/MinimaxRefPanel'
+import ImageRefsPanel from './components/ImageRefsPanel'
 import AdaptPanel from './components/AdaptPanel'
 import LoraPanel from './components/LoraPanel'
 import QueuePanel from './components/QueuePanel'
@@ -43,7 +44,7 @@ import { useQueue } from './hooks/useQueue'
 import { useImageSlots } from './hooks/useImageSlots'
 import {
   buildSnapshot as buildWorkspaceSnapshot, snapshotToWorkspace,
-  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode,
+  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs,
   refAudiosFromSnap,
 } from './workspace'
 import { buildStylePart, buildWriterUserText, h3ModeFor } from './adapt'
@@ -601,6 +602,36 @@ export default function App() {
 
   // Clicking a thumbnail in the history image gallery — route it to the right
   // slot for the current frame mode. (Drag-and-drop is handled inside the panels.)
+  // Appends an image to a still-image target's additional references. Skips one
+  // that is already loaded (same content hash) and stops at the cap. `role` is the
+  // one the image already has (a gallery pick carries it); a fresh upload is General.
+  const addStillRef = (data) => {
+    const hash = data.hash || imageHash(data.base64)
+    if (imgs.firstImg && (imgs.firstImg.hash || imageHash(imgs.firstImg.base64)) === hash) return
+    const mediaType = data.mediaType || 'image/jpeg'
+    const cap = tcaps.imageRefs || 0
+    // Functional update: several files can be added in a row, so the cap and the
+    // duplicate check must read the list as it is at that moment.
+    imgs.setRefImages(prev => {
+      if (prev.length >= cap || prev.some(im => im.hash === hash)) return prev
+      return [...prev, {
+        id: generateId(), base64: data.base64, mediaType,
+        previewUrl: `data:${mediaType};base64,${data.base64}`,
+        fileName: data.fileName || 'from-history.jpg',
+        ...(data.imageRole ? { role: data.imageRole } : {}),
+        preserve: 'strong', note: '', hash,
+        // Session-only: which roles this image already has a description for.
+        captions: data.captions || {},
+      }]
+    })
+  }
+  const onStillRefRoleChange = (id, roleId) => {
+    const im = imgs.refImages.find(r => r.id === id)
+    imgs.setRefImages(prev => prev.map(r => (r.id === id ? { ...r, role: roleId } : r)))
+    if (im?.hash) patchImageMeta(im.hash, { role: roleId }).catch(() => {})
+  }
+  const removeStillRef = (id) => imgs.setRefImages(prev => prev.filter(r => r.id !== id))
+
   const pickHistoryImage = (data) => {
     // A target that accepts role-tagged references collects picks into that list
     // instead of filling a frame slot; caps.refImages is also the cap.
@@ -625,12 +656,17 @@ export default function App() {
       }])
       return
     }
+    // A still-image target fills the primary Reference Image card first, then
+    // collects further picks as role-tagged additional references (remove the
+    // primary image to replace it).
+    if (t.type === 'image' && imgs.firstImg) { addStillRef(data); return }
     if (t.type === 'image' || frameMode === 'single' || frameMode === 'last') { imgs.bumpSeed('first', data); return }
     if (frameMode === 'firstlast') { imgs.bumpSeed(!imgs.firstImg ? 'first' : 'last', data); return }
     if (frameMode === 'firstmidlast') { imgs.bumpSeed(!imgs.firstImg ? 'first' : !imgs.midImg ? 'mid' : 'last', data) }
   }
   const galleryPickHint =
     refMode ? 'to add it as a reference'
+    : t.type === 'image' ? 'to load it as the reference image — or, if one is loaded, add it as another reference'
     : frameMode === 'firstlast' || frameMode === 'firstmidlast' ? 'to fill the next empty frame'
     : 'to load it as the reference image'
 
@@ -655,7 +691,13 @@ export default function App() {
     if (frameMode === 'last') {
       return imgs.firstImg ? [{ name: 'last-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'last' }] : []
     }
-    return imgs.firstImg ? [{ name: t.type === 'image' ? 'reference-image.jpg' : 'first-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' }] : []
+    if (t.type === 'image') {
+      return [
+        imgs.firstImg && { name: 'reference-image.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' },
+        ...imgs.refImages.map((im, i) => ({ name: `reference-${i + 2}-${imageRoleOf(im)}.jpg`, base64: im.base64, mediaType: mt(im), role: 'ref' })),
+      ].filter(Boolean)
+    }
+    return imgs.firstImg ? [{ name: 'first-frame.jpg', base64: imgs.firstImg.base64, mediaType: mt(imgs.firstImg), role: 'first' }] : []
   }
 
   // A short filename-safe slug from the scene text, standing in for a title
@@ -983,7 +1025,7 @@ export default function App() {
     // vision model (see snapshotToWorkspace). Image targets only — the only
     // place captionImages() reads it.
     const queuedRole = imageRoleOf(imgs.firstImg)
-    const knownCaption = t.type === 'image'
+    const knownCaption = t.type === 'image' && !imgs.refImages.length
       ? (imageMeta[imgs.firstImg?.hash]?.captions?.[queuedRole] || imgs.firstImg?.captions?.[queuedRole] || '')
       : ''
     const snapshot = buildSnapshot(knownCaption || null, hasImg, outputCount)
@@ -1258,31 +1300,46 @@ export default function App() {
     }
     let system, content
     if (s.targetType === 'image') {
-      const im = s.firstImg
-      const hash = im.hash || imageHash(im.base64)
-      const rec = imageMeta[hash]
-      const role = imageRoleOf({ ...im, hash })
-      // The description this image already has UNDER THIS ROLE — the per-image
-      // record (gallery edits, earlier runs), else what came with the pick /
-      // restore / queue — is used as-is: no vision request at all.
-      const known = (rec?.captions?.[role] || im.captions?.[role] || '').trim()
-      if (known) return { text: known, stats: { fromCache: 0, fresh: 0, reused: 1 } }
-      let text
-      if (role === ROLE_GENERAL) {
-        // Deliberately scene-free: the typed text is the brief, so the caption
-        // must describe what the image actually shows.
-        text = await cachedVision([
-          { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-          { type: 'text', text: 'Describe this reference image in precise, prompt-ready language.' },
-        ], s.visionPromptSingle, stats, model)
-      } else {
-        text = await describeUnderRole(im.base64, im.mediaType, role, stats, model)
+      // The primary Reference Image card plus any additional references, each
+      // with its own role. One image keeps the plain single-description shape;
+      // several become a numbered "Image N — role: …" block the writer message
+      // (buildWriterUserText) and Adapt's foldCaption both understand.
+      const list = [s.firstImg, ...(s.refImages || [])].filter(Boolean)
+      // One description of one image under its role. The one it already has
+      // UNDER THAT ROLE — the per-image record (gallery edits, earlier runs),
+      // else what came with the pick / restore / queue — is used as-is: no
+      // vision request at all.
+      const describeOne = async (im) => {
+        const hash = im.hash || imageHash(im.base64)
+        const rec = imageMeta[hash]
+        const role = imageRoleOf({ ...im, hash })
+        const known = (rec?.captions?.[role] || im.captions?.[role] || '').trim()
+        if (known) return { role, text: known, reused: true }
+        let text
+        if (role === ROLE_GENERAL) {
+          // Deliberately scene-free: the typed text is the brief, so the caption
+          // must describe what the image actually shows.
+          text = await cachedVision([
+            { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+            { type: 'text', text: 'Describe this reference image in precise, prompt-ready language.' },
+          ], s.visionPromptSingle, stats, model)
+        } else {
+          text = await describeUnderRole(im.base64, im.mediaType, role, stats, model)
+        }
+        // Remember it on the image, per role — described once, reused everywhere,
+        // and never able to replace a different role's text or an edit (a role
+        // with text returned above before getting here).
+        patchImageMeta(hash, { captions: { [role]: text }, ...(rec?.role ? {} : { role }) }).catch(() => {})
+        return { role, text, reused: false }
       }
-      // Remember it on the image, per role — described once, reused everywhere,
-      // and never able to replace a different role's text or an edit (a role
-      // with text returned above before getting here).
-      patchImageMeta(hash, { captions: { [role]: text }, ...(rec?.role ? {} : { role }) }).catch(() => {})
-      return { text, stats }
+      // Sequential against a local Ollama (parallel slots blend multimodal
+      // requests), fanned out for cloud providers — same gate as ref mode.
+      const done = await mapWithConcurrency(list, isCloud(cfg.base) ? list.length : 1, describeOne)
+      const reused = done.filter(d => d.reused).length
+      const outStats = reused ? { ...stats, reused } : stats
+      if (done.length === 1) return { text: done[0].text, stats: outStats }
+      const text = done.map((d, i) => `Image ${i + 1} — role: ${imageRoleDef(d.role).label}: ${d.text}`).join('\n\n')
+      return { text, stats: outStats }
     } else if (s.frameMode === 'firstmidlast') {
       system = VISION_PROMPT_LTX_FIRSTMIDLAST
       content = [
@@ -1476,8 +1533,13 @@ export default function App() {
   // per-image record, else General) onto the saved frame image, so the entry's
   // caption — which was written under that role — is filed under it later
   // instead of being taken for a General description.
+  const withImageRoles = (w) => (t.type !== 'image' ? w : {
+    ...w,
+    firstImg: w.firstImg ? { ...w.firstImg, role: imageRoleOf(w.firstImg) } : w.firstImg,
+    refImages: (w.refImages || []).map(im => ({ ...im, role: imageRoleOf(im) })),
+  })
   const buildSnapshot = (frameDescription, hasImg, count) => buildWorkspaceSnapshot(
-    t.type === 'image' && workspace.firstImg ? { ...workspace, firstImg: { ...workspace.firstImg, role: imageRoleOf(workspace.firstImg) } } : workspace, {
+    withImageRoles(workspace), {
     model: effectiveWriter,
     vision: hasImg ? effectiveVision : null,
     outputCount: count,
@@ -1490,7 +1552,10 @@ export default function App() {
       frameDescription, hasImg,
       ratio: selectedRatio, soundscape, music,
       stylePart, lengthPart,
-      refRole: t.type === 'image' && hasImg ? imageRoleOf(imgs.firstImg) : null,
+      // Derived from the same list captionImages() described — so a lone
+      // reference with no primary card still carries its role.
+      refRole: t.type === 'image' && hasImg ? imageRoleOf(stillImageRefs(workspace)[0]) : null,
+      refRoles: t.type === 'image' && hasImg ? stillImageRefs(workspace).map(imageRoleOf) : null,
     })
 
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
@@ -1578,7 +1643,7 @@ export default function App() {
   const sceneHint = manualUI
     ? 'MiniMax H3 tag syntax — no AI rewriting, assembled exactly as typed'
     : t.type === 'image'
-    ? (imgs.firstImg ? '(optional — leave blank to describe the reference image)' : '')
+    ? (stillImageRefs(workspace).length > 1 ? '(optional — leave blank to build one image from the references)' : stillImageRefs(workspace).length ? '(optional — leave blank to describe the reference image)' : '')
     : t.type === 'text'
       ? ''
       : frameMode === 'firstlast'
@@ -1865,6 +1930,10 @@ export default function App() {
           {!imgs.firstImg && ratioPicker}
           <ImagePanel key={`${target}-single`} label="Reference Image" hint="(optional)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} presetNote={t.presetNote} seed={imgs.seeds.first}
             roleValue={t.type === 'image' ? imageRoleOf(imgs.firstImg) : undefined} onRoleChange={t.type === 'image' ? onImageRoleChange : undefined} />
+          {t.type === 'image' && tcaps.imageRefs > 0 && (
+            <ImageRefsPanel images={imgs.refImages} max={tcaps.imageRefs} roleOf={imageRoleOf} imageMeta={imageMeta}
+              onAdd={addStillRef} onRoleChange={onStillRefRoleChange} onRemove={removeStillRef} />
+          )}
         </>
       ) : frameMode === 'last' ? (
         <ImagePanel key={`${target}-lastonly`} label="Last Frame" hint="(clip ends here)" onChange={imgs.setFirstImg} presets={t.resolutions} showTwoStage={show.twoStage} seed={imgs.seeds.first} />
@@ -2417,7 +2486,7 @@ export default function App() {
           <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             👁 vision description{effectiveVision ? ` · ${effectiveVision}` : ''}
             {visionStats && (visionStats.fromCache + visionStats.fresh + (visionStats.reused || 0) > 0) && (
-              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.reused ? `reused from history` : `${visionStats.fromCache} cached, ${visionStats.fresh} described`}</span>
+              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.reused ? (visionStats.fromCache + visionStats.fresh ? `${visionStats.reused} reused, ${visionStats.fromCache} cached, ${visionStats.fresh} described` : `reused from history`) : `${visionStats.fromCache} cached, ${visionStats.fresh} described`}</span>
             )}
             {caption !== savedCaption && (
               <span style={{ color: 'var(--pe-accent-ink)', textTransform: 'none', letterSpacing: 0 }}> · edited</span>

@@ -109,7 +109,11 @@ export const refAudiosFromSnap = (v, newId) => {
 // audio-video target would carry its soundscape and ratio without editing this file.
 const hasRatio = (w) => !!caps(w.target).ratioPicker
 const hasAudio = (w) => !!caps(w.target).audioFields
-const hasRefs = (w) => !!caps(w.target).refImages && w.frameMode === 'ref'
+// H3 keeps its references only in `ref` frame mode; a still-image target carries
+// its additional references (beside the primary firstImg card) in every mode.
+const hasRefImages = (w) => (!!caps(w.target).refImages && w.frameMode === 'ref') || !!caps(w.target).imageRefs
+// Voice samples stay H3-only.
+const hasRefAudio = (w) => !!caps(w.target).refImages && w.frameMode === 'ref'
 
 export const WORKSPACE_FIELDS = [
   { snap: 'target',      state: 'target' },
@@ -152,9 +156,9 @@ export const WORKSPACE_FIELDS = [
   { snap: 'soundscape', state: 'soundscape', when: hasAudio, empty: '', fallback: '' },
   { snap: 'music',      state: 'music',      when: hasAudio, empty: '', fallback: '' },
 
-  { snap: 'refImages', state: 'refImages', when: hasRefs, empty: null, fallback: [],
+  { snap: 'refImages', state: 'refImages', when: hasRefImages, empty: null, fallback: [],
     to: w => refImagesToSnap(w.refImages) },
-  { snap: 'refAudio', state: 'refAudios', when: hasRefs, empty: null, fallback: [],
+  { snap: 'refAudio', state: 'refAudios', when: hasRefAudio, empty: null, fallback: [],
     to: w => refAudiosToSnap(w.refAudios) },
 ]
 
@@ -199,7 +203,9 @@ export function snapshotToWorkspace(snap, { newId } = {}) {
   // edit of the entry's description can't leave a stale copy behind. Multi-frame
   // and reference-mode captions cover several images and are never attached.
   const cap = typeof snap.caption === 'string' ? snap.caption.trim() : ''
-  if (cap && out.firstImg && (!snap.frameMode || snap.frameMode === 'single' || snap.frameMode === 'last')) {
+  // With additional references on a still-image entry the caption is a combined
+  // block covering several images, so it belongs to none of them.
+  if (cap && out.firstImg && !out.refImages?.length && (!snap.frameMode || snap.frameMode === 'single' || snap.frameMode === 'last')) {
     out.firstImg = { ...out.firstImg, captions: { [normalizeRole(out.firstImg.role)]: cap } }
   }
   return out
@@ -215,8 +221,12 @@ const IMAGE_HUNGRY_MODES = new Set(['firstlast', 'firstmidlast', 'last', 'ref'])
 
 // Does the workspace hold the input image(s) this target/mode needs? Also the
 // answer to "will this run use the vision model".
+// The images a still-image generation reads, in order: the primary Reference
+// Image card, then any additional references (each with its own role).
+export const stillImageRefs = (w) => [w.firstImg, ...(w.refImages || [])].filter(Boolean)
+
 export function hasRequiredImages(w) {
-  if (w.targetType === 'image') return !!w.firstImg
+  if (w.targetType === 'image') return stillImageRefs(w).length > 0
   switch (w.frameMode) {
     case 'firstlast':    return !!(w.firstImg && w.lastImg)
     case 'firstmidlast': return !!(w.firstImg && w.midImg && w.lastImg)
@@ -230,7 +240,7 @@ export function hasRequiredImages(w) {
 // other case needs either a typed scene or one image to describe.
 export function canGenerate(w) {
   if (w.targetType !== 'image' && IMAGE_HUNGRY_MODES.has(w.frameMode)) return hasRequiredImages(w)
-  return !!(w.scene || '').trim() || !!w.firstImg
+  return !!(w.scene || '').trim() || (w.targetType === 'image' ? stillImageRefs(w).length > 0 : !!w.firstImg)
 }
 
 // No typed scene, but images to read → the writer proposes the scene from them.

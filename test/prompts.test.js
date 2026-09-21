@@ -224,6 +224,34 @@ describe('buildWriterUserText — the generate-mode user message', () => {
       expect(out).toContain('do NOT describe anything else from the reference image')
       expect(out).toContain(img.frameDescription)
     })
+    describe('several references', () => {
+      const block = 'Image 1 — role: Pose / Composition: Stands, arms crossed.\n\nImage 2 — role: Style: Muted teal palette, film grain.'
+      const multi = { ...img, frameDescription: block, refRoles: ['pose_composition', 'style'] }
+      it('lists each role once with what it may contribute, then the numbered block; the typed text still leads', () => {
+        const out = buildWriterUserText(multi)
+        expect(out.indexOf('Image description (this is the brief')).toBe(0)
+        expect(out).toContain('- Pose / Composition: ONLY the body pose and the framing only.')
+        expect(out).toContain('- Style: ONLY the palette, light quality, medium and overall aesthetic.')
+        expect(out).toContain(`Reference images:\n${block}`)
+        expect(out.indexOf(base.scene)).toBeLessThan(out.indexOf('Reference images:'))
+      })
+      it('a repeated role is spelled out once', () => {
+        const out = buildWriterUserText({ ...multi, refRoles: ['subject_identity', 'subject_identity', 'style'] })
+        expect(out.match(/- Subject \/ Identity:/g)).toHaveLength(1)
+      })
+      it('with no typed description it asks for ONE image invented around the references', () => {
+        const out = buildWriterUserText({ ...multi, scene: '' })
+        expect(out).toContain('build ONE image from the references')
+        expect(out).not.toContain('this is the brief')
+      })
+      it('a single reference ignores refRoles and keeps the single-reference wording', () => {
+        expect(buildWriterUserText({ ...img, refRole: 'pose_composition', refRoles: ['pose_composition'] }))
+          .toBe(buildWriterUserText({ ...img, refRole: 'pose_composition' }))
+      })
+      it('Adapt folds the numbered role lines into plain "Role: description" lines', () => {
+        expect(foldCaption(block, 'single')).toBe('Pose / Composition: Stands, arms crossed.\n\nStyle: Muted teal palette, film grain.')
+      })
+    })
     it('every non-General role names its own contribution', () => {
       for (const [role, phrase] of [['wardrobe', 'garments only'], ['environment', 'location/setting'], ['style', 'palette, light quality'], ['subject_identity', 'appearance'], ['product_object', 'geometry']]) {
         expect(buildWriterUserText({ ...img, refRole: role })).toContain(phrase)

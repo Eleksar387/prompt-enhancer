@@ -66,6 +66,8 @@ const FL_RELABEL = [
 
 // Strip caption scaffolding so the description reads as plain visual detail the
 // writer should fold into a text-only prompt.
+const STILL_REF_LINE_RE = /^Image\s+\d+\s+—\s+role:\s+(.+?):\s*(.*)$/
+
 export function foldCaption(caption, sourceFrameMode, { hasDialogue = false } = {}) {
   const text = (caption || '').trim()
   if (!text) return ''
@@ -101,7 +103,15 @@ export function foldCaption(caption, sourceFrameMode, { hasDialogue = false } = 
     }).join('\n')
   }
 
-  return text
+  // A still-image generation with several role-tagged references stores its
+  // caption as "Image N — role: <Role>: <description>" lines (captionImages()).
+  // A text-only prompt has no numbered images to point at — keep the role, drop
+  // the numbering scaffolding.
+  if (!text.split('\n').some(l => STILL_REF_LINE_RE.test(l.trimEnd()))) return text
+  return text.split('\n').map(raw => {
+    const m = raw.trimEnd().match(STILL_REF_LINE_RE)
+    return m ? `${m[1]}: ${m[2]}` : raw.trimEnd()
+  }).join('\n')
 }
 
 // ── per-reference caption reading (History gallery) ─────────────────────────
@@ -232,6 +242,27 @@ export function h3ModeFor(frameMode, hasImg) {
     : hasImg ? 'I2VA' : 'T2VA'
 }
 
+// Still-image message for two or more role-tagged reference images. Each role
+// is spelled out once (what it may contribute), the numbered block follows, and
+// the typed description — when there is one — still leads.
+function buildMultiRefImageText({ scene, frameDescription, refRoles, stylePart, lengthPart }) {
+  const seen = new Set()
+  const scope = []
+  for (const id of refRoles.map(normalizeRole)) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const def = imageRoleDef(id)
+    scope.push(id === ROLE_GENERAL
+      ? `- ${def.label}: supporting details only — the subject's appearance, the setting and the pose, and only where nothing else covers them; never its lighting, palette, style or wording.`
+      : `- ${def.label}: ONLY ${def.imageUse}.`)
+  }
+  const rules = `Each reference image below is tagged with a ROLE and contributes ONLY what that role allows — never describe or copy anything else from it:\n${scope.join('\n')}\nSeveral references may share a role (two Subjects, say) — each then contributes that same aspect. Merge everything into ONE coherent image, not a collage; where two references overlap, the role decides which one speaks to an aspect, not the order they are listed in.`
+  if (scene.trim()) {
+    return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\n${rules}\n\nReference images:\n${frameDescription}${stylePart}${lengthPart}`
+  }
+  return `${rules}\n\nReference images:\n${frameDescription}\n\nNo image description provided — build ONE image from the references above: each supplies only what its role allows, and you invent whatever none of them covers (a Style and a Pose reference, for example, leave the subject and setting open — choose fitting ones).${stylePart}${lengthPart}`
+}
+
 // The writer's user message for a fresh generation, moved here verbatim from
 // runWriter() so it sits beside buildAdaptUserText — the two are the same job for
 // the same targets, and keeping them in one file is what makes their overlap
@@ -247,6 +278,11 @@ export function buildWriterUserText({
   ratio = null, soundscape = '', music = '',
   stylePart = '', lengthPart = '',
   refRole = null,
+  // The roles of the reference images behind `frameDescription`, in order —
+  // only consulted when there are two or more (then frameDescription is the
+  // "Image N — role: …" block captionImages() builds); a single image keeps
+  // the single-`refRole` wording above, unchanged.
+  refRoles = null,
 }) {
   if (caps(target).structured) {
     const mode = h3ModeFor(frameMode, hasImg)
@@ -282,6 +318,9 @@ export function buildWriterUserText({
     // A role other than General narrows what the reference may contribute — the
     // description was already written under that role, and the message says so,
     // so a Pose reference adds a pose and does not re-describe the whole image.
+    if (frameDescription && Array.isArray(refRoles) && refRoles.length > 1) {
+      return buildMultiRefImageText({ scene, frameDescription, refRoles, stylePart, lengthPart })
+    }
     const roleDef = frameDescription && refRole && normalizeRole(refRole) !== ROLE_GENERAL ? imageRoleDef(refRole) : null
     if (roleDef && scene.trim()) {
       return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\nReference image — ROLE: ${roleDef.label}. It contributes ONLY ${roleDef.imageUse}, and the description below is already limited to that. Work it into the prompt; do NOT describe anything else from the reference image (its other subject matter, clothing, background, lighting or style) — the image description above supplies all of that:\n${frameDescription}${stylePart}${lengthPart}`

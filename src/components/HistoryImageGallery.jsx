@@ -124,7 +124,10 @@ export function collectImages(history, imageMeta = {}) {
   for (const h of history || []) {
     const ts = h.ts || 0
     const ctx = { caption: h.caption || '', frameMode: h.frameMode, entryId: h.id || null }
-    consider(h.firstImg, ts, 'first', ctx)
+    // A still-image entry with additional references has ONE combined caption
+    // covering all of them — it is not the primary image's description.
+    const combined = h.frameMode !== 'ref' && Array.isArray(h.refImages) && h.refImages.length > 0
+    consider(h.firstImg, ts, 'first', combined ? { ...ctx, caption: '' } : ctx)
     consider(h.midImg, ts, 'mid', ctx)
     consider(h.lastImg, ts, 'last', ctx)
     if (Array.isArray(h.refImages)) h.refImages.forEach((im, idx) => consider(im, ts, 'ref', { ...ctx, refIndex: idx }))
