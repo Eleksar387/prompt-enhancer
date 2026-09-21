@@ -104,6 +104,11 @@ separately). Return only the prompt paragraph.`;
 export const buildLtxSystemPrompt = buildLtx(LTX_INTRO, LTX_MODE_FIRSTLAST, LTX_MODE_FIRSTMIDLAST, LTX_REST)
 export const SYSTEM_PROMPT_LTX = [LTX_INTRO, LTX_MODE_FIRSTLAST, LTX_MODE_FIRSTMIDLAST, LTX_REST].join('\n\n');
 
+const REFERENCE_RULE_IMAGE = `If a reference-image description is provided, the user's own image description is the LEAD: it decides the
+scene, mood, lighting, palette and style of the prompt. The reference supplies only the subject's appearance, the
+location/setting and the pose/composition, to fill in what the user's description leaves open or points at. Never
+reproduce the reference description wholesale; where the two conflict, follow the user's description.`;
+
 export const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
 
 ABOUT FLUX.dev
@@ -133,8 +138,7 @@ physics unless surrealism is requested.
 
 STYLE / MOOD: if specified, let it drive medium, palette, lighting, feeling. If none, fit the subject.
 
-REFERENCE: if a reference-image description is provided, use it so the result resembles that
-image (subject, composition, lighting, palette, style) — unless a variation is asked.
+REFERENCE: ${REFERENCE_RULE_IMAGE}
 
 OUTPUT: always English. Return only the prompt. No preamble, no negative prompt.`;
 
@@ -217,8 +221,7 @@ requested.
 
 STYLE / MOOD: if specified, let it drive medium, palette, lighting, feeling. If none, fit the subject.
 
-REFERENCE: if a reference-image description is provided, use it so the result resembles that image
-(subject, composition, lighting, palette, style) — unless a variation is asked.
+REFERENCE: ${REFERENCE_RULE_IMAGE}
 
 OUTPUT: always English. Return only the prompt. No preamble, no negative prompt.`;
 
@@ -261,8 +264,7 @@ leaves room for the model's own variety is a valid result. Match the level of de
 the input; do not feel obligated to max it out.
 
 REFERENCE
-If a reference-image description is provided, use it so the result resembles that image
-(subject, composition, lighting, palette, style) — unless a variation is asked.
+${REFERENCE_RULE_IMAGE}
 
 OUTPUT: always English, even if the input is another language. Return exactly one prompt
 paragraph. No headers, bullets, JSON, negative prompts, or explanation.`;
@@ -291,8 +293,7 @@ PROCESS
 7. Depict people with dignity; assume ordinary, non-explicit clothing and framing.
 
 REFERENCE
-If a reference-image description is provided, use it so the result resembles that image
-(subject, composition, lighting, palette, style) — unless a variation is asked.
+${REFERENCE_RULE_IMAGE}
 
 OUTPUT: always English, even if the input is another language. Return exactly one prompt
 paragraph. No headers, bullets, JSON, negative prompts, or explanation.`;
@@ -324,8 +325,7 @@ PROCESS
 7. Depict people with dignity; assume ordinary, non-explicit clothing and framing.
 
 REFERENCE
-If a reference-image description is provided, use it so the result resembles that image
-(subject, composition, lighting, palette, style) — unless a variation is asked.
+${REFERENCE_RULE_IMAGE}
 
 OUTPUT: always English, even if the input is another language (keep any requested on-image
 text verbatim). Return exactly one prompt paragraph. No headers, bullets, JSON, negative

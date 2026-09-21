@@ -203,6 +203,17 @@ describe('buildWriterUserText — the generate-mode user message', () => {
     it(name, () => { expect(buildWriterUserText(args)).toMatchSnapshot() })
   }
 
+  it('image target with caption + scene: typed text is the brief, reference is supporting details after it', () => {
+    const out = buildWriterUserText({ ...base, target: 'flux2klein', targetType: 'image', hasImg: true, frameDescription: CAPTION })
+    const briefAt = out.indexOf('Image description (this is the brief')
+    const refAt = out.indexOf('Reference image — supporting details only')
+    expect(briefAt).toBe(0)
+    expect(refAt).toBeGreaterThan(briefAt)
+    expect(out.indexOf(base.scene)).toBeLessThan(refAt)
+    expect(out.indexOf(CAPTION)).toBeGreaterThan(refAt)
+    expect(out).not.toContain('BASE')
+  })
+
   it('puts the ratio line in only when the ratio is actually chosen', () => {
     // T2VA and Ref2VA name a concrete ratio; every image-driven mode inherits it.
     expect(buildWriterUserText(h3)).toContain(MINIMAX_H3_RESOLUTIONS[1].label)

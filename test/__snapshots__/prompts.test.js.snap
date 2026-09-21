@@ -783,7 +783,7 @@ exports[`buildWriterUserText — the generate-mode user message > image · capti
 "Reference image description:
 A woman in a red coat stands at a rain-streaked window.
 
-No extra description — base the FLUX prompt on the reference description above.
+No extra description — base the prompt on the reference description above.
 
 [STYLE PART]
 
@@ -799,11 +799,11 @@ exports[`buildWriterUserText — the generate-mode user message > image · nothi
 `;
 
 exports[`buildWriterUserText — the generate-mode user message > image · with reference caption 1`] = `
-"Reference image description:
-A woman in a red coat stands at a rain-streaked window.
-
-Image description / subject:
+"Image description (this is the brief — the final prompt must be written from THIS):
 She turns away from the window.
+
+Reference image — supporting details only. Take from it ONLY the subject's appearance, the location/setting and the pose/composition, and only where the description above is silent or points at the reference. Do not copy its lighting, palette, style or wording; do not transcribe it; where it conflicts with the description, the description wins:
+A woman in a red coat stands at a rain-streaked window.
 
 [STYLE PART]
 
@@ -1690,31 +1690,31 @@ exports[`system prompt selection > resolves one prompt per target × frameMode 1
   "dramabox · last": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
   "dramabox · ref": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
   "dramabox · single": "6586 chars · sha256:649244c4c1c1d5c5 · "You are a prompt-writing assistant for DramaBox (Expressive TTS with Voice Cloni"",
-  "flux · firstlast": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
-  "flux · firstmidlast": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
-  "flux · last": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
-  "flux · ref": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
-  "flux · single": "2076 chars · sha256:91606cd53087e6db · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
-  "flux2klein · firstlast": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
-  "flux2klein · firstmidlast": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
-  "flux2klein · last": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
-  "flux2klein · ref": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
-  "flux2klein · single": "2643 chars · sha256:d7364530c9e552bd · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
-  "grokimage · firstlast": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
-  "grokimage · firstmidlast": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
-  "grokimage · last": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
-  "grokimage · ref": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
-  "grokimage · single": "1893 chars · sha256:42f4710de92260ba · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "flux · firstlast": "2345 chars · sha256:b9296ee3c7e06044 · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · firstmidlast": "2345 chars · sha256:b9296ee3c7e06044 · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · last": "2345 chars · sha256:b9296ee3c7e06044 · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · ref": "2345 chars · sha256:b9296ee3c7e06044 · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux · single": "2345 chars · sha256:b9296ee3c7e06044 · "You are rewriting a user request into a FLUX.dev image-generation prompt.\\n\\nABOUT"",
+  "flux2klein · firstlast": "2912 chars · sha256:01f7f25f88ba9392 · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · firstmidlast": "2912 chars · sha256:01f7f25f88ba9392 · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · last": "2912 chars · sha256:01f7f25f88ba9392 · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · ref": "2912 chars · sha256:01f7f25f88ba9392 · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "flux2klein · single": "2912 chars · sha256:01f7f25f88ba9392 · "You are rewriting a user request into a FLUX.2 [klein] image-generation prompt.\\n"",
+  "grokimage · firstlast": "2162 chars · sha256:c4d4e943bc36a3f5 · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · firstmidlast": "2162 chars · sha256:c4d4e943bc36a3f5 · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · last": "2162 chars · sha256:c4d4e943bc36a3f5 · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · ref": "2162 chars · sha256:c4d4e943bc36a3f5 · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
+  "grokimage · single": "2162 chars · sha256:c4d4e943bc36a3f5 · "You are a prompt-enhancement assistant for xAI's Grok image model (grok-imagine-"",
   "kling · firstlast": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · firstmidlast": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · last": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · ref": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · single": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
-  "krea2turbo · firstlast": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · firstmidlast": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · last": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · ref": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · single": "2123 chars · sha256:f07d8f7cb883c4a3 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · firstlast": "2392 chars · sha256:0ba2af998c5359b2 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · firstmidlast": "2392 chars · sha256:0ba2af998c5359b2 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · last": "2392 chars · sha256:0ba2af998c5359b2 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · ref": "2392 chars · sha256:0ba2af998c5359b2 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · single": "2392 chars · sha256:0ba2af998c5359b2 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
   "ltx · firstlast": "5831 chars · sha256:00544c034131b263 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx · firstmidlast": "6059 chars · sha256:bc97c87f78981c12 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx · last": "5265 chars · sha256:f2322300ff54704e · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
@@ -1745,10 +1745,10 @@ exports[`system prompt selection > resolves one prompt per target × frameMode 1
   "threed · last": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
   "threed · ref": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
   "threed · single": "2626 chars · sha256:ea8f73eb2e5c2d95 · "You are converting a user request into a FLUX.dev text-to-image prompt optimized"",
-  "zimage · firstlast": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
-  "zimage · firstmidlast": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
-  "zimage · last": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
-  "zimage · ref": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
-  "zimage · single": "2179 chars · sha256:0224a96249f2483e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · firstlast": "2448 chars · sha256:a30b515462e3d37e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · firstmidlast": "2448 chars · sha256:a30b515462e3d37e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · last": "2448 chars · sha256:a30b515462e3d37e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · ref": "2448 chars · sha256:a30b515462e3d37e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
+  "zimage · single": "2448 chars · sha256:a30b515462e3d37e · "You are a prompt-enhancement assistant for the Z-Image Turbo model (Tongyi Lab)."",
 }
 `;

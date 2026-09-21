@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import HistoryImageGallery, { collectImages, libraryTiles, ImageInfoPanel } from '../src/components/HistoryImageGallery.jsx'
+import HistoryImageGallery, { collectImages, libraryTiles, ImageInfoPanel, reusableDescription } from '../src/components/HistoryImageGallery.jsx'
 import { ROLE_NONE } from '../src/constants.js'
 
 const REF_CAPTION_BLOCK = [
@@ -352,5 +352,37 @@ describe('HistoryImageGallery — library items (dropped in directly, not from h
     )
     expect(html).not.toContain('✎ Edit')
     expect(html).not.toContain('Describe with AI')
+  })
+})
+
+describe('HistoryImageGallery — reusable description for single-image targets', () => {
+  const single = (caption, frameMode = 'single') => ({
+    id: 's1', ts: 2000, frameMode, caption,
+    firstImg: { url: '/api/blob/s', fileName: 's.jpg', hash: 'hash-s' },
+    ...(frameMode === 'firstlast' ? { lastImg: { url: '/api/blob/t', fileName: 't.jpg', hash: 'hash-t' } } : {}),
+  })
+
+  it('a single-frame image hands its stored (possibly hand-edited) description to the pick payload', () => {
+    const [img] = collectImages([single('  A red fox in snow.  ')]).images
+    expect(reusableDescription(img)).toBe('A red fox in snow.')
+  })
+
+  it('an image with no stored description reuses nothing (so vision still runs)', () => {
+    const [img] = collectImages([single('')]).images
+    expect(reusableDescription(img)).toBe('')
+  })
+
+  it('a multi-frame caption covers several images and is never reusable for one', () => {
+    const { images } = collectImages([single('FIRST FRAME: a fox. LAST FRAME: a den.', 'firstlast')])
+    expect(images.length).toBe(2)
+    for (const img of images) expect(reusableDescription(img)).toBe('')
+  })
+
+  it('a reference image reuses its own-role caption', () => {
+    const h = entry(REF_CAPTION_BLOCK, [
+      { url: '/api/blob/a', fileName: 'a.jpg', hash: 'hash-a', role: 'subject_identity', captions: { subject_identity: 'A woman, dark hair.' } },
+    ])
+    const [img] = collectImages([h]).images
+    expect(reusableDescription(img)).toBe('A woman, dark hair.')
   })
 })

@@ -188,6 +188,17 @@ export function snapshotToWorkspace(snap, { newId } = {}) {
     // existed never puts null into a controlled input.
     out[f.state] = (raw == null && 'fallback' in f) ? f.fallback : raw
   }
+  // A single-image snapshot's own `caption` IS that image's description (a
+  // history entry's vision text, possibly hand-edited since; a queued item's
+  // "Reuse image" description). Attach it to the loaded image so captionImages()
+  // reuses it instead of asking the vision model again. Read fresh from the
+  // snapshot every time — never stored on the image record itself, so a later
+  // edit of the entry's description can't leave a stale copy behind. Multi-frame
+  // and reference-mode captions cover several images and are never attached.
+  const cap = typeof snap.caption === 'string' ? snap.caption.trim() : ''
+  if (cap && out.firstImg && (!snap.frameMode || snap.frameMode === 'single' || snap.frameMode === 'last')) {
+    out.firstImg = { ...out.firstImg, caption: cap }
+  }
   return out
 }
 

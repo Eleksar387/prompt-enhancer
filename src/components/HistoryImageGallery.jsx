@@ -22,6 +22,17 @@ const captionScope = (frameMode, slot) => {
   return 'single'
 }
 
+// The description a picked/dragged tile carries to a single-image target
+// (FLUX.2 Klein etc.), so that target reuses it instead of re-describing the
+// image with the vision model. Sent as `description` — a separate field from
+// `caption`, which stays ref-slot-only (a frame/render text must never be read
+// as a reference-slot caption). A multi-frame caption ("FIRST FRAME … LAST
+// FRAME …") covers several images, so it is never reusable for one.
+export const reusableDescription = (img) => {
+  if (img.captionScope === 'multi') return ''
+  return (img.caption || '').trim()
+}
+
 // Walk every history entry and collect the unique images it stored — both the
 // input images (first/mid/last/ref frames) and any Grok-rendered output images
 // (`outputs[].images[]`, which key their bytes under `b64`). Returns
@@ -435,6 +446,7 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
       role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
       note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
       captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
+      description: reusableDescription(img),
     })
   } : undefined
 
@@ -547,6 +559,7 @@ function HistoryImageGallery({
       role: (img.slot === 'ref' || img.slot === 'library') ? img.role : null,
       note: (img.slot === 'ref' || img.slot === 'library') ? img.note : '',
       captions: (img.slot === 'ref' || img.slot === 'library') ? img.captions : {},
+      description: reusableDescription(img),
     })
     try {
       e.dataTransfer.setData(DRAG_MIME, img.fileName || '1')

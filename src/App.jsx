@@ -932,7 +932,12 @@ export default function App() {
     if (!canGenerateFrom(workspace)) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
     if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
-    const snapshot = buildSnapshot(null, hasImg, outputCount)
+    // A description that came with the loaded image ("Reuse image") rides in the
+    // snapshot's caption slot so the queued run reuses it instead of calling the
+    // vision model (see snapshotToWorkspace). Image targets only — the only
+    // place captionImages() reads it.
+    const knownCaption = t.type === 'image' ? (imgs.firstImg?.caption || '') : ''
+    const snapshot = buildSnapshot(knownCaption || null, hasImg, outputCount)
     queue.add({ id: generateId(), createdAt: Date.now(), status: 'queued', error: null, attempts: 0, snapshot })
   }
 
@@ -1176,12 +1181,17 @@ export default function App() {
       return { text, stats }
     }
     let system, content
-    const sceneT = (s.scene || '').trim()
     if (s.targetType === 'image') {
+      // A description that came with the image from "Reuse image" (possibly
+      // hand-edited there) is used as-is — no vision request at all.
+      const known = (s.firstImg.caption || '').trim()
+      if (known) return { text: known, stats: { fromCache: 0, fresh: 0, reused: 1 } }
       system = s.visionPromptSingle
+      // Deliberately scene-free: the typed text is applied as edits by the
+      // writer, so the caption must describe what the image actually shows.
       content = [
         { type: 'image', source: { type: 'base64', media_type: s.firstImg.mediaType, data: s.firstImg.base64 } },
-        { type: 'text', text: sceneT ? `The user's intended subject/scene: ${sceneT}\nDescribe the reference image in precise, prompt-ready language.` : 'Describe this reference image in precise, prompt-ready language.' },
+        { type: 'text', text: 'Describe this reference image in precise, prompt-ready language.' },
       ]
     } else if (s.frameMode === 'firstmidlast') {
       system = VISION_PROMPT_LTX_FIRSTMIDLAST
@@ -2288,8 +2298,8 @@ export default function App() {
         <details style={{ marginTop: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px' }}>
           <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             👁 vision description{effectiveVision ? ` · ${effectiveVision}` : ''}
-            {visionStats && (visionStats.fromCache + visionStats.fresh > 0) && (
-              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.fromCache} cached, {visionStats.fresh} described</span>
+            {visionStats && (visionStats.fromCache + visionStats.fresh + (visionStats.reused || 0) > 0) && (
+              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.reused ? `reused from history` : `${visionStats.fromCache} cached, ${visionStats.fresh} described`}</span>
             )}
             {caption !== savedCaption && (
               <span style={{ color: 'var(--pe-accent-ink)', textTransform: 'none', letterSpacing: 0 }}> · edited</span>

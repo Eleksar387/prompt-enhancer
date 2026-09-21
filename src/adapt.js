@@ -274,10 +274,17 @@ export function buildWriterUserText({
   }
 
   if (targetType === 'image') {
+    // With a reference image AND typed text, the typed text is the brief and
+    // the image is only a source of subject / location / pose details — not a
+    // template to reproduce (treating it as the base made the writer just
+    // rewrite the vision description).
+    if (frameDescription && scene.trim()) {
+      return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\nReference image — supporting details only. Take from it ONLY the subject's appearance, the location/setting and the pose/composition, and only where the description above is silent or points at the reference. Do not copy its lighting, palette, style or wording; do not transcribe it; where it conflicts with the description, the description wins:\n${frameDescription}${stylePart}${lengthPart}`
+    }
     const ref = frameDescription ? `Reference image description:\n${frameDescription}\n\n` : ''
     const scenePart = scene.trim()
       ? `Image description / subject:\n${scene}`
-      : (frameDescription ? 'No extra description — base the FLUX prompt on the reference description above.' : 'No description provided.')
+      : (frameDescription ? 'No extra description — base the prompt on the reference description above.' : 'No description provided.')
     return `${ref}${scenePart}${stylePart}${lengthPart}`
   }
 

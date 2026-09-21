@@ -48,6 +48,10 @@ function ImagePanel({ label, hint, onChange, presets, showTwoStage, presetNote, 
         previewUrl: dataUrl, originalUrl: dataUrl,
         nativeW: img.naturalWidth, nativeH: img.naturalHeight,
         fileName: d.fileName || 'from-history.jpg', hash: d.hash || imageHash(d.base64),
+        // Stored description from "Reuse image" — captionImages() uses it in
+        // place of a fresh vision call (image targets). Session-only: never
+        // written to a history/queue snapshot (imgToSnap drops it).
+        caption: (d.description || '').trim(),
       }
       setImage(obj)
       setTargetRes(recommendRes(img.naturalWidth, img.naturalHeight, presets))

@@ -410,3 +410,46 @@ describe('isProposeMode', () => {
     expect(isProposeMode(w({ firstImg: img(), scene: '  \n ' }))).toBe(true)
   })
 })
+
+// A single-image snapshot's caption is that image's description; restore and a
+// queued run both go through snapshotToWorkspace, so attaching it here is what
+// lets captionImages() skip the vision call for both.
+describe('snapshotToWorkspace — reusing the saved description for a single image', () => {
+  const snapOf = (over) => ({ ...buildSnapshot(fluxWorkspace(), meta), ...over })
+
+  it('attaches the snapshot caption to the loaded image (trimmed)', () => {
+    const back = snapshotToWorkspace(snapOf({ frameMode: 'single', caption: '  A red fox in snow.  ' }), { newId })
+    expect(back.firstImg.caption).toBe('A red fox in snow.')
+  })
+
+  it('attaches nothing when there is no caption, or no image to attach it to', () => {
+    expect(snapshotToWorkspace(snapOf({ frameMode: 'single', caption: null }), { newId }).firstImg.caption).toBeUndefined()
+    expect(snapshotToWorkspace({ frameMode: 'single', caption: 'A fox.' }, { newId }).firstImg).toBeNull()
+  })
+
+  it('never attaches a multi-frame or reference-mode caption to one image', () => {
+    for (const frameMode of ['firstlast', 'firstmidlast', 'ref']) {
+      expect(snapshotToWorkspace(snapOf({ frameMode, caption: 'FIRST FRAME: … LAST FRAME: …' }), { newId }).firstImg.caption).toBeUndefined()
+    }
+  })
+
+  it('is read from the snapshot each time — imgToSnap never persists it onto the image record', () => {
+    expect(imgToSnap({ ...img(), caption: 'A fox.' })).not.toHaveProperty('caption')
+  })
+})
+
+// The reuse-the-saved-description path is gated on targetType === 'image', not
+// on a target id — this pins that every still-image workflow really takes it.
+describe('description reuse covers every still-image target', () => {
+  const IMAGE_TARGETS = ['flux', 'flux2klein', 'krea2turbo', 'zimage', 'grokimage', 'sdxl', 'threed']
+  for (const id of IMAGE_TARGETS) {
+    it(`${id}: image-type target; restore/queue attach the saved description to its one image`, () => {
+      expect(TARGETS[id].type).toBe('image')
+      const w = { ...fluxWorkspace(), target: id, targetType: TARGETS[id].type, show: TARGETS[id].show }
+      expect(hasRequiredImages(w)).toBe(true)
+      const snap = { ...buildSnapshot(w, meta), caption: 'A knight in dented plate armor, sword raised.' }
+      const back = snapshotToWorkspace(snap, { newId })
+      expect(back.firstImg.caption).toBe('A knight in dented plate armor, sword raised.')
+    })
+  }
+})
