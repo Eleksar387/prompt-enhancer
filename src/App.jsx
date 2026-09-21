@@ -12,7 +12,7 @@ import {
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isCloud } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, isAnthropic, isGrok, isOpenRouter, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
   listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
@@ -26,6 +26,7 @@ import {
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
 import ConfigBar from './components/ConfigBar'
+import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
 import HistoryImageGallery from './components/HistoryImageGallery'
 import ScriptwriterPanel from './components/ScriptwriterPanel'
@@ -1856,8 +1857,8 @@ export default function App() {
             Writer model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· builds the prompt</span>
           </label>
           {models.length > 0
-            ? <select style={selStyle} value={writerModel} onChange={e => setWriterModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
-            : <input style={selStyle} value={writerManual} onChange={e => setWriterManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : 'mistral-nemo'} spellCheck={false} />}
+            ? <ModelSelect models={models} value={writerModel} onChange={e => setWriterModel(e.target.value)} />
+            : <input style={selStyle} value={writerManual} onChange={e => setWriterManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
@@ -1865,8 +1866,8 @@ export default function App() {
               Vision model <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}>· reads image inputs</span>
             </label>
             {models.length > 0
-              ? <select style={selStyle} value={visionModel} onChange={e => setVisionModel(e.target.value)}>{models.map(m => <option key={m} value={m}>{m}</option>)}</select>
-              : <input style={selStyle} value={visionManual} onChange={e => setVisionManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : 'qwen2.5vl:7b'} spellCheck={false} />}
+              ? <ModelSelect models={models} value={visionModel} onChange={e => setVisionModel(e.target.value)} />
+              : <input style={selStyle} value={visionManual} onChange={e => setVisionManual(e.target.value)} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
           </div>
         )}
       </div>

@@ -7,6 +7,7 @@ import { callOllama } from '../api'
 import { ADAPT_TARGETS, foldCaption, buildStylePart, buildAdaptUserText } from '../adapt'
 import { withLoraTriggers } from '../loras'
 import { buildSnapshot } from '../workspace'
+import ModelSelect from './ModelSelect'
 
 const lbl = { fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }
 const sub = { color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }
@@ -172,10 +173,7 @@ export default function AdaptPanel({
           <label style={lbl}>AI model <span style={sub}>· writes the adapted prompt</span></label>
           <div style={{ marginBottom: 14 }}>
             {models.length > 0
-              ? <select style={{ ...selStyle, maxWidth: 320 }} value={adaptModel} onChange={e => setAdaptModel(e.target.value)}>
-                  {!models.includes(adaptModel) && adaptModel && <option value={adaptModel}>{adaptModel}</option>}
-                  {models.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
+              ? <ModelSelect models={models} value={adaptModel} onChange={e => setAdaptModel(e.target.value)} style={{ maxWidth: 320 }} />
               : <input style={{ ...selStyle, maxWidth: 320 }} value={adaptModelManual} onChange={e => setAdaptModelManual(e.target.value)} spellCheck={false} />}
           </div>
 

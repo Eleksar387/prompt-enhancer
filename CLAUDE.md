@@ -19,7 +19,7 @@ History, the vision-caption cache, and the project list persist in a **local Nod
 
 ## Backend configuration
 
-The app supports three backends, configured via `.env` or the ⚙ Backend panel in the UI:
+The app supports four backends, configured via `.env` or the ⚙ Backend panel in the UI:
 
 **Anthropic Claude API** (recommended — set in `.env`):
 ```
@@ -35,9 +35,17 @@ An `xai-` key automatically sets the base URL to `https://api.x.ai/v1`. xAI's en
 
 **Checking your credit balance.** There is no in-app credit/budget readout, by design. The xAI *inference* API (`api.x.ai`, the `xai-` key) exposes no balance endpoint — `GET /v1/api-key` returns only key metadata, and the `usage` object on responses is token counts, not dollars. The prepaid balance lives only on xAI's separate **Management API** (`GET management-api.x.ai/v1/billing/teams/{teamId}/prepaid/balance`), which needs a distinct *management* key plus team ID and is not CORS-accessible from the browser. Check remaining credits in the xAI Console instead: **console.x.ai → Billing → API spend management**.
 
+**OpenRouter**:
+```
+VITE_API_KEY=sk-or-…
+```
+An `sk-or-` key automatically sets the base URL to `https://openrouter.ai/api/v1`. OpenRouter is OpenAI-compatible too, so — like Grok — it needs no special browser headers, same `Authorization: Bearer <key>` path. Model ids are provider-prefixed (`anthropic/claude-sonnet-4-6`, `openai/gpt-4o`, `google/gemini-2.5-flash`, `x-ai/grok-4`, …); `pickWriter`/`pickVision` (`src/api.js`) match past that prefix (`(^|\/)grok-4` etc.), and `modelProvider()` (`src/history.js`) falls back to labeling any `/`-containing model id "OpenRouter" for the History filter, since an Ollama tag never contains a slash. OpenRouter has no image/video render endpoints in this app — the 🎨/🎬 Render buttons stay gated on `isGrok(cfg.base)` / a Gemini key, unaffected by this backend.
+
 **Ollama (local)**: `OLLAMA_ORIGINS=*` must be set before starting Ollama. Default base URL is `http://localhost:11434/v1`.
 
 **Gemini image rendering (optional, any backend)**: set a `cfg.geminiKey` (an `AIza…` key) in the ⚙ Backend panel — *not* via `.env`. This is decoupled from the backend/base URL: it only powers the 🎨 Render button (text-to-image + image editing via `generateImagesGemini`, model `cfg.geminiImageModel`, default `gemini-2.5-flash-image`). The key is sent only to `generativelanguage.googleapis.com` with an `x-goog-api-key` header (CORS-allow-listed there, so it works from the browser).
+
+**One key per provider.** `cfg.apiKey` is the active key everything reads, but `ConfigBar` also keeps `cfg.apiKeys` (`{ anthropic, grok, openrouter, other }`, slot from `providerOf(cfg.base)` in `src/api.js`): a provider preset button stashes the current key under the provider being left and loads the saved one for the target, and typing in the key box writes both. Without this, switching presets left the previous provider's key in place and auth failed. Model lists (Writer/Vision in `App.jsx`, `AdaptPanel`) render through `src/components/ModelSelect.jsx`, a `<select>` with a substring filter box once there are more than 8 models.
 
 `.env` values override localStorage on every page load. `VITE_API_BASE` can override the base URL explicitly. The `.env` file is gitignored.
 
@@ -48,7 +56,7 @@ Anthropic's API requires three headers for browser (CORS) access, sent automatic
 - `anthropic-version: 2023-06-01`
 - `anthropic-dangerous-direct-browser-access: true`
 
-Grok (xAI) and Ollama both use `Authorization: Bearer <key>`. The `authHeaders(cfg)` function in `api.js` selects the right set based on `isAnthropic(cfg.base)`. `isGrok(cfg.base)` (base contains `api.x.ai`) is used for UI labeling/placeholders and to gate provider-specific request quirks. Do **not** add `format: 'json'` to requests when using Anthropic or Grok — it is Ollama-specific and is already gated in `callOllama` (both cloud providers are excluded via the internal `isCloud` check).
+Grok (xAI), OpenRouter, and Ollama all use `Authorization: Bearer <key>`. The `authHeaders(cfg)` function in `api.js` selects the right set based on `isAnthropic(cfg.base)`. `isGrok(cfg.base)` (base contains `api.x.ai`) and `isOpenRouter(cfg.base)` (base contains `openrouter.ai`) are used for UI labeling/placeholders and to gate provider-specific request quirks/features. Do **not** add `format: 'json'` to requests when using Anthropic, Grok, or OpenRouter — it is Ollama-specific and is already gated in `callOllama` (all three cloud providers are excluded via the internal `isCloud` check).
 
 ## Architecture
 

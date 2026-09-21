@@ -14,6 +14,7 @@ export function loadCfg() {
   const derivedBase = envBase
     || (envKey.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : '')
     || (envKey.startsWith('xai-')    ? 'https://api.x.ai/v1'          : '')
+    || (envKey.startsWith('sk-or-')  ? 'https://openrouter.ai/api/v1' : '')
   return {
     ...cfgStore.load(),
     ...(envKey      ? { apiKey: envKey }      : {}),
@@ -34,8 +35,12 @@ function toOpenAIContent(userContent) {
 
 export const isAnthropic = (base) => (base || '').includes('anthropic.com')
 export const isGrok = (base) => (base || '').includes('api.x.ai')
+export const isOpenRouter = (base) => (base || '').includes('openrouter.ai')
+// Which provider slot a base URL belongs to — keys the per-provider API key store (cfg.apiKeys).
+export const providerOf = (base) =>
+  isAnthropic(base) ? 'anthropic' : isGrok(base) ? 'grok' : isOpenRouter(base) ? 'openrouter' : 'other'
 // Any hosted provider — as opposed to a local/self-hosted Ollama-compatible server.
-export const isCloud = (base) => isAnthropic(base) || isGrok(base)
+export const isCloud = (base) => isAnthropic(base) || isGrok(base) || isOpenRouter(base)
 
 export function authHeaders(cfg) {
   if (!cfg.apiKey) return {}
@@ -46,7 +51,7 @@ export function authHeaders(cfg) {
       'anthropic-dangerous-direct-browser-access': 'true',
     }
   }
-  // Grok (xAI) and Ollama both speak plain OpenAI-style bearer auth.
+  // Grok (xAI), OpenRouter, and Ollama all speak plain OpenAI-style bearer auth.
   return { 'Authorization': `Bearer ${cfg.apiKey}` }
 }
 
@@ -79,7 +84,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   try {
     res = await doFetch(true, baseMaxTokens)
   } catch (e) {
-    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : base
+    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : isOpenRouter(cfg.base) ? 'openrouter.ai' : base
     throw new Error(`Network error reaching ${label}. ${isCloud(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
   }
   // Some newer Claude models reject a custom temperature outright; retry once without it.
@@ -347,13 +352,15 @@ export async function fetchModels(cfg) {
   return (data.data || []).map(m => m.id).filter(Boolean)
 }
 
+// Anchored to start-of-string OR right after a provider-prefix slash, so these also match
+// OpenRouter's `<provider>/<model>` ids (e.g. `x-ai/grok-4`, `anthropic/claude-sonnet-4-6`).
 export const pickWriter = (ids) =>
   ids.find(id => /claude-sonnet/i.test(id))
   || ids.find(id => /claude-opus/i.test(id))
   || ids.find(id => /claude-haiku/i.test(id))
-  || ids.find(id => /^grok-4/i.test(id))
-  || ids.find(id => /^grok-3/i.test(id))
-  || ids.find(id => /^grok/i.test(id))
+  || ids.find(id => /(^|\/)grok-4/i.test(id))
+  || ids.find(id => /(^|\/)grok-3/i.test(id))
+  || ids.find(id => /(^|\/)grok/i.test(id))
   || ['mistral-nemo:latest', 'mistral-nemo'].find(p => ids.includes(p))
   || ids.find(id => !/embed|bge-m3|:vl|qwen.*vl|vision|llava|minicpm|image/i.test(id))
   || ids[0] || ''
@@ -361,7 +368,7 @@ export const pickWriter = (ids) =>
 export const pickVision = (ids) =>
   ids.find(id => /claude-sonnet/i.test(id))
   || ids.find(id => /claude-haiku/i.test(id))
-  || ids.find(id => /^grok-4/i.test(id))
+  || ids.find(id => /(^|\/)grok-4/i.test(id))
   || ids.find(id => /grok.*vision/i.test(id) && !/image/i.test(id))
   || ['qwen2.5vl:7b', 'qwen2.5vl'].find(p => ids.includes(p))
   || ids.find(id => /vl|vision|llava|minicpm|gemma3/i.test(id) && !/image/i.test(id))

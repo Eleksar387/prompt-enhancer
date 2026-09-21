@@ -1,9 +1,10 @@
 import { useState, memo } from 'react'
-import { isAnthropic, isGrok } from '../api'
+import { isAnthropic, isGrok, isOpenRouter, providerOf } from '../api'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 const GROK_BASE = 'https://api.x.ai/v1'
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
 
 function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
   const [open, setOpen] = useState(false)
@@ -26,11 +27,22 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
     fontSize: 13, cursor: 'pointer',
   })
 
+  // One API key field serves every provider, so switching presets used to leave the previous
+  // provider's key in place (an OpenRouter key sent to Claude/Grok = auth failure). Keep a key
+  // per provider in cfg.apiKeys and swap it in/out with the preset.
+  const switchProvider = (base) => {
+    const from = providerOf(cfg.base), to = providerOf(base)
+    const apiKeys = { ...(cfg.apiKeys || {}), ...(cfg.apiKey ? { [from]: cfg.apiKey } : {}) }
+    setCfg({ ...cfg, base, apiKeys, apiKey: from === to ? cfg.apiKey : (apiKeys[to] || '') })
+  }
+  const setKey = (apiKey) => setCfg({ ...cfg, apiKey, apiKeys: { ...(cfg.apiKeys || {}), [providerOf(cfg.base)]: apiKey } })
+
   const statusColor = modelStatus.ok ? 'var(--pe-ok)' : modelStatus.loading ? 'var(--pe-accent-ink)' : 'var(--pe-danger)'
   const anthropic = isAnthropic(cfg.base)
   const grok = isGrok(cfg.base)
-  const cloud = anthropic || grok
-  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : cfg.base
+  const openrouter = isOpenRouter(cfg.base)
+  const cloud = anthropic || grok || openrouter
+  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : openrouter ? 'OpenRouter' : cfg.base
 
   const statusText = modelStatus.loading
     ? 'connecting…'
@@ -58,14 +70,17 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
           <div>
             <label style={lbl}>Provider</label>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button style={presetBtn(!cloud)} onClick={() => setCfg({ ...cfg, base: OLLAMA_BASE })}>
+              <button style={presetBtn(!cloud)} onClick={() => switchProvider(OLLAMA_BASE)}>
                 Ollama (local)
               </button>
-              <button style={presetBtn(anthropic)} onClick={() => setCfg({ ...cfg, base: ANTHROPIC_BASE })}>
+              <button style={presetBtn(anthropic)} onClick={() => switchProvider(ANTHROPIC_BASE)}>
                 Claude API
               </button>
-              <button style={presetBtn(grok)} onClick={() => setCfg({ ...cfg, base: GROK_BASE })}>
+              <button style={presetBtn(grok)} onClick={() => switchProvider(GROK_BASE)}>
                 Grok API
+              </button>
+              <button style={presetBtn(openrouter)} onClick={() => switchProvider(OPENROUTER_BASE)}>
+                OpenRouter
               </button>
             </div>
           </div>
@@ -93,6 +108,15 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
                   Works with <span style={{ color: 'var(--pe-accent-ink)' }}>grok-4</span>,{' '}
                   <span style={{ color: 'var(--pe-accent-ink)' }}>grok-3</span>, etc.
                 </>
+              ) : openrouter ? (
+                <>
+                  OpenRouter's OpenAI-compatible endpoint — use your{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>OpenRouter API key</span> below.
+                  Model ids are provider-prefixed, e.g.{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>anthropic/claude-sonnet-4-6</span>,{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>openai/gpt-4o</span>,{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>google/gemini-2.5-flash</span>.
+                </>
               ) : (
                 <>
                   Ollama direct: <span style={{ color: 'var(--pe-accent-ink)' }}>{OLLAMA_BASE}</span> (needs{' '}
@@ -105,11 +129,11 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 220px' }}>
-              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : 'API key (Open WebUI / remote only)'}</label>
+              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : openrouter ? 'OpenRouter API key' : 'API key (Open WebUI / remote only)'}</label>
               <input
                 style={inputStyle} value={cfg.apiKey}
-                onChange={e => setCfg({ ...cfg, apiKey: e.target.value })}
-                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : 'leave blank for local Ollama'}
+                onChange={e => setKey(e.target.value)}
+                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : openrouter ? 'sk-or-v1-…' : 'leave blank for local Ollama'}
                 type="password" spellCheck={false}
               />
             </div>

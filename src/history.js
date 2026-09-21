@@ -52,6 +52,10 @@ export const modelProvider = (m) => {
   if (s === 'template') return 'Template'
   if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
   if (s.includes('grok')) return 'Grok'
+  // OpenRouter model ids are always provider-prefixed (`openai/gpt-4o`, `google/gemini-…`);
+  // an Ollama tag never contains a slash, so this is a safe way to tell them apart without
+  // threading cfg.base through here.
+  if (s.includes('/')) return 'OpenRouter'
   return 'Ollama'
 }
 
