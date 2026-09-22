@@ -113,7 +113,8 @@ ONLY that aspect: use the description for that aspect alone and never describe t
 user's description (or your own fitting invention) supplies everything else.
 If SEVERAL reference images are listed, each one is limited to its own role in exactly the same way; merge them into
 ONE coherent image (a Pose reference and a Style reference and a Subject reference are three different aspects of the
-same picture, not three pictures), and let the role — not the order — decide which reference speaks to which aspect.`;
+same picture, not three pictures), and let the role — not the order — decide which reference speaks to which aspect.
+With several references, each contributes only its one or two most defining facts — they do not lengthen the prompt.`;
 
 export const SYSTEM_PROMPT_FLUX = `You are rewriting a user request into a FLUX.dev image-generation prompt.
 
@@ -198,8 +199,10 @@ don't front-load keywords or cram.
 
 LENGTH & STRUCTURE
 - One coherent, natural-language paragraph in present tense. No bullets, markdown, or headers.
-- Aim for ~40–120 words. Klein rewards detail: short, vague prompts ("a woman in a red dress")
-  waste the encoder. But stay coherent — a tight, well-ordered prompt beats a bloated one.
+- Aim for ~40–120 words. Short, vague prompts ("a woman in a red dress") waste the encoder, so
+  be specific — but the detail comes from the user's description and the few most defining facts
+  taken from any reference images. Several references do not raise the length: a tight,
+  well-ordered prompt beats a bloated one.
 - Order for clarity and logical flow: subject + key attributes → action/pose →
   composition/framing → setting → lighting, color, mood → medium/style and technical detail
   (lens, film stock, render type).
@@ -484,7 +487,7 @@ export const PROMPT_LENGTH_OPTIONS = [
 export const PROMPT_LENGTH_INJECT = {
   concise: '',
   standard: '\n\nLength guidance: write slightly more than the minimum — expand on atmosphere, lighting, and texture where it adds value. Aim for the upper end of the recommended sentence range.',
-  detailed: '\n\nLength guidance: write a longer, more detailed prompt. Push well past the minimum sentence count. Add rich sensory detail — specific textures, color gradations, sound design, micro-movements, atmospheric depth. Every extra sentence must add something a diffusion model can act on; do not pad with filler. Do not exceed what the clip duration or image format can realistically support.',
+  detailed: '\n\nLength guidance: write a longer, more detailed prompt. Word-count target: if the instructions above give a word range, land at or above its upper bound; otherwise write at least 200 words (250–350 is ideal) of continuous prose — a reply under 150 words is too short. For tag-based or field-based output, reach the same depth by filling every field/section fully and adding more specific tags, not by padding. Push well past the minimum sentence count. Add rich sensory detail — specific textures, color gradations, sound design, micro-movements, atmospheric depth. Every extra sentence must add something a diffusion model can act on; do not pad with filler. Do not exceed what the clip duration or image format can realistically support.',
 }
 
 export const STYLE_OPTIONS = [

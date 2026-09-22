@@ -47,7 +47,7 @@ import {
   hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs,
   refAudiosFromSnap,
 } from './workspace'
-import { buildStylePart, buildWriterUserText, h3ModeFor } from './adapt'
+import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
 import { buildManualH3, buildManualSeed, buildH3Template } from './manualH3'
 
@@ -1338,8 +1338,22 @@ export default function App() {
       const reused = done.filter(d => d.reused).length
       const outStats = reused ? { ...stats, reused } : stats
       if (done.length === 1) return { text: done[0].text, stats: outStats }
-      const text = done.map((d, i) => `Image ${i + 1} — role: ${imageRoleDef(d.role).label}: ${d.text}`).join('\n\n')
-      return { text, stats: outStats }
+      const full = done.map((d, i) => `Image ${i + 1} — role: ${imageRoleDef(d.role).label}: ${d.text}`).join('\n\n')
+      // Several references: trim the block to what the brief and each role need,
+      // so the writer isn't handed N exhaustive descriptions. Derived per run —
+      // the full per-image text stays in the records. Best-effort: any failure or
+      // malformed reply keeps the full block. A throwaway stats object keeps this
+      // call out of the "N described" counter.
+      if (shouldDistill(done.length)) {
+        try {
+          const trimmed = await cachedVision(
+            [{ type: 'text', text: buildDistillUserText({ scene: s.scene, block: full, count: done.length, targetLabel: t.label }) }],
+            DISTILL_SYSTEM, { fromCache: 0, fresh: 0 }, effectiveWriter || model)
+          const ok = acceptDistilled(trimmed, done.length)
+          if (ok) return { text: ok, stats: { ...outStats, condensed: true } }
+        } catch (e) { console.debug('[distill] skipped:', e.message) }
+      }
+      return { text: full, stats: outStats }
     } else if (s.frameMode === 'firstmidlast') {
       system = VISION_PROMPT_LTX_FIRSTMIDLAST
       content = [
@@ -2485,6 +2499,9 @@ export default function App() {
         <details style={{ marginTop: 16, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 14px' }}>
           <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             👁 vision description{effectiveVision ? ` · ${effectiveVision}` : ''}
+            {visionStats?.condensed && (
+              <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · condensed for the writer</span>
+            )}
             {visionStats && (visionStats.fromCache + visionStats.fresh + (visionStats.reused || 0) > 0) && (
               <span style={{ color: 'var(--pe-ink-3)', textTransform: 'none', letterSpacing: 0 }}> · {visionStats.reused ? (visionStats.fromCache + visionStats.fresh ? `${visionStats.reused} reused, ${visionStats.fromCache} cached, ${visionStats.fresh} described` : `reused from history`) : `${visionStats.fromCache} cached, ${visionStats.fresh} described`}</span>
             )}

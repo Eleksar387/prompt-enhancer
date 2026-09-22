@@ -242,6 +242,47 @@ export function h3ModeFor(frameMode, hasImg) {
     : hasImg ? 'I2VA' : 'T2VA'
 }
 
+// ── multi-reference triage ─────────────────────────────────────────────────
+// With several references, each image's full description reaching the writer is
+// what makes the final prompt bloated. A cheap text-only pass trims the block to
+// what the brief and each image's role actually need. It only shapes what THIS
+// generation sends to the writer — the stored per-image descriptions stay whole.
+export const DISTILL_SYSTEM = `You are trimming reference-image descriptions for an image-prompt writer. You receive an optional brief and a block of lines shaped "Image N — role: <Role>: <description>".
+
+For EACH image, keep only the one to three facts that (a) its role allows and (b) the brief actually needs or leaves open. Drop everything the brief already states, everything outside the role, and every incidental detail (background clutter, mood adjectives, camera talk). Always keep the hard-to-invent, distinguishing facts: exact colours, materials, shapes, visible text in quotation marks, pose geometry. Never add anything that is not in the description.
+
+Keep the "Image N — role: <Role>:" prefix on every line exactly as given, one line per image, in the same order. Output only those lines — no preamble, no commentary.`
+
+// Word budget for the trimmed block: ~25 words an image, capped at ~100 overall so
+// it stays bounded however many references are loaded.
+export function distillBudget(count) {
+  const n = Math.max(1, count | 0)
+  const perImage = Math.max(12, Math.min(25, Math.floor(100 / n)))
+  return { perImage, total: Math.min(100, perImage * n) }
+}
+
+// Only a real multi-reference block is triaged — a single description keeps the
+// behaviour it always had.
+export const shouldDistill = (count) => count >= 2
+
+export function buildDistillUserText({ scene = '', block, count, targetLabel = '' }) {
+  const { perImage, total } = distillBudget(count)
+  const brief = scene.trim()
+    ? `Brief (what the final image is meant to be — the references only fill in what it leaves open):\n${scene.trim()}`
+    : 'No brief was typed — the references ARE the brief, so keep what defines each image\'s role.'
+  const dest = targetLabel ? ` The prompt is for ${targetLabel}.` : ''
+  return `${brief}${dest}\n\nBudget: at most ${perImage} words per image, ${total} words in total.\n\nReference descriptions:\n${block}`
+}
+
+// The trimmed text must still be one "Image N — role:" line per reference; if the
+// model returned something else (prose, a refusal, fewer lines), keep the full block.
+export function acceptDistilled(text, count) {
+  const t = (text || '').trim()
+  if (!t) return null
+  const lines = t.match(/^Image \d+ — role:/gm) || []
+  return lines.length === count ? t : null
+}
+
 // Still-image message for two or more role-tagged reference images. Each role
 // is spelled out once (what it may contribute), the numbered block follows, and
 // the typed description — when there is one — still leads.
@@ -256,7 +297,7 @@ function buildMultiRefImageText({ scene, frameDescription, refRoles, stylePart, 
       ? `- ${def.label}: supporting details only — the subject's appearance, the setting and the pose, and only where nothing else covers them; never its lighting, palette, style or wording.`
       : `- ${def.label}: ONLY ${def.imageUse}.`)
   }
-  const rules = `Each reference image below is tagged with a ROLE and contributes ONLY what that role allows — never describe or copy anything else from it:\n${scope.join('\n')}\nSeveral references may share a role (two Subjects, say) — each then contributes that same aspect. Merge everything into ONE coherent image, not a collage; where two references overlap, the role decides which one speaks to an aspect, not the order they are listed in.`
+  const rules = `Each reference image below is tagged with a ROLE and contributes ONLY what that role allows — never describe or copy anything else from it:\n${scope.join('\n')}\nSeveral references may share a role (two Subjects, say) — each then contributes that same aspect. The references TOGETHER may contribute at most ~60 words to the final prompt (roughly one clause each): take the one or two most defining facts from each and leave the rest out — this caps how much of the references you use, not the prompt's overall length. Merge everything into ONE coherent image, not a collage; where two references overlap, the role decides which one speaks to an aspect, not the order they are listed in.`
   if (scene.trim()) {
     return `Image description (this is the brief — the final prompt must be written from THIS):\n${scene}\n\n${rules}\n\nReference images:\n${frameDescription}${stylePart}${lengthPart}`
   }
