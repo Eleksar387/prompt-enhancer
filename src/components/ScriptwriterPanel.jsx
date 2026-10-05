@@ -15,8 +15,9 @@ import {
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   TARGETS, caps, targetsWithCap,
 } from '../constants'
-import { btn, shrinkToJpeg, imageHash, mapWithConcurrency } from '../utils'
+import { btn, shrinkToJpeg, imageHash, mapWithConcurrency, exportTimestamp } from '../utils'
 import { formatTimestamp } from '../manualH3'
+import { buildDirectorTimeline } from '../directorExport'
 import { lorasByIds, loraInstruction, withLoraTriggers } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
@@ -25,6 +26,7 @@ import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import LoraPanel from './LoraPanel'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
+import { notifyDone } from '../notify'
 import H3SyntaxBadge from './H3SyntaxBadge'
 
 const GENRE_OPTIONS = [
@@ -1015,6 +1017,7 @@ export default function ScriptwriterPanel({
       setScript(data)
       setPhase('script')
       commitHistory({ ...basePayload('script', refs), script: data, directorsCut: null, finalPrompts: null })
+      if (!autoActive) notifyDone('Script ready', data.title || '')
     } catch (e) {
       setError(e.message)
       setPhase('input')
@@ -1169,6 +1172,7 @@ export default function ScriptwriterPanel({
         script, directorsCut: data, finalPrompts: null,
         framePrompts: serializeFramePrompts(freshFrames),
       })
+      if (!autoActive) notifyDone("Director's Cut ready", `${data.shots.length} clips`)
     } catch (e) {
       setError(e.message)
       setPhase('script')
@@ -1464,7 +1468,7 @@ export default function ScriptwriterPanel({
       + `Aspect ratio: ${ratio.label} (${ratio.note})${langLine}${lookLine}\n`
       + `Target duration: ${shot.duration || 7} seconds\n\n`
       + `Scene / action:\n${action}\n\n`
-      + `Requested camera moves (incorporate these):\n- ${shot.camera_movement || 'Static — the frame never moves'}\n- ${shot.camera_framing || 'Medium shot'}${eyeLine}\n\n`
+      + `Requested camera moves (incorporate these):\n- ${shot.camera_movement || 'Not specified by the Director — choose a move motivated by this clip\'s own beat; do not default to a locked-off frame'}\n- ${shot.camera_framing || 'Medium shot'}${eyeLine}\n\n`
       + `Style / mood: ${shot.lighting_mood || script?.look || 'natural'}${dialogueBlock}`
       + `\n\nAmbient / diegetic sound (overall_soundscape): ${soundscape}`
       + `\n\nAudience-only music (non_diegetic_music): ${music}`
@@ -1579,9 +1583,11 @@ export default function ScriptwriterPanel({
       // history commit below is skipped, so nothing is persisted yet.
       setError(`Clip ${refusal.shotNumber} was refused by the model: "${refusal.message}" — stopped. Remove or replace the reference image(s)/hint responsible, then retry.`)
       setPhase('dircut')
+      notifyDone('Clip refused', `Clip ${refusal.shotNumber} was refused by the model`)
       return
     }
     setPhase('done')
+    notifyDone('Film prompts ready', `${results.length} clips`)
     commitHistory({
       ...basePayload('done', refs),
       script, directorsCut, finalPrompts: results,
@@ -2579,6 +2585,13 @@ export default function ScriptwriterPanel({
       const shots = directorsCut?.shots || []
       const done = finalPrompts.filter(p => p.text)
 
+      // Identifies this export run — same string the zip itself is named
+      // after (computed once here so the two can never drift apart) — so a
+      // rendered clip's own output filename (outputName below, fed into
+      // patch.js's filename_prefix stamp) traces back to the exact ZIP that
+      // produced its prompt, even after several re-exports of the same film.
+      const runLabel = `${fileSafe(script?.title || 'scriptwriter')}-video-${isH3now ? 'minimax' : 'ltx'}-${exportTimestamp()}`
+
       // per-clip prompt files + combined markdown
       const pad = (n) => String(n).padStart(2, '0')
       const allMd = []
@@ -2630,6 +2643,7 @@ export default function ScriptwriterPanel({
       // against the same refImages array, so the order matches by construction).
       const manifest = {
         title: script?.title || 'Untitled',
+        runLabel,
         target: promptTarget,
         aspectRatio: aspectToken(aspectRatio),
         clips: done.map((p, i) => {
@@ -2677,11 +2691,34 @@ export default function ScriptwriterPanel({
             mode: references.length ? 'Ref2VA' : 'T2VA',
             durationSec: shot?.duration || (isH3now ? 7 : 4),
             voices,
-            outputName: `clip-${pad(p.shotNumber || i + 1)}`,
+            outputName: `${runLabel}-clip-${pad(p.shotNumber || i + 1)}`,
             references,
             guides,
           }
         }),
+      }
+      // Director timeline (MiniMax H3 Director node) — one timeline for the whole
+      // film, loaded into the node by the bridge's Load Film without running it.
+      if (isH3now && done.length) {
+        const built = buildDirectorTimeline({
+          script, directorsCut, refImages, voiceRefs,
+          voiceFile: (v) => voiceFileById.get(v.id),
+          entityName: (im) => refEntityName(im, script),
+          preserveMarker,
+          // only anchors for a reference actually attached to that clip (a stale one is inert)
+          anchorsForShot: (shot) => {
+            const attached = new Set(clipRefsFor(shots.indexOf(shot)).map(refKey))
+            return shotAnchors(shot).filter(a => attached.has(a.refKey))
+              .map(a => ({ im: (refImages || []).find(x => refKey(x) === a.refKey), atSeconds: a.atSeconds }))
+              .filter(a => a.im)
+          },
+        })
+        zip.file('director/timeline.json', JSON.stringify(built.timeline))
+        const res = aspectRes(aspectRatio)
+        manifest.director = {
+          file: 'director/timeline.json', fps: built.fps, totalFrames: built.totalFrames,
+          totalSeconds: built.totalSeconds, width: res.w, height: res.h, warnings: built.warnings,
+        }
       }
       zip.file('manifest.json', JSON.stringify(manifest, null, 2))
 
@@ -2702,6 +2739,7 @@ export default function ScriptwriterPanel({
         script?.language ? `- Language: ${script.language}` : '',
         script?.soundscape ? `- Soundscape: ${script.soundscape}` : '',
         script?.music ? `- Music: ${script.music}` : '',
+        manifest.director ? '- `director/timeline.json` — whole film as one MiniMax H3 Director timeline; drop the ZIP on ComfyUI (Load Film) to fill the Director node without running it' : '',
         `- ${done.length} clip${done.length === 1 ? '' : 's'}, ${(refImages || []).filter(im => im.base64).length} reference image${(refImages || []).filter(im => im.base64).length === 1 ? '' : 's'}`,
         (voiceRefs || []).filter(v => v.base64).length
           ? `- ${(voiceRefs || []).filter(v => v.base64).length} voice reference${(voiceRefs || []).filter(v => v.base64).length === 1 ? '' : 's'} in \`voices/\` — timbre only; each clip's header names the one to load`
@@ -2714,11 +2752,11 @@ export default function ScriptwriterPanel({
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      // <Title>-video-<model>-<date> — scriptwriter output is always video
-      // (minimax_h3 / ltx are both TARGETS[...].type === 'video'), even though
-      // the same zip may also carry per-frame image prompts as a bonus.
-      const modelSlug = isH3now ? 'minimax' : 'ltx'
-      a.download = `${fileSafe(script?.title || 'scriptwriter')}-video-${modelSlug}-${new Date().toISOString().slice(0, 10)}.zip`
+      // Same string as manifest.json's runLabel (and, via outputName, each
+      // rendered clip's own filename_prefix) — scriptwriter output is always
+      // video (minimax_h3 / ltx are both TARGETS[...].type === 'video'), even
+      // though the same zip may also carry per-frame image prompts as a bonus.
+      a.download = `${runLabel}.zip`
       a.click()
       URL.revokeObjectURL(url)
     } finally {

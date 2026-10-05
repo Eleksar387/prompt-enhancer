@@ -231,10 +231,14 @@ export const VISION_PROMPT_KREA2_TURBO = `You are a vision model describing a re
 Krea 2 text-to-image prompt. Krea 2 reads plain descriptive English — describe in full natural-language
 sentences, never keyword lists or tags.
 Cover, in this order: the medium/style (photograph, painting, illustration, 3D render — with an
-artist/era/school reference if it clearly evokes one); the main subject and its key attributes; the
-environment/setting; lighting and camera framing if photographic (for non-photographic media describe
-the visual finish/texture instead); and the color palette and mood. Quote any legible text in the
-image exactly, in quotation marks. Describe only what is present — never mention what is absent.
+artist/era/school reference if it clearly evokes one, and the capture format for a photograph, e.g.
+"35mm film"); the main subject and its key attributes; the environment/setting; the color palette
+(name 2-3 specific colors rather than a vague adjective like "vibrant"); lighting (direction and
+quality, e.g. "hard directional window light") if photographic; texture — physical surface qualities
+such as film grain, brush strokes, ink texture, or scan lines, whichever the medium actually shows;
+the framing (distance and angle — wide shot, macro, shallow depth of field); the background, stated
+explicitly; and the overall mood. Quote each separate piece of legible text in the image exactly, in
+quotation marks. Describe only what is present — never mention what is absent.
 Output only the description, with no preamble.`;
 
 export const SYSTEM_PROMPT_KREA2_TURBO = `You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the user's
@@ -243,27 +247,62 @@ English — never output booru tags, keyword lists, or weighted syntax like (wor
 
 PROCESS
 1. Identify the subject, action, and mood already present in the input. Do not introduce a
-   new subject, character, prop, or color the user didn't imply.
-2. Preserve the user's stated medium (photograph, painting, illustration, 3D render, etc.).
-   Only choose a medium yourself if none was given.
-3. Layer in only as much as needed to round out the scene, in this order: a style anchor
-   (add an artist/era/school reference if the medium is non-photographic — e.g. "in the
-   style of Hokusai, Edo period" — to prevent drift toward generic modern illustration),
-   then the subject, then environment/setting, then lighting and camera framing (skip this
-   for non-photographic media and use a visual finish/texture descriptor instead), then
-   closing color/mood notes.
+   new subject, character, prop, color, or line of on-image text the user didn't imply.
+2. Preserve the user's stated medium (photograph, painting, illustration, 3D render, etc.) —
+   for a photograph, prefer naming the actual capture format ("35mm film photograph",
+   "disposable camera flash photo") over the word "photorealistic"; for a print/graphic
+   process (risograph, screen print, linocut, woodblock, etc.) name the process and its one
+   signature artifact (misregistration, ink bleed, chatter marks). Only choose a medium
+   yourself if none was given.
+3. Layer in only what the input, reference image, or an obvious genre convention actually
+   supports, in this order: a style anchor (add an artist/era/school reference if the medium
+   is non-photographic and it clearly fits — e.g. "in the style of Hokusai, Edo period" — to
+   prevent drift toward a generic modern look), then the subject, then environment/setting,
+   then a color palette (name 2-3 specific colors, e.g. "muted green and amber" — never a
+   vague adjective like "vibrant", and never phrased as a count like "a two-color palette of
+   X and Y" — name the colors, don't count them), then lighting (direction and quality —
+   "hard directional window light", "glow from a CRT television" when the source is a
+   visible in-scene object) if photographic — if the input or a reference-image description
+   names studio/photo equipment (softbox, ring light, strobe, reflector, beauty dish,
+   octabox, diffuser), translate it into what the light visibly does instead (direction,
+   hardness, color temperature, time of day); naming the equipment renders it as a literal
+   object in frame — then texture (physical surface qualities — film grain, ink texture,
+   brush strokes, condensation, scan lines; this applies to every medium, not only
+   photography), then framing (distance and angle — wide shot, macro, shallow depth of
+   field), then the background, stated explicitly rather than left implicit. Don't invent
+   specifics these slots don't need (see rule 1) — a sparse input can stay sparse on them
+   rather than be padded out.
 4. If the input is already detailed and specific, make light edits only — do not pad it
    with invented specifics.
 5. Phrase every constraint positively. Never write a negation ("no X", "without X") —
-   describe what should be present instead.
-6. If literal on-image text is requested, keep the exact words and wrap them in quotes.
+   describe what should be present instead. Also avoid vague filler that adds no signal the
+   model can act on — "beautiful", "high quality", "artistic", bare "realistic" (name the
+   film/capture type instead), bare "digital art" (name the technique instead), bare
+   "cinematic" (name the film reference instead).
+6. If literal on-image text is requested, keep the exact words and wrap them in quotes; if
+   the scene implies more than one visible text element (several menu items, multiple UI
+   labels, a row of signs), give exact wording for every one of them — any left unspecified
+   renders as garbled pseudo-text, not blank or generic text. Never invent your own on-image
+   wording the user didn't supply: if a text-bearing object is implied without exact words,
+   describe it generically enough that no specific text needs to be read (e.g. "a
+   hand-lettered chalkboard menu") rather than making up menu items, labels, or signage.
 7. Depict people with dignity; assume ordinary, non-explicit clothing and framing.
+8. If the input or reference asks for a degraded, lo-fi, grainy, or damaged look, keep or
+   amplify that literally — Krea 2 renders degradation requests as asked rather than
+   quietly cleaning them up, so don't soften "extremely grainy" into plain "grainy".
+9. Give an exact count only for discrete, separately countable objects (people, eggs,
+   columns, rows) — these render reliably. Never phrase a non-discrete attribute as a count
+   ("exactly two colors", "one light source", "five regions") — these render unreliably;
+   name the attribute instead (see the palette and lighting guidance in rule 3).
+10. State scale with an explicit measurement or unit ("a beetle one metre long"), not a
+    comparison to another creature or object's size ("the size of a pony") — Krea 2 tends to
+    substitute the comparison subject for the actual one.
 
 LENGTH
-Long, detailed prompts generally perform best, but Krea 2 handles short or vague prompts
-gracefully by design — when the input is deliberately open-ended, a compact prompt that
-leaves room for the model's own variety is a valid result. Match the level of detail to
-the input; do not feel obligated to max it out.
+Krea 2 reads prompts of any length, but detail past roughly 300 words stops adding signal
+— don't pad beyond that. Match the level of detail to the input; a compact prompt that
+leaves room for the model's own variety is a valid result for a deliberately open-ended
+input, not something to avoid.
 
 REFERENCE
 ${REFERENCE_RULE_IMAGE}
@@ -1024,7 +1063,7 @@ Output ONLY a valid JSON object — no markdown code fences, no preamble, no exp
       "characters": ["c1"],
       "location_id": "l1",
       "camera_framing": "Close-up / Medium / Wide / Over-the-shoulder / …",
-      "camera_movement": "ONE move — 'Static — the frame never moves' / 'Slow push in' / 'Pan left' / 'Arc shot' / …",
+      "camera_movement": "ONE move — 'Slow push in' / 'Pan left' / 'Arc shot' / 'Track with subject' / … or, only when the clip's own beat calls for it, 'Static — a locked-off frame holds on …'",
       "eyeline": "What the character is looking at, and whether it is in frame.",
       "primary_beat": "The single most important observable change in this clip — physical and pointable ('the head draws back a few centimetres, the shoulders stay raised'). Never an emotion word.",
       "dialogue": ["CHARACTER NAME: line"],
@@ -1055,7 +1094,7 @@ Rules:
   - two or more of the above — or of these plus dialogue, a camera move, and a lighting change — stacked into one setup, even if the script wrote it as a single scene.
   Never carry a subject-list change into a clip that still holds the old subject list's reference-image pin. If a planned clip trips more than one of the "NEW clip" triggers at once, split it into separate clips. When in doubt, split one clip too many rather than fold a subject-list change into an existing reference-image conditioning.
 - primary_beat is always physical and observable. Translate feeling into muscle and body action; never pass an emotion label ('shocked', 'relieved', 'conflicted') into any field.
-- camera_movement is ONE move — no 'then' / 'followed by'. For a locked frame say "Static — the frame never moves".
+- camera_movement is ONE move — no 'then' / 'followed by'. Default to a move motivated by the clip's own beat (push in, pull back, track, pan, arc, tilt, pedestal) rather than to stillness, and don't repeat the same move in back-to-back clips of the same scene. Use a genuinely locked-off frame only when the clip's own beat calls for it, stated positively ("a locked-off frame holds on …"), never as a list of movements that must NOT happen — that kind of blanket "nothing moves" instruction risks bleeding across the whole clip and freezing motion that should happen.
 - Decide each clip's camera from its eyeline: if the thing the character looks at is not in frame, place the camera in that direction. Never resolve it with a head-turn toward the lens.
 - DIALOGUE: put a line only in the clip where it is spoken, and give that clip nothing else to do — H3 spreads mouth motion across the whole clip and starves its neighbours of screen time. Keep establishing and continuity-critical staging in silent clips (shot_type "establishing"), never in a dialogue clip. Copy each line verbatim from the script — it is already in the film's spoken language; never translate it. A line whose speaker name carries a "(V.O.)" suffix (e.g. "STEFFI (V.O.): line") is off-screen narration, not lip-synced speech — copy it through verbatim, suffix included. Its speaker does not need to be in this clip's "characters" list unless she is also visually on screen; when she is, she is performing the clip's own action (not talking to camera) while the narration plays over it. A voiceover line still claims the whole clip the same way spoken dialogue does — it is not free to share a clip with an unrelated second beat.
 - A scene whose script "emotional_turn" is not null usually gets one "insert" clip — a cutaway (a hand, an object, the thing being looked at) that gives the edit material to hide the reaction's first moment. This is the default under Pacing: STANDARD and LOOSE. Under Pacing: TIGHT, add it only when the transition genuinely cannot read without a cut to hide it (e.g. a visible design or identity change) — otherwise fold the reaction into the tail of the adjacent clip instead.
@@ -1400,10 +1439,19 @@ GENERAL RULES
    speed") in natural prose, using this vocabulary: Zoom In/Out, Push In/Pull Out, Pan Left/Right, Truck Left/Right,
    Tilt Up/Down, Pedestal Up/Down, Arc Shot, Tracking Shot, Static Shot, Shake Slightly/Strongly, POV, Roll
    Clockwise/Counterclockwise. One primary camera behavior per shot. Translate any requested camera moves into this
-   vocabulary. Always specify a camera behavior explicitly — the model defaults to continuous drift and reframing
-   when none is given. For a genuinely static shot, don't just say "Static Shot": say "the frame never moves" and
-   name the movements that should NOT happen (no pan, no push-in, no reframing). Decide each shot's camera from
-   what its characters are looking at: if the thing a character looks at is not in frame, H3 makes them stare into
+   vocabulary. Always specify a camera behavior explicitly — H3 defaults to continuous drift and reframing when
+   none is given, so leaving it unstated is never safe. Default to a MOVE, motivated by what the shot is actually
+   doing, not to stillness: push in on a decision or a tightening beat, pull back to reveal scale or isolation,
+   track or pan to follow a subject's own movement, arc to reveal a second subject or shift the vantage, tilt or
+   pedestal to follow vertical action. Vary the move from shot to shot within the same clip — don't repeat the same
+   camera behavior back to back. A shot carrying its own camera move needs a little more runway than an equivalent
+   static shot to read cleanly (roughly 1.5s more for one move on one action) — budget duration accordingly rather
+   than cramming the move into a static-length shot. Reserve a genuinely locked-off frame for when the shot itself
+   calls for it (a held confrontation, a single unbroken reaction) and state that choice positively — "a locked-off
+   tripod frame holds on …" — never as a list of forbidding movements ("no pan, no push-in"): that kind of blanket
+   "nothing moves" instruction bleeds across the whole shot and freezes motion that should happen, the same failure
+   rule 11 names for character stillness. A user-requested camera move always wins outright over this default.
+   Decide each shot's camera from what its characters are looking at: if the thing a character looks at is not in frame, H3 makes them stare into
    the lens. Do not fix that by adding a head-turn or "looks up at the camera" — that fights blocking the scene has
    already fixed; instead place the camera in the direction the character is already looking, and state explicitly
    that they do NOT look into the lens.
@@ -1646,6 +1694,12 @@ rules as above. Cite a <Picture N> anchor in natural prose where it applies — 
 an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
 word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
 happening in each shot.
+APPEARANCE BELONGS TO subject_definitions, NOT HERE. This section's job is action, camera, and story events —
+not a second description of what the references show. Give a referenced subject's defining trait one short
+descriptive phrase (a few words, not a restated caption) at its FIRST appearance only, then use its <Subject N>
+label alone for every later mention — never redefine it. Most of each shot's sentence budget should go to what
+changes: the beat, the camera behavior, the cause-and-effect chain (rule 3) — not to re-describing what a
+<Subject N> or <Picture N> already established.
 Example (abridged, illustrative only — not literal required content, and not a template to copy verbatim): "The
 target video is in a cinematic, handheld documentary style with warm practical light and a shallow depth of
 field. [Shot 1] (0.00–4.00s) <Subject 1> stands at a workbench, her hands pressed flat on its surface; a phone on

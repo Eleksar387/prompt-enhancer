@@ -8,7 +8,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip } from "./patch.js";
+import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip, findDirectorNode, directorWidgetValues } from "./patch.js";
 
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
@@ -279,12 +279,52 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
   document.body.append(panel);
 }
 
+// Director path: put the film into the MiniMax H3 Director node and STOP. Nothing is queued —
+// the user edits the timeline in the Director and presses Run themselves.
+async function loadIntoDirector(director) {
+  const node = findDirectorNode(app.graph?._nodes);
+  const values = directorWidgetValues(director);
+  for (const [name, value] of Object.entries(values)) {
+    const w = node.widgets?.find((x) => x.name === name);
+    if (w) w.value = value;
+  }
+  // The Director's editor reads its widgets when the node is configured, so re-load the graph
+  // the same way opening a saved workflow does (a plain widget write is not re-read live).
+  // serialize() output can hold values structuredClone rejects (loadGraphData clones its
+  // argument), so hand it a plain-JSON copy. A failed reload must not hide that the
+  // widgets were already written — the Director may well show the film regardless.
+  let reloadNote = "";
+  try {
+    await app.loadGraphData(JSON.parse(JSON.stringify(app.graph.serialize())));
+  } catch (e) {
+    console.warn("[PE bridge] Director reload failed:", e);
+    reloadNote = `\n\n(Reloading the canvas failed: ${e.message || e}. If the Director looks empty or stale, reload the page.)`;
+  }
+  const warn = (director.warnings || []).map((w) => `• ${w}`).join("\n");
+  alert(`Loaded into the Director: ${director.timeline.segments.length} clips, ${director.totalSeconds.toFixed(1)} s.\nNothing was run — edit the timeline, then press Run.` + (warn ? `\n\n${warn}` : "") + reloadNote);
+}
+
 async function handleZipFile(file) {
   let data;
   try {
     data = await uploadZip(file);
   } catch (e) {
     alert(`Prompt Enhancer Bridge: couldn't stage that zip.\n\n${e.message || e}`);
+    return;
+  }
+  // A workflow with a Director node gets the Director path; one without (a PEClip* template)
+  // falls through to the original review-and-run flow, so older setups keep working.
+  if (data.manifest?.director && !data.manifest.director.timeline) {
+    alert("Prompt Enhancer Bridge: the zip has a Director timeline, but the ComfyUI side did not load it — staging.py in custom_nodes/comfyui-prompt-enhancer-bridge is the OLD version. Copy the updated folder over it and restart ComfyUI (not just the browser).");
+    return;
+  }
+  if (data.manifest?.director?.timeline && !findDirectorNode(app.graph?._nodes)) {
+    alert("Prompt Enhancer Bridge: the zip has a Director timeline, but the open workflow has no MiniMax H3 Director node (type MiniMaxH3DirectorCS). Open the Director workflow first, then load the zip again.");
+    return;
+  }
+  if (data.manifest?.director?.timeline && findDirectorNode(app.graph?._nodes)) {
+    try { await loadIntoDirector(data.manifest.director); }
+    catch (e) { alert(`Prompt Enhancer Bridge: couldn't fill the Director.\n\n${e.message || e}`); }
     return;
   }
   let promptOutput, workflow;

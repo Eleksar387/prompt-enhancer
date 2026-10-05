@@ -148,6 +148,61 @@ def test_each_run_gets_its_own_folder():
     with_tmp_root(run)
 
 
+def test_director_timeline_is_loaded_and_voice_paths_rewritten():
+    def run(root):
+        timeline = {"segments": [], "subjects": [
+            {"voice": {"audioFile": "__PE_RUN__/voices/mara-1.mp3", "fileName": "mara.mp3"}},
+            {"voice": {"audioFile": "__PE_RUN__/voices/gone.mp3", "fileName": "gone.mp3"}},
+            {"voice": None},
+        ]}
+        zb = make_zip({
+            "manifest.json": json.dumps({"title": "x", "clips": [], "director": {"file": "director/timeline.json"}}),
+            "director/timeline.json": json.dumps(timeline),
+            "voices/mara-1.mp3": b"abc",
+        })
+        run_id, _, manifest = staging.stage_zip(zb, root)
+        subs = manifest["director"]["timeline"]["subjects"]
+        assert subs[0]["voice"]["audioFile"] == f"prompt_enhancer_runs/{run_id}/voices/mara-1.mp3"
+        assert subs[1]["voice"] is None  # file not in the zip -> dropped, load still succeeds
+        assert subs[2]["voice"] is None
+    with_tmp_root(run)
+
+
+def test_director_file_missing_raises():
+    def run(root):
+        zb = make_zip({"manifest.json": json.dumps({"clips": [], "director": {"file": "director/timeline.json"}})})
+        try:
+            staging.stage_zip(zb, root)
+            assert False, "expected ManifestError"
+        except staging.ManifestError:
+            pass
+    with_tmp_root(run)
+
+
+def test_voices_and_video_are_staged_with_abs_paths():
+    def run(root):
+        m = {"title": "x", "clips": [{"clipNumber": 1, "references": [],
+             "voices": [{"file": "voices/a.mp3", "speaker": "Mara"}],
+             "video": {"file": "video/ref.mp4"}}]}
+        zb = make_zip({"manifest.json": json.dumps(m), "voices/a.mp3": b"1", "video/ref.mp4": b"2"})
+        _, run_dir, manifest = staging.stage_zip(zb, root)
+        clip = manifest["clips"][0]
+        assert clip["voices"][0]["absPath"] == os.path.join(run_dir, "voices", "a.mp3")
+        assert clip["video"]["absPath"] == os.path.join(run_dir, "video", "ref.mp4")
+    with_tmp_root(run)
+
+
+def test_missing_voice_file_raises():
+    def run(root):
+        m = {"clips": [{"clipNumber": 1, "references": [], "voices": [{"file": "voices/gone.mp3"}]}]}
+        try:
+            staging.stage_zip(make_zip({"manifest.json": json.dumps(m)}), root)
+            assert False, "expected ManifestError"
+        except staging.ManifestError:
+            pass
+    with_tmp_root(run)
+
+
 if __name__ == "__main__":
     test("happy path stages files and rewrites absPath", test_happy_path)
     test("zip with no manifest.json raises ManifestError and cleans up", test_missing_manifest_raises)
@@ -155,4 +210,8 @@ if __name__ == "__main__":
     test("manifest pointing at a missing guide file raises ManifestError", test_missing_guide_file_raises)
     test("a non-zip upload raises BadZipFile and cleans up", test_bad_zip_raises)
     test("two runs of the same zip get distinct run folders", test_each_run_gets_its_own_folder)
+    test("director timeline loaded, voice paths rewritten", test_director_timeline_is_loaded_and_voice_paths_rewritten)
+    test("missing director timeline raises ManifestError", test_director_file_missing_raises)
+    test("voices and video staged with absPath", test_voices_and_video_are_staged_with_abs_paths)
+    test("missing voice file raises ManifestError", test_missing_voice_file_raises)
     print(f"\n{n} passed")

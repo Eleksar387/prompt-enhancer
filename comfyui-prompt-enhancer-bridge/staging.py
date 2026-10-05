@@ -61,7 +61,9 @@ def stage_zip(zip_bytes, runs_root):
         # sorted array distinct from `references` — see PEClipGuideImage's
         # docstring in nodes.py) is staged the same way: same file layout,
         # same missing-file error, just a second key to walk.
-        for key in ("references", "guides"):
+        # `voices` (voice-timbre samples, [{file, speaker}], in the clip's order) and an optional
+        # `video` are staged the same way for PEClipAudio / PEClipVideo.
+        for key in ("references", "guides", "voices"):
             for ref in clip.get(key, []):
                 rel = ref.get("file", "")
                 abs_path = os.path.join(run_dir, *rel.split("/"))
@@ -71,5 +73,55 @@ def stage_zip(zip_bytes, runs_root):
                         f"'{rel}', which isn't in the zip. Re-export and try again."
                     )
                 ref["absPath"] = abs_path
+        video = clip.get("video")
+        if isinstance(video, dict) and video.get("file"):
+            vpath = os.path.join(run_dir, *video["file"].split("/"))
+            if not os.path.isfile(vpath):
+                raise ManifestError(
+                    f"manifest.json for clip {clip.get('clipNumber')} points at "
+                    f"'{video['file']}', which isn't in the zip. Re-export and try again."
+                )
+            video["absPath"] = vpath
+
+    director = manifest.get("director")
+    if director:
+        _stage_director(director, run_id, run_dir, manifest)
 
     return run_id, run_dir, manifest
+
+
+DIRECTOR_RUN_TOKEN = "__PE_RUN__"
+RUN_FOLDER = "prompt_enhancer_runs"
+
+
+def _stage_director(director, run_id, run_dir, manifest):
+    """Load the MiniMax H3 Director timeline from the zip and attach it to
+    manifest["director"]["timeline"].
+
+    A voice sample's `audioFile` is written in the zip as
+    `__PE_RUN__/voices/<file>`; the Director reads audio relative to ComfyUI's
+    input/ folder, so the token becomes `prompt_enhancer_runs/<run-id>` (the
+    folder this zip was just extracted into). A voice file the zip doesn't
+    contain is dropped from its subject rather than failing the whole load.
+    """
+    rel = director.get("file", "")
+    path = os.path.join(run_dir, *rel.split("/"))
+    if not os.path.isfile(path):
+        raise ManifestError(
+            f"manifest.json names a Director timeline '{rel}', which isn't in the zip. "
+            "Re-export and try again."
+        )
+    with open(path, "r", encoding="utf-8") as f:
+        timeline = json.load(f)
+    for subject in timeline.get("subjects", []):
+        voice = subject.get("voice")
+        if not voice:
+            continue
+        audio = str(voice.get("audioFile", ""))
+        if audio.startswith(DIRECTOR_RUN_TOKEN + "/"):
+            inner = audio[len(DIRECTOR_RUN_TOKEN) + 1:]
+            if os.path.isfile(os.path.join(run_dir, *inner.split("/"))):
+                voice["audioFile"] = f"{RUN_FOLDER}/{run_id}/{inner}"
+                continue
+        subject["voice"] = None
+    director["timeline"] = timeline

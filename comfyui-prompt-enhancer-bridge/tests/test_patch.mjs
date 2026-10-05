@@ -1,7 +1,7 @@
 // Offline test for web/patch.js — no ComfyUI, no browser. Run with:
 //   node comfyui-prompt-enhancer-bridge/tests/test_patch.mjs
 import assert from "node:assert/strict";
-import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip } from "../web/patch.js";
+import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip, findDirectorNode, directorWidgetValues } from "../web/patch.js";
 
 // A minimal stand-in for what app.graphToPrompt().output looks like for a
 // template with one PEClipPrompt, three PEClipImage slots (0,1,2), two
@@ -117,3 +117,33 @@ test("patchForClip leaves EVERY filename_prefix node untouched when there's more
 });
 
 console.log(`\n${n} passed`);
+
+test("findDirectorNode matches by node type only", () => {
+  assert.equal(findDirectorNode([{ type: "KSampler" }, { type: "MiniMaxH3DirectorCS", id: 5 }]).id, 5);
+  assert.equal(findDirectorNode([{ type: "KSampler" }]), null);
+});
+
+test("directorWidgetValues mirrors the render window and serialises the timeline", () => {
+  const v = directorWidgetValues({ fps: 24, totalFrames: 288, width: 1366, height: 768, timeline: { segments: [] } });
+  assert.equal(v.timeline_data, '{"segments":[]}');
+  assert.equal(v.duration_frames, 288);
+  assert.equal(v.duration_seconds, 12);
+  assert.equal(v.end_second, 12);
+  assert.equal(v.custom_width, 1366);
+});
+
+test("PEClipAudio nodes take voices in node-id order (or pinned by index); empty when the clip has fewer", () => {
+  const tpl = {
+    "20": { class_type: "PEClipAudio", inputs: { audio_path: "", index: -1 } },
+    "10": { class_type: "PEClipAudio", inputs: { audio_path: "", index: -1 } },
+    "30": { class_type: "PEClipVideo", inputs: { video_path: "keep.mp4" } },
+  };
+  const clip = { promptText: "", references: [], voices: [{ absPath: "/v/a.mp3" }], durationSec: 5, outputName: "x" };
+  const out = patchForClip(tpl, clip);
+  assert.equal(out["10"].inputs.audio_path, "/v/a.mp3");   // lower id = voice 1
+  assert.equal(out["20"].inputs.audio_path, "");           // no second voice
+  assert.equal(out["30"].inputs.video_path, "keep.mp4");   // untouched
+  const pinned = patchForClip({ "5": { class_type: "PEClipAudio", inputs: { audio_path: "", index: 1 } } },
+    { ...clip, voices: [{ absPath: "/v/a.mp3" }, { absPath: "/v/b.mp3" }] });
+  assert.equal(pinned["5"].inputs.audio_path, "/v/b.mp3");
+});

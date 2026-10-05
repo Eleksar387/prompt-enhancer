@@ -1,5 +1,6 @@
 import { useState, memo } from 'react'
 import { isAnthropic, isGrok, isOpenRouter, providerOf } from '../api'
+import { notifySupported, notifyEnabled, setNotifyEnabled, requestNotifyPermission } from '../notify'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
@@ -9,6 +10,15 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
 function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
   const [open, setOpen] = useState(false)
   const [cacheCleared, setCacheCleared] = useState(false)
+  const [notifyOn, setNotifyOn] = useState(() => notifyEnabled() && notifySupported() && Notification.permission === 'granted')
+  const [notifyHint, setNotifyHint] = useState('')
+  const toggleNotify = async (on) => {
+    setNotifyHint('')
+    if (!on) { setNotifyEnabled(false); setNotifyOn(false); return }
+    const perm = await requestNotifyPermission()
+    if (perm === 'granted') { setNotifyEnabled(true); setNotifyOn(true) }
+    else { setNotifyEnabled(false); setNotifyOn(false); setNotifyHint(perm === 'unsupported' ? 'This browser has no notifications.' : 'Blocked — allow notifications for this site in the browser settings.') }
+  }
 
   const inputStyle = {
     width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)',
@@ -223,6 +233,15 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
               </button>
             )}
           </div>
+
+          {notifySupported() && (
+            <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+              title="Shows a desktop notification when a prompt, script or queue run finishes while this tab is in the background.">
+              <input type="checkbox" checked={notifyOn} onChange={e => toggleNotify(e.target.checked)} />
+              🔔 Notify when a prompt is finished (while this tab is in the background)
+              {notifyHint && <span style={{ color: 'var(--pe-warn)' }}>{notifyHint}</span>}
+            </label>
+          )}
 
           {!modelStatus.ok && !modelStatus.loading && (
             <div style={{ fontSize: 13, color: 'var(--pe-warn)', background: 'var(--pe-warn-bg)', border: '1px solid var(--pe-warn-line)', borderRadius: 6, padding: '8px 11px', lineHeight: 1.5 }}>

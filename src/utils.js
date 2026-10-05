@@ -102,6 +102,10 @@ export function shrinkToJpeg(src, maxPx = 1536, quality = 0.85) {
 
 export const presetById = (id, presets) => presets.find(p => p.id === id)
 
+// Filename-safe date+time for export ZIPs, e.g. "2026-09-28_14-23-05" — so
+// re-exporting the same generation/film doesn't overwrite an earlier ZIP.
+export const exportTimestamp = () => new Date().toISOString().replace('T', '_').replace(/:/g, '-').slice(0, 19)
+
 export const snap32 = (n) => Math.round(n / 32) * 32
 
 export const btn = (active) => ({

@@ -283,6 +283,51 @@ export function acceptDistilled(text, count) {
   return lines.length === count ? t : null
 }
 
+// ── MiniMax H3 Ref2VA reference-caption triage ─────────────────────────────
+// Same problem, H3 side: with the reference images described in full,
+// identity/wardrobe/location prose can dwarf a short typed scene, and the
+// Ref2VA writer ends up re-narrating what the references show instead of
+// advancing action and camera (see buildWriterUserText's `ref` branch above).
+//
+// Deliberately does NOT hand the trimmer H3's fuller "role: X, preservation:
+// Y (marker): …" / "Requested use of this reference: …" lines — those fields
+// are load-bearing (retention_analysis must reuse the exact marker; Ref2VA
+// subject folding reads the "Requested use" line; foldCaption/
+// extractRefImageCaption both parse them back out) and trusting a trimmer LLM
+// to reproduce them verbatim is exactly the kind of prose-only fix this
+// codebase has been burned by before. Instead this trims only the bare
+// per-image caption text (same "Image N — role: <Role>: <description>" shape
+// the still-image distill pass already uses — hence the shared
+// distillBudget/shouldDistill/acceptDistilled), and the caller
+// (captionImages()'s `ref` branch, src/App.jsx) rebuilds H3's own lines in
+// code from the trimmed captions via splitDistilledCaptions below, so the
+// prefix/marker/note are code-owned by construction, never dependent on the
+// trimmer's fidelity.
+export const H3_REF_DISTILL_SYSTEM = `You are trimming reference-image descriptions for a MiniMax H3 video-prompt writer. You receive an optional scene/action brief and a block of lines shaped "Image N — role: <Role>: <description>".
+
+For EACH image, keep only the one to three facts that (a) its role allows and (b) the brief actually needs or leaves open. Drop everything the brief already states, everything outside the role, and every incidental detail (background clutter, mood adjectives, motion or story speculation — the writer decides the scene, not this description). Always keep the hard-to-invent, distinguishing facts: exact colours, materials, shapes, proportions, visible text in quotation marks, pose geometry. Never add anything that is not in the description.
+
+Keep the "Image N — role: <Role>:" prefix on every line exactly as given, one line per image, in the same order. Output only those lines — no preamble, no commentary.`
+
+export function buildH3RefDistillUserText({ scene = '', block, count }) {
+  const { perImage, total } = distillBudget(count)
+  const brief = scene.trim()
+    ? `Brief (the target video's scene and action — the references only fill in identity/wardrobe/location/style/pose attributes it leaves open):\n${scene.trim()}`
+    : 'No brief was typed — the references ARE the brief, so keep what defines each image\'s role.'
+  return `${brief}\n\nBudget: at most ${perImage} words per image, ${total} words in total.\n\nReference descriptions:\n${block}`
+}
+
+// Splits an ACCEPTED distilled block (i.e. one acceptDistilled already
+// confirmed has exactly `count` "Image N — role:" line starts) back into one
+// trimmed caption per image, in order — no role label contains a colon, so
+// splitting on the first colon after "role:" cleanly isolates each
+// description. Returns null if a part comes back empty (a trim that hollowed
+// out a caption entirely is treated as a failed trim, not an accepted one).
+export function splitDistilledCaptions(text, count) {
+  const parts = (text || '').split(/^Image \d+ — role:[^:\n]*:[ \t]*/m).slice(1).map(s => s.trim())
+  return parts.length === count && parts.every(Boolean) ? parts : null
+}
+
 // Still-image message for two or more role-tagged reference images. Each role
 // is spelled out once (what it may contribute), the numbered block follows, and
 // the typed description — when there is one — still leads.
@@ -333,21 +378,36 @@ export function buildWriterUserText({
     const ratioLine = (frameMode === 'single' && !hasImg) || frameMode === 'ref'
       ? ratioLinePart(ratio)
       : 'Aspect ratio: derived from the input image(s) — do not override it.\n'
+    const audioPart = audioFieldsPart(soundscape, music)
+
+    // Ref2VA is special-cased: unlike a keyframe (first/last frame, a literal
+    // anchor state the clip must pass through), a reference image is only an
+    // attribute source — identity, wardrobe, location, style, pose. Putting it
+    // ahead of the scene, the way the other frame modes put their frame block
+    // first, let the writer's whole word/character budget (rule 14) drift into
+    // re-narrating what the references show instead of the actual action and
+    // camera plan. Mirrors buildMultiRefImageText's still-image pattern below:
+    // the typed scene leads, explicitly framed as the brief, with the
+    // reference block explicitly scoped to attributes only.
+    if (frameMode === 'ref') {
+      const refsBlock = `Reference images — identity, wardrobe, location, style, and pose sources only. Cite them by their <Subject N>/<Picture N> labels; do not restate their descriptions as the scene:\n${frameDescription}`
+      if (scene.trim()) {
+        return `MODE: ${mode}\n\n${ratioLine}Target duration: ${duration}\n\nScene / action (this is the brief — the target video's action, beats, and camera plan must be built from THIS):\n${scene}\n\n${refsBlock}${stylePart}${audioPart}${lengthPart}`
+      }
+      return `MODE: ${mode}\n\n${refsBlock}\n\n${ratioLine}Target duration: ${duration}\n\nNo description provided — invent ONE fitting scene: a concrete action with a physical trigger (rule 3) and an explicit camera plan (rule 4) for the target duration. Use the reference images only to fix who/what/where via their labels — do not build the scene by re-narrating what they show.${stylePart}${audioPart}${lengthPart}`
+    }
+
     const frameBlock = frameMode === 'last'
       ? (frameDescription ? `LAST FRAME (already established — the clip must end here; do not restate it, only describe the plausible path that leads to it):\n${frameDescription}\n\n` : '')
       : frameMode === 'firstlast'
       ? (frameDescription ? `FIRST FRAME and LAST FRAME (already established — do not restate their static contents, only describe the transition):\n${frameDescription}\n\n` : '')
-      : frameMode === 'ref'
-      ? `Reference images:\n${frameDescription}\n\n`
       : frameDescription ? `FIRST FRAME (already established — do not restate it; only describe what happens over time):\n${frameDescription}\n\n` : ''
     const scenePart = scene.trim()
       ? `Scene / action:\n${scene}`
       : frameMode === 'last' ? 'No description provided — propose a plausible action path that leads naturally to the last frame.'
       : frameMode === 'firstlast' ? 'No description provided — infer the natural motion that carries the scene from the first frame to the last.'
-      : frameMode === 'ref' ? 'No description provided — propose a fitting scene using the reference images above.'
       : hasImg ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.'
       : 'No scene description provided.'
-    const audioPart = audioFieldsPart(soundscape, music)
     return `MODE: ${mode}\n\n${frameBlock}${ratioLine}Target duration: ${duration}\n\n${scenePart}${stylePart}${audioPart}${lengthPart}`
   }
 

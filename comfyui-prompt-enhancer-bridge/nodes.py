@@ -183,11 +183,120 @@ class PEClipDuration:
         return (seconds,)
 
 
+def _load_audio_file(path):
+    """Decode an audio file to ComfyUI's AUDIO dict. Uses ComfyUI's own loader
+    (comfy_extras.nodes_audio.load — PyAV based) so the result is byte-for-byte
+    what its stock LoadAudio node would produce."""
+    from comfy_extras.nodes_audio import load as comfy_load_audio
+    waveform, sample_rate = comfy_load_audio(path)
+    return {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+
+
+class PEClipAudio:
+    """Outputs one voice-timbre sample (AUDIO) loaded from an absolute path —
+    for a MiniMax H3 `ref_audios.ref_audio_N` input.
+
+    `audio_path` is what the JS extension overwrites per clip with that clip's
+    N-th manifest voice (`voices[N]`). Which node is "voice N": by default the
+    PEClipAudio nodes in ascending node-id order (the first one placed is voice
+    1, the next voice 2 — matches a workflow with "Stimme 1" / "Stimme 2"); set
+    `index` (0 = first voice, 1 = second) to pin it explicitly instead.
+
+    A clip with no voice at that position (or an unset/missing file) outputs
+    None, which the H3 conditioning node skips — so a slot a clip doesn't use
+    simply isn't sent.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio_path": ("STRING", {"default": ""}),
+            },
+            "optional": {
+                "index": ("INT", {"default": -1, "min": -1, "max": 1, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
+    FUNCTION = "load"
+    CATEGORY = "Prompt Enhancer Bridge"
+
+    def load(self, audio_path, index=-1):
+        if not audio_path or not os.path.isfile(audio_path):
+            return (None,)
+        return (_load_audio_file(audio_path),)
+
+
+class PEClipVideo:
+    """Outputs a reference video as an IMAGE batch ("frames", 24 fps) from a
+    path — for a MiniMax H3 `ref_videos.ref_video_N` input (2–15 s).
+
+    The Scriptwriter / app ZIP does not carry a reference video, so by default
+    `video_path` is whatever you set on the node (an absolute path, or a file
+    name inside ComfyUI's input/ folder); the bridge only overwrites it if a
+    manifest clip ever names a `video`. Empty or missing path outputs None,
+    which the H3 node skips (no reference video sent).
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {"default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("frames",)
+    FUNCTION = "load"
+    CATEGORY = "Prompt Enhancer Bridge"
+
+    @staticmethod
+    def _resolve(video_path):
+        if not video_path:
+            return None
+        if os.path.isfile(video_path):
+            return video_path
+        try:
+            import folder_paths
+            candidate = os.path.join(folder_paths.get_input_directory(), video_path)
+            return candidate if os.path.isfile(candidate) else None
+        except Exception:
+            return None
+
+    def load(self, video_path):
+        path = self._resolve(video_path)
+        if not path:
+            return (None,)
+        if not _HAVE_IMAGING:
+            raise RuntimeError("PEClipVideo needs numpy/torch, which a real ComfyUI install always provides.")
+        import av
+        MAX_SECONDS, TARGET_FPS = 15, 24
+        frames = []
+        with av.open(path) as container:
+            stream = container.streams.video[0]
+            src_fps = float(stream.average_rate or TARGET_FPS)
+            for frame in container.decode(stream):
+                frames.append(frame.to_ndarray(format="rgb24"))
+        if not frames:
+            raise ValueError(f"No video frames could be decoded from {path}")
+        # resample to 24 fps by nearest source frame, and cap at 15 s (H3's range)
+        n_out = min(int(len(frames) / src_fps * TARGET_FPS), MAX_SECONDS * TARGET_FPS)
+        n_out = max(n_out, 1)
+        idx = [min(len(frames) - 1, int(i * src_fps / TARGET_FPS)) for i in range(n_out)]
+        arr = np.stack([frames[i] for i in idx]).astype(np.float32) / 255.0
+        return (torch.from_numpy(arr),)
+
+
 NODE_CLASS_MAPPINGS = {
     "PEClipPrompt": PEClipPrompt,
     "PEClipImage": PEClipImage,
     "PEClipGuideImage": PEClipGuideImage,
     "PEClipDuration": PEClipDuration,
+    "PEClipAudio": PEClipAudio,
+    "PEClipVideo": PEClipVideo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -195,4 +304,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PEClipImage": "PE Clip Reference Image",
     "PEClipGuideImage": "PE Clip Guide Image (Add Guide)",
     "PEClipDuration": "PE Clip Duration",
+    "PEClipAudio": "PE Clip Voice (Audio)",
+    "PEClipVideo": "PE Clip Reference Video",
 }

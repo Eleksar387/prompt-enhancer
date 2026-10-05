@@ -42,8 +42,12 @@ adds:
 Add a Save node as usual. If it has a `filename_prefix` widget (most
 `SaveImage`/`SaveVideo`/video-combine nodes do) **and it's the only node in
 the graph with one**, it gets stamped with each clip's output name
-(`clip-01`, `clip-02`, …) automatically — a convenience, not something any
-clip depends on. With more than one `filename_prefix` node (an intermediate
+(`<export-zip-name>-clip-01`, `<export-zip-name>-clip-02`, …) automatically —
+a convenience, not something any clip depends on. The `<export-zip-name>`
+prefix is the exported zip's own filename (title + target + export
+timestamp, `manifest.json`'s `runLabel`), so the rendered file traces back to
+the exact export that produced its prompt even after several re-exports of
+the same film. With more than one `filename_prefix` node (an intermediate
 preview save, say) neither is touched — there's no reliable way to tell
 which one is "the" output, so it's left to you rather than guessed.
 
@@ -149,3 +153,12 @@ Both are offline unit tests against synthetic fixtures. Neither exercises a
 real ComfyUI queue/execution — there's no way to do that without ComfyUI
 actually running, which this pack was written without access to. The first
 real run against a live template workflow is the thing to watch closely.
+
+## Director mode (MiniMax H3 Director node)
+
+If the export ZIP contains `director/timeline.json` and the open workflow has a **MiniMax H3 Director** node, **Load Film** fills that node (timeline, subjects, voices, render window, size) and stops. Nothing is queued; edit the timeline in the Director, then press Run yourself. Voice samples are staged under `input/prompt_enhancer_runs/<run-id>/voices/`. If the workflow has no Director node, Load Film behaves as before (PEClip* templates).
+
+## Voice and video nodes
+
+- **PE Clip Voice (Audio)** (`PEClipAudio`) outputs one voice sample as `AUDIO` for `ref_audios.ref_audio_N`. Voice 1 of a clip goes to the PEClipAudio node with the lowest node id, voice 2 to the next (or pin it with the optional `index`: 0 = first voice, 1 = second). A clip with no voice there outputs nothing, so that slot isn't sent.
+- **PE Clip Reference Video** (`PEClipVideo`) outputs a reference video as 24 fps `IMAGE` frames for `ref_videos.ref_video_N`. The export ZIP has no video; set `video_path` on the node (absolute, or a file in ComfyUI's `input/`). Empty = no reference video.

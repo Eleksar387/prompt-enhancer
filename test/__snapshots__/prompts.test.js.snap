@@ -679,14 +679,14 @@ Audience-only music (non_diegetic_music): none
 exports[`buildWriterUserText — the generate-mode user message > h3 Ref2VA (references) 1`] = `
 "MODE: Ref2VA
 
-Reference images:
-A woman in a red coat stands at a rain-streaked window.
-
 Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
 Target duration: 8 seconds
 
-Scene / action:
+Scene / action (this is the brief — the target video's action, beats, and camera plan must be built from THIS):
 She turns away from the window.
+
+Reference images — identity, wardrobe, location, style, and pose sources only. Cite them by their <Subject N>/<Picture N> labels; do not restate their descriptions as the scene:
+A woman in a red coat stands at a rain-streaked window.
 
 [STYLE PART]
 
@@ -700,13 +700,13 @@ Audience-only music (non_diegetic_music): none
 exports[`buildWriterUserText — the generate-mode user message > h3 Ref2VA · no scene 1`] = `
 "MODE: Ref2VA
 
-Reference images:
+Reference images — identity, wardrobe, location, style, and pose sources only. Cite them by their <Subject N>/<Picture N> labels; do not restate their descriptions as the scene:
 A woman in a red coat stands at a rain-streaked window.
 
 Aspect ratio: 768×1366 (Portrait · 9:16 · 768P (also renders at 2K, same ratio))
 Target duration: 8 seconds
 
-No description provided — propose a fitting scene using the reference images above.
+No description provided — invent ONE fitting scene: a concrete action with a physical trigger (rule 3) and an explicit camera plan (rule 4) for the target duration. Use the reference images only to fix who/what/where via their labels — do not build the scene by re-narrating what they show.
 
 [STYLE PART]
 
@@ -1274,7 +1274,7 @@ exports[`system prompt selection > keeps the target table shape 1`] = `
     },
     "slug": null,
     "type": "image",
-    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+    "visionPrompt": "1159 chars · sha256:8121ff99f5f0ab2b · "You are a vision model describing a reference image so a downstream writer can r"",
   },
   "kling": {
     "caps": {
@@ -1346,7 +1346,7 @@ exports[`system prompt selection > keeps the target table shape 1`] = `
     },
     "slug": null,
     "type": "image",
-    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+    "visionPrompt": "1159 chars · sha256:8121ff99f5f0ab2b · "You are a vision model describing a reference image so a downstream writer can r"",
   },
   "ltx": {
     "caps": {
@@ -1437,7 +1437,7 @@ exports[`system prompt selection > keeps the target table shape 1`] = `
     "clipLabel": null,
     "clipNoun": "clip",
     "clipShort": "H3",
-    "clipSystem": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+    "clipSystem": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
     "defaultFrameMode": "ref",
     "defaultRefRatio": "port916",
     "durations": [
@@ -1636,7 +1636,7 @@ exports[`system prompt selection > keeps the target table shape 1`] = `
     },
     "slug": null,
     "type": "image",
-    "visionPrompt": "780 chars · sha256:5f63c2cd37db2e67 · "You are a vision model describing a reference image so a downstream writer can r"",
+    "visionPrompt": "1159 chars · sha256:8121ff99f5f0ab2b · "You are a vision model describing a reference image so a downstream writer can r"",
   },
 }
 `;
@@ -1717,11 +1717,11 @@ exports[`system prompt selection > resolves one prompt per target × frameMode 1
   "kling · last": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · ref": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
   "kling · single": "4896 chars · sha256:65340fc15570aeb6 · "You are rewriting a user request into a Kling AI video-generation prompt.\\n\\nTWO M"",
-  "krea2turbo · firstlast": "3174 chars · sha256:4fff22664f46779a · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · firstmidlast": "3174 chars · sha256:4fff22664f46779a · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · last": "3174 chars · sha256:4fff22664f46779a · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · ref": "3174 chars · sha256:4fff22664f46779a · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
-  "krea2turbo · single": "3174 chars · sha256:4fff22664f46779a · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · firstlast": "6253 chars · sha256:03cdc9207775f835 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · firstmidlast": "6253 chars · sha256:03cdc9207775f835 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · last": "6253 chars · sha256:03cdc9207775f835 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · ref": "6253 chars · sha256:03cdc9207775f835 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
+  "krea2turbo · single": "6253 chars · sha256:03cdc9207775f835 · "You are a prompt-enhancement assistant for the Krea 2 image model. Rewrite the u"",
   "ltx · firstlast": "5831 chars · sha256:00544c034131b263 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx · firstmidlast": "6059 chars · sha256:bc97c87f78981c12 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx · last": "5265 chars · sha256:f2322300ff54704e · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
@@ -1732,11 +1732,11 @@ exports[`system prompt selection > resolves one prompt per target × frameMode 1
   "ltx_guide · last": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx_guide · ref": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
   "ltx_guide · single": "6283 chars · sha256:e75ba940f2a874b8 · "You are rewriting a user request into an LTX-2.3 video prompt for ComfyUI.\\n\\nCONT"",
-  "minimax_h3 · firstlast": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · firstmidlast": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · last": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · ref": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
-  "minimax_h3 · single": "30880 chars · sha256:69fa0e220533cd71 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · firstlast": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · firstmidlast": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · last": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · ref": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
+  "minimax_h3 · single": "32535 chars · sha256:b48d3752f66fc997 · "You are a specialist prompt compiler for MiniMax H3, a multimodal model that gen"",
   "scriptwriter · firstlast": "undefined",
   "scriptwriter · firstmidlast": "undefined",
   "scriptwriter · last": "undefined",

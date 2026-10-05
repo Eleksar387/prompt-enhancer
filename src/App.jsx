@@ -10,7 +10,7 @@ import {
   DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE, ROLE_GENERAL, normalizeRole, imageRoleDef,
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
-  systemPromptFor, caps, aspectParts,
+  systemPromptFor, caps, aspectParts, MINIMAX_H3_RESOLUTIONS,
 } from './constants'
 import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isCloud } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
@@ -24,7 +24,7 @@ import {
   listVoiceLibrary, addVoiceLibraryItem, updateVoiceLibraryItem, deleteVoiceLibraryItem,
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
-import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg } from './utils'
+import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
@@ -47,8 +47,10 @@ import {
   hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs,
   refAudiosFromSnap,
 } from './workspace'
-import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled } from './adapt'
+import { buildSingleDirectorTimeline } from './directorExport'
+import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
+import { notifyDone, setNotifyQuiet } from './notify'
 import { buildManualH3, buildManualSeed, buildH3Template } from './manualH3'
 
 const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
@@ -769,7 +771,31 @@ export default function App() {
           references,
         }))
       if (clips.length) {
-        zip.file('manifest.json', JSON.stringify({ title: titleSlug(scene) || target, target, type: t.type, clips }, null, 2))
+        const manifest = { title: titleSlug(scene) || target, target, type: t.type, clips }
+        // MiniMax H3: also ship the clip as a one-segment MiniMax H3 Director timeline, so
+        // Load Film can fill the Director node (nothing is run). See src/directorExport.js.
+        if (target === 'minimax_h3') {
+          const audios = imgs.refAudios || []
+          const voiceFiles = audios.map((a, i) => `voice-reference-${i + 1}.${(a.fileName && a.fileName.includes('.') ? a.fileName.split('.').pop() : imgExt(a.mediaType)).toLowerCase()}`)
+          const built = buildSingleDirectorTimeline({
+            scene, dialogue, delivery, language: show.spokenLang ? spokenLangDef(spokenLangId).label : '',
+            durationSec: clips[0].durationSec,
+            refImages: frameMode === 'ref' ? imgs.refImages : [],
+            refAudios: audios, voiceFiles,
+            describe: (im) => {
+              const role = imageRoleOf(im)
+              return im.captions?.[role] || imageMeta[im.hash]?.captions?.[role] || im.caption || ''
+            },
+            soundscape, music,
+            generatedText: (variantResults.find(r => r.text) || {}).text || '',
+            preserveMarker: (id) => (MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === id) || MINIMAX_H3_PRESERVE_OPTIONS[1]).marker,
+          })
+          if (frameMode !== 'ref' && images.length) built.warnings.push('First/last-frame images are not exported to the Director — add them on its timeline.')
+          zip.file('director/timeline.json', JSON.stringify(built.timeline))
+          const res = MINIMAX_H3_RESOLUTIONS.find(r => r.id === h3RatioId) || MINIMAX_H3_RESOLUTIONS[0]
+          manifest.director = { file: 'director/timeline.json', fps: built.fps, totalFrames: built.totalFrames, totalSeconds: built.totalSeconds, width: res.w, height: res.h, warnings: built.warnings }
+        }
+        zip.file('manifest.json', JSON.stringify(manifest, null, 2))
       }
     }
     const blob = await zip.generateAsync({ type: 'blob' })
@@ -777,7 +803,7 @@ export default function App() {
     const a = document.createElement('a')
     a.href = url
     const title = titleSlug(scene)
-    a.download = `${title ? title + '-' : ''}${t.type}-${modelSlug(target)}${filenameSuffix}-${new Date().toISOString().slice(0, 10)}.zip`
+    a.download = `${title ? title + '-' : ''}${t.type}-${modelSlug(target)}${filenameSuffix}-${exportTimestamp()}.zip`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -1101,7 +1127,11 @@ export default function App() {
     return item?.kind === 'scriptwriter-auto' ? runScriptwriterQueueItem(id) : runQueueItem(id)
   }
 
-  const processAllQueue = () => queue.processAll(runAnyQueueItem)
+  const processAllQueue = async () => {
+    setNotifyQuiet(true)
+    try { await queue.processAll(runAnyQueueItem) } finally { setNotifyQuiet(false) }
+    notifyDone('Queue finished', 'All queued items have been processed.')
+  }
 
   // The writer fan-out: one prompt, or three temperature variants in parallel.
   //
@@ -1128,9 +1158,11 @@ export default function App() {
         const text = repair(raw)
         setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '', h3Mode }])
         if (snapshot) saveHistory(snapshot, [{ label: lbl, text, h3Mode }])
+        notifyDone('Prompt ready', TARGETS[target]?.label || '')
         return { ok: true }
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message, h3Mode }])
+        notifyDone('Generation failed', e.message)
         return { ok: false, error: e.message }
       }
     }
@@ -1152,6 +1184,7 @@ export default function App() {
         })
     ))
     if (snapshot) saveHistory(snapshot, outs)
+    notifyDone('Prompts ready', `${TARGETS[target]?.label || ''} · 3 variants`)
     return { ok: true }
   }
 
@@ -1280,8 +1313,45 @@ export default function App() {
         { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
         { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
       ], role(im.role).visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model))
+      // Persist each reference's full caption to the per-image record, independent
+      // of any trimming below — mirrors the still-image branch's describeOne()
+      // (patchImageMeta call further down in this function), including its guard:
+      // only write when that role has no stored text yet, so a hand-edited or
+      // earlier AI-described caption is never silently replaced by a fresh vision
+      // pass. The key is the role this vision call actually used (role(im.role).id
+      // — already defaults an unset role the same way the vision call above did),
+      // not the raw possibly-unset im.role, so the two never disagree.
+      refs.forEach((im, i) => {
+        const hash = im.hash || imageHash(im.base64)
+        const key = role(im.role).id
+        if (hash && !(imageMeta[hash]?.captions?.[key] || '').trim()) {
+          patchImageMeta(hash, { captions: { [key]: captions[i] } }).catch(() => {})
+        }
+      })
+      // Trim what reaches the writer once there's enough reference material to
+      // be worth it — a long, fully-described reference block is what crowds
+      // out the actual scene/camera direction (see buildWriterUserText's `ref`
+      // branch). Distills the BARE captions only (not H3's preservation-marker/
+      // "Requested use" lines) and rebuilds those lines in code afterward
+      // (splitDistilledCaptions) so that structure is never at the mercy of a
+      // trimmer LLM reproducing it verbatim — best-effort: any failure,
+      // refusal, or malformed/incomplete reply keeps every caption exactly as
+      // vision wrote it.
+      let effectiveCaptions = captions
+      let condensed = false
+      if (shouldDistill(refs.length)) {
+        try {
+          const simpleBlock = refs.map((im, i) => `Image ${i + 1} — role: ${roleLabel(im.role)}: ${captions[i]}`).join('\n\n')
+          const trimmed = await cachedVision(
+            [{ type: 'text', text: buildH3RefDistillUserText({ scene: s.scene, block: simpleBlock, count: refs.length }) }],
+            H3_REF_DISTILL_SYSTEM, { fromCache: 0, fresh: 0 }, effectiveWriter || model)
+          const accepted = acceptDistilled(trimmed, refs.length)
+          const split = accepted ? splitDistilledCaptions(accepted, refs.length) : null
+          if (split) { effectiveCaptions = split; condensed = true }
+        } catch (e) { console.debug('[h3 distill] skipped:', e.message) }
+      }
       const imageBlock = refs.map((im, i) => {
-        let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${captions[i]}`
+        let line = `Image ${i + 1} — role: ${roleLabel(im.role)}, preservation: ${preserveLabel(im.preserve)} (${preserveMarker(im.preserve)}): ${effectiveCaptions[i]}`
         if (im.note && im.note.trim()) line += `\n   Requested use of this reference: ${im.note.trim()}`
         return line
       }).join('\n\n')
@@ -1296,7 +1366,7 @@ export default function App() {
         return `Audio ${i + 1} — voice-timbre reference (marker: reference)${boundNote}: file "${a.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. If no spoken dialogue is supplied elsewhere in this message, write one short line for that subject yourself so the voice reference has speech to act on.`
       }).join('\n\n')
       const text = audioBlock ? `${imageBlock}\n\n${audioBlock}` : imageBlock
-      return { text, stats }
+      return { text, stats: condensed ? { ...stats, condensed: true } : stats }
     }
     let system, content
     if (s.targetType === 'image') {
