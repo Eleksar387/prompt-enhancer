@@ -318,10 +318,8 @@ async function handleZipFile(file) {
     alert("Prompt Enhancer Bridge: the zip has a Director timeline, but the ComfyUI side did not load it — staging.py in custom_nodes/comfyui-prompt-enhancer-bridge is the OLD version. Copy the updated folder over it and restart ComfyUI (not just the browser).");
     return;
   }
-  if (data.manifest?.director?.timeline && !findDirectorNode(app.graph?._nodes)) {
-    alert("Prompt Enhancer Bridge: the zip has a Director timeline, but the open workflow has no MiniMax H3 Director node (type MiniMaxH3DirectorCS). Open the Director workflow first, then load the zip again.");
-    return;
-  }
+  // Director node open → Director path. No Director node → the PEClip* review-and-run flow below,
+  // so both workflows work with the same zip.
   if (data.manifest?.director?.timeline && findDirectorNode(app.graph?._nodes)) {
     try { await loadIntoDirector(data.manifest.director); }
     catch (e) { alert(`Prompt Enhancer Bridge: couldn't fill the Director.\n\n${e.message || e}`); }
