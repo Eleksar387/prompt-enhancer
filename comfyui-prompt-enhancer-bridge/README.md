@@ -162,3 +162,7 @@ If the export ZIP contains `director/timeline.json` and the open workflow has a 
 
 - **PE Clip Voice (Audio)** (`PEClipAudio`) outputs one voice sample as `AUDIO` for `ref_audios.ref_audio_N`. Voice 1 of a clip goes to the PEClipAudio node with the lowest node id, voice 2 to the next (or pin it with the optional `index`: 0 = first voice, 1 = second). A clip with no voice there outputs nothing, so that slot isn't sent.
 - **PE Clip Reference Video** (`PEClipVideo`) outputs a reference video as 24 fps `IMAGE` frames for `ref_videos.ref_video_N`. The export ZIP has no video; set `video_path` on the node (absolute, or a file in ComfyUI's `input/`). Empty = no reference video.
+
+## LoRAs (`PEClipLora`)
+
+A manifest clip may carry `loras: [{ file, strength }]` (set per LoRA in the Prompt Enhancer's LoRA library: "ComfyUI file" + "Strength"). Put one or more `PEClipLora` nodes in the model chain (model in → model out, e.g. between a fixed LoRA and the sampler). Load Film fills them per clip: LoRA 1 goes to the lowest node id (or the node whose `index` is 0), and so on. A slot the clip doesn't use passes the model through unchanged — no bypassing. `file` is relative to ComfyUI's `models/loras` (e.g. `MinimaxH3\foo.safetensors`). The review panel warns if a clip needs more LoRAs than there are `PEClipLora` nodes.

@@ -73,6 +73,17 @@ def stage_zip(zip_bytes, runs_root):
                         f"'{rel}', which isn't in the zip. Re-export and try again."
                     )
                 ref["absPath"] = abs_path
+        # `loras` ([{file, strength}]) are names ComfyUI resolves itself under models/loras on the
+        # machine that runs the workflow — nothing to stage; just drop malformed entries.
+        clean = []
+        for l in clip.get("loras") or []:
+            if isinstance(l, dict) and isinstance(l.get("file"), str) and l["file"].strip():
+                try:
+                    strength = float(l.get("strength", 1))
+                except (TypeError, ValueError):
+                    strength = 1.0
+                clean.append({"file": l["file"].strip(), "strength": strength})
+        clip["loras"] = clean
         video = clip.get("video")
         if isinstance(video, dict) and video.get("file"):
             vpath = os.path.join(run_dir, *video["file"].split("/"))

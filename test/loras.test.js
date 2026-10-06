@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   missingTriggers, withLoraTriggers, loraInstruction, lorasByIds,
-  targetTakesLoras, loraUsable,
+  targetTakesLoras, loraUsable, sanitizeLoras, loraManifestEntries, loraHasFile,
 } from '../src/loras.js'
 
 const L = [
@@ -168,5 +168,36 @@ describe('loraInstruction', () => {
 
   it('names the bound character when one is given', () => {
     expect(loraInstruction([{ ...L[0], subject: 'ANNA' }], 'flux')).toContain('for ANNA')
+  })
+})
+
+describe('LoRA files for the ComfyUI bridge', () => {
+  const lib = sanitizeLoras([
+    { id: 'a', name: 'A', trigger: 'ohwx', kind: 'character', file: ' MinimaxH3\\a.safetensors ', strength: '0.6' },
+    { id: 'b', name: 'Booster', trigger: '', kind: 'style', file: 'MinimaxH3\\boost.safetensors' },
+    { id: 'c', name: 'NoFile', trigger: 'x', kind: 'style' },
+    { id: 'd', name: 'Dup', trigger: 'y', kind: 'style', file: 'MinimaxH3\\a.safetensors' },
+    { id: 'e', name: 'E', trigger: '', kind: 'style', file: 'e' },
+  ])
+
+  it('sanitizeLoras defaults file to "" and strength to 1', () => {
+    expect(lib[2].file).toBe('')
+    expect(lib[2].strength).toBe(1)
+    expect(lib[0].strength).toBe(0.6)
+    expect(loraHasFile(lib[2])).toBe(false)
+  })
+
+  it('exports file-bearing entries only, in id order, deduped by file, trimmed', () => {
+    expect(loraManifestEntries(lib, ['a', 'c', 'b', 'd'])).toEqual([
+      { file: 'MinimaxH3\\a.safetensors', strength: 0.6 },
+      { file: 'MinimaxH3\\boost.safetensors', strength: 1 },
+    ])
+  })
+
+  it('includes a trigger-less LoRA that loraUsable would drop, and caps at 3 slots', () => {
+    expect(loraUsable(lib[1])).toBe(false)
+    expect(loraManifestEntries(lib, ['b'])).toHaveLength(1)
+    const many = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, file: `f${i}`, strength: 1 }))
+    expect(loraManifestEntries(many, many.map(m => m.id))).toHaveLength(3)
   })
 })

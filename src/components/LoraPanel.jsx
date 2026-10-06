@@ -45,7 +45,7 @@ export default function LoraPanel({
   const active = (id) => activeIds.includes(id)
 
   const patch = (id, changes) => onSaveLoras?.(loras.map(l => l.id === id ? { ...l, ...changes } : l))
-  const add = () => onSaveLoras?.([...loras, { id: generateId(), name: '', trigger: '', kind: 'character', note: '' }])
+  const add = () => onSaveLoras?.([...loras, { id: generateId(), name: '', trigger: '', kind: 'character', note: '', file: '', strength: 1 }])
   const remove = (id) => onSaveLoras?.(loras.filter(l => l.id !== id))
 
   return (
@@ -64,7 +64,7 @@ export default function LoraPanel({
             <div key={l.id} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <button type="button" onClick={() => onToggle?.(l.id)} disabled={!editable}
                 title={`${l.trigger || '(no trigger yet)'}${l.note ? ` — ${l.note}` : ''}`}
-                style={{ ...btn(active(l.id)), opacity: l.trigger.trim() ? 1 : 0.5 }}>
+                style={{ ...btn(active(l.id)), opacity: (l.trigger.trim() || (l.file || '').trim()) ? 1 : 0.5 }}>
                 <span style={{ opacity: 0.6, marginRight: 5 }}>{kindShort(l.kind)}</span>
                 {l.name.trim() || l.trigger.trim() || 'unnamed'}
               </button>
@@ -98,7 +98,7 @@ export default function LoraPanel({
           <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
             The trigger is the exact token the LoRA was trained with — it is copied into the prompt
             character for character, so spelling, spacing and capitalization all matter. The LoRA file
-            itself is still selected in your ComfyUI workflow.
+            itself is chosen in your ComfyUI workflow — or, with a file name below, loaded automatically by the bridge's PEClipLora nodes (up to 3 per clip).
           </div>
           {loras.map(l => (
             <div key={l.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
@@ -126,6 +126,21 @@ export default function LoraPanel({
                 <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>Note</label>
                 <input value={l.note} onChange={e => patch(l.id, { note: e.target.value })}
                   placeholder="optional — file name, weight, reminder" style={field({ width: '100%' })} />
+              </div>
+              <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 260px' }}>
+                  <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>ComfyUI file</label>
+                  <input value={l.file || ''} onChange={e => patch(l.id, { file: e.target.value })}
+                    placeholder="optional — e.g. MinimaxH3\my_lora.safetensors" spellCheck={false}
+                    title="File name as ComfyUI lists it, relative to models/loras. Written to the export manifest; the bridge loads it per clip."
+                    style={field({ width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })} />
+                </div>
+                <div style={{ width: 90 }}>
+                  <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>Strength</label>
+                  <input type="number" step="0.05" min="-2" max="2" value={l.strength ?? 1}
+                    onChange={e => patch(l.id, { strength: e.target.value === '' ? 1 : Number(e.target.value) })}
+                    style={field({ width: '100%' })} />
+                </div>
               </div>
               <button type="button" onClick={() => remove(l.id)} style={pill('var(--pe-danger)', '--pe-danger-line')}>✕</button>
             </div>

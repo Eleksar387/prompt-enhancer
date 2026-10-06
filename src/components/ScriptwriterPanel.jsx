@@ -18,7 +18,7 @@ import {
 import { btn, shrinkToJpeg, imageHash, mapWithConcurrency, exportTimestamp } from '../utils'
 import { formatTimestamp } from '../manualH3'
 import { buildDirectorTimeline } from '../directorExport'
-import { lorasByIds, loraInstruction, withLoraTriggers } from '../loras'
+import { lorasByIds, loraInstruction, withLoraTriggers, loraManifestEntries } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
@@ -939,6 +939,13 @@ export default function ScriptwriterPanel({
       .map(c => { const l = loraById(c.lora); return l ? { ...l, subject: c.name } : null })
       .filter(Boolean)
     return [...activeLoras, ...bound]
+  }
+  // Library ids whose FILES this clip loads (manifest `loras`): the active chips plus the
+  // bound cast LoRAs — by id, so a file-only LoRA (no trigger) counts too.
+  const loraIdsForShot = (shot) => {
+    const scene = script?.scenes?.find(sc => String(sc.id) === String(shot?.scene_id))
+    const ids = Array.isArray(shot?.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
+    return [...activeLoraIds, ...(script?.characters || []).filter(c => ids.includes(c.id) && c.lora).map(c => c.lora)]
   }
 
   // --- history payload assembly (shared by all four save sites) -----------
@@ -2691,6 +2698,7 @@ export default function ScriptwriterPanel({
             mode: references.length ? 'Ref2VA' : 'T2VA',
             durationSec: shot?.duration || (isH3now ? 7 : 4),
             voices,
+            loras: shot ? loraManifestEntries(loras, loraIdsForShot(shot)) : [],
             outputName: `${runLabel}-clip-${pad(p.shotNumber || i + 1)}`,
             references,
             guides,

@@ -9,6 +9,7 @@ export const GUIDE_IMAGE_NODE = "PEClipGuideImage";
 export const DURATION_NODE = "PEClipDuration";
 export const AUDIO_NODE = "PEClipAudio";
 export const VIDEO_NODE = "PEClipVideo";
+export const LORA_NODE = "PEClipLora";
 
 export function hasDurationNode(promptOutput) {
   return Object.values(promptOutput).some((n) => n.class_type === DURATION_NODE);
@@ -38,6 +39,11 @@ export function countImageSlots(promptOutput) {
 // Reference-to-Video template.
 export function countGuideSlots(promptOutput) {
   return countSlots(promptOutput, GUIDE_IMAGE_NODE);
+}
+
+// How many PEClipLora nodes the template chains (= LoRAs one clip can load).
+export function countLoraSlots(promptOutput) {
+  return Object.values(promptOutput).filter((n) => n.class_type === LORA_NODE).length;
 }
 
 export function hasPromptNode(promptOutput) {
@@ -79,6 +85,20 @@ export function patchForClip(promptOutput, clip) {
     audioPos[id] = explicit >= 0 ? explicit : free[nextFree++];
   }
 
+  // PEClipLora: same slot rule as audio — pinned `index` first, the rest in ascending node-id order.
+  const loras = clip.loras || [];
+  const loraIds = Object.keys(patched).filter((id) => patched[id].class_type === LORA_NODE)
+    .sort((a, b) => Number(a) - Number(b));
+  const loraPinned = new Set(loraIds.map((id) => Number(patched[id].inputs?.index ?? -1)).filter((i) => i >= 0));
+  const loraFree = [];
+  for (let i = 0; loraFree.length < loraIds.length; i++) if (!loraPinned.has(i)) loraFree.push(i);
+  const loraPos = {};
+  let nextLora = 0;
+  for (const id of loraIds) {
+    const explicit = Number(patched[id].inputs?.index ?? -1);
+    loraPos[id] = explicit >= 0 ? explicit : loraFree[nextLora++];
+  }
+
   for (const [id, node] of Object.entries(patched)) {
     if (node.class_type === PROMPT_NODE) {
       node.inputs.text = clip.promptText || "";
@@ -94,6 +114,10 @@ export function patchForClip(promptOutput, clip) {
     } else if (node.class_type === AUDIO_NODE) {
       const v = voices[audioPos[id]];
       node.inputs.audio_path = v ? v.absPath : "";
+    } else if (node.class_type === LORA_NODE) {
+      const l = loras[loraPos[id]];
+      node.inputs.lora_name = l ? l.file : "";
+      node.inputs.strength = l ? l.strength : 0;
     } else if (node.class_type === VIDEO_NODE) {
       // the export carries no reference video; only overwrite when a clip names one
       if (clip.video && clip.video.absPath) node.inputs.video_path = clip.video.absPath;

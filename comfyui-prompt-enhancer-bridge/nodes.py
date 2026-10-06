@@ -290,7 +290,60 @@ class PEClipVideo:
         return (torch.from_numpy(arr),)
 
 
+class PEClipLora:
+    """Loads one LoRA onto a MODEL (model-only, like LoraLoaderModelOnly) from the clip's
+    manifest `loras[k]` — or passes the model through untouched when the clip has none, so a
+    chain of these needs no bypassing.
+
+    `lora_name` / `strength` are overwritten per clip by the JS extension. Which node is LoRA
+    k: by default the PEClipLora nodes in ascending node-id order; set `index` (0-based) to pin
+    it. `lora_name` is a path relative to ComfyUI's models/loras folder, e.g.
+    `MinimaxH3\\foo.safetensors`.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "lora_name": ("STRING", {"default": ""}),
+                "strength": ("FLOAT", {"default": 1.0, "min": -4.0, "max": 4.0, "step": 0.01}),
+            },
+            "optional": {
+                "index": ("INT", {"default": -1, "min": -1, "max": 15, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "load"
+    CATEGORY = "Prompt Enhancer Bridge"
+
+    def __init__(self):
+        self._cache = None  # (path, loaded lora state dict)
+
+    def load(self, model, lora_name, strength, index=-1):
+        if not lora_name or not lora_name.strip() or strength == 0:
+            return (model,)
+        import folder_paths
+        import comfy.sd
+        import comfy.utils
+        path = folder_paths.get_full_path("loras", lora_name.strip().replace("/", os.sep).replace("\\", os.sep))
+        if not path or not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"PEClipLora: LoRA '{lora_name}' not found under ComfyUI's models/loras folder."
+            )
+        if self._cache and self._cache[0] == path:
+            lora = self._cache[1]
+        else:
+            lora = comfy.utils.load_torch_file(path, safe_load=True)
+            self._cache = (path, lora)
+        patched, _ = comfy.sd.load_lora_for_models(model, None, lora, strength, 0)
+        return (patched,)
+
+
 NODE_CLASS_MAPPINGS = {
+    "PEClipLora": PEClipLora,
     "PEClipPrompt": PEClipPrompt,
     "PEClipImage": PEClipImage,
     "PEClipGuideImage": PEClipGuideImage,

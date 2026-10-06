@@ -76,7 +76,7 @@ describe('makeLocalStore with a parse function', () => {
 
   it('hands the parsed value straight through', () => {
     stub({ loras: JSON.stringify([{ id: 'a', name: 'Anna', trigger: 'ohwx woman', kind: 'character', note: '' }]) })
-    expect(store().load()).toEqual([{ id: 'a', name: 'Anna', trigger: 'ohwx woman', kind: 'character', note: '' }])
+    expect(store().load()).toEqual([{ id: 'a', name: 'Anna', trigger: 'ohwx woman', kind: 'character', note: '', file: '', strength: 1 }])
   })
 
   it('gives the parser null when nothing is stored', () => {
@@ -101,7 +101,7 @@ describe('sanitizeLoras', () => {
 
   it('coerces every field to the expected type', () => {
     const [l] = sanitizeLoras([{ id: 7, name: 42, trigger: null, kind: 'nonsense', note: {} }])
-    expect(l).toEqual({ id: '7', name: '', trigger: '', kind: 'character', note: '' })
+    expect(l).toEqual({ id: '7', name: '', trigger: '', kind: 'character', note: '', file: '', strength: 1 })
   })
 
   it('keeps kind: style but defaults anything else to character', () => {

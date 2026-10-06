@@ -203,6 +203,17 @@ def test_missing_voice_file_raises():
     with_tmp_root(run)
 
 
+def test_loras_are_normalised_not_staged():
+    def run(root):
+        m = {"clips": [{"clipNumber": 1, "references": [],
+             "loras": [{"file": " MinimaxH3\\a.safetensors ", "strength": "0.5"}, {"file": ""}, {"strength": 1}, "x"]},
+             {"clipNumber": 2, "references": []}]}
+        _, _, manifest = staging.stage_zip(make_zip({"manifest.json": json.dumps(m)}), root)
+        assert manifest["clips"][0]["loras"] == [{"file": "MinimaxH3\\a.safetensors", "strength": 0.5}]
+        assert manifest["clips"][1]["loras"] == []
+    with_tmp_root(run)
+
+
 if __name__ == "__main__":
     test("happy path stages files and rewrites absPath", test_happy_path)
     test("zip with no manifest.json raises ManifestError and cleans up", test_missing_manifest_raises)
@@ -214,4 +225,5 @@ if __name__ == "__main__":
     test("missing director timeline raises ManifestError", test_director_file_missing_raises)
     test("voices and video staged with absPath", test_voices_and_video_are_staged_with_abs_paths)
     test("missing voice file raises ManifestError", test_missing_voice_file_raises)
+    test("loras normalised, not staged", test_loras_are_normalised_not_staged)
     print(f"\n{n} passed")

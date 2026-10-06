@@ -8,7 +8,11 @@
 // prepending any token that came back missing or mangled.
 //
 // Store shape, one entry per LoRA the user owns:
-//   { id, name, trigger, kind: 'character' | 'style', note }
+//   { id, name, trigger, kind: 'character' | 'style', note, file, strength }
+//
+// `file` / `strength` are optional and only consumed by the ComfyUI bridge: the
+// LoRA's file name as ComfyUI lists it (e.g. `MinimaxH3\foo.safetensors`) and its
+// weight. They go into manifest.json (`clips[].loras`), never into a prompt.
 //
 // `kind` decides how it binds: a 'character' LoRA can be attached to a cast
 // member in the Scriptwriter and then rides only the clips that character
@@ -35,6 +39,8 @@ export const sanitizeLoras = (list) => (Array.isArray(list) ? list : [])
     trigger: typeof l.trigger === 'string' ? l.trigger : '',
     kind: l.kind === 'style' ? 'style' : 'character',
     note: typeof l.note === 'string' ? l.note : '',
+    file: typeof l.file === 'string' ? l.file : '',
+    strength: Number.isFinite(Number(l.strength)) && l.strength !== '' && l.strength != null ? Number(l.strength) : 1,
   }))
   .filter(l => l.id)
 
@@ -45,6 +51,27 @@ export const saveLoras = (list) => loraStore.save(list || [])
 // A LoRA is usable only once it has a trigger — an entry the user started typing
 // and left half-finished must never reach a prompt.
 export const loraUsable = (l) => !!(l && typeof l.trigger === 'string' && l.trigger.trim())
+
+export const loraHasFile = (l) => !!(l && typeof l.file === 'string' && l.file.trim())
+
+// manifest.json `loras` for one clip/generation: the file-bearing library entries
+// among `ids`, as `{ file, strength }`. Independent of `loraUsable` — a file-only
+// LoRA (a motion booster, no trigger) still has to be loaded. Deduped by file,
+// capped at the bridge workflow's PEClipLora slots.
+export const MAX_LORA_SLOTS = 3
+export function loraManifestEntries(library, ids) {
+  const seen = new Set()
+  const out = []
+  for (const id of [...new Set(Array.isArray(ids) ? ids : [])]) {
+    const l = (library || []).find(x => x.id === id)
+    if (!loraHasFile(l)) continue
+    const file = l.file.trim()
+    if (seen.has(file)) continue
+    seen.add(file)
+    out.push({ file, strength: Number.isFinite(l.strength) ? l.strength : 1 })
+  }
+  return out.slice(0, MAX_LORA_SLOTS)
+}
 
 export const lorasByIds = (list, ids) =>
   (Array.isArray(ids) ? ids : []).map(id => (list || []).find(l => l.id === id)).filter(loraUsable)

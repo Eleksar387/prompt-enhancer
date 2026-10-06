@@ -8,7 +8,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip, findDirectorNode, directorWidgetValues } from "./patch.js";
+import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, patchForClip, findDirectorNode, directorWidgetValues } from "./patch.js";
 
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
@@ -184,6 +184,13 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
       `A clip needs ${maxGuidesNeeded} Add-Guide timeline anchor(s), but your loaded workflow only has ${guideSlots} ${GUIDE_IMAGE_NODE} node(s) (by highest index+1). Add more, or this clip's extra guides will be skipped.`
     );
   }
+  const loraSlots = countLoraSlots(promptOutput);
+  const maxLorasNeeded = Math.max(0, ...manifest.clips.map((c) => (c.loras || []).length));
+  if (maxLorasNeeded > loraSlots) {
+    problems.push(
+      `A clip needs ${maxLorasNeeded} LoRA(s), but your loaded workflow only has ${loraSlots} PEClipLora node(s). Add more, or the extra LoRAs will be skipped.`
+    );
+  }
   if (problems.length) {
     body.append(el("div", {
       style: { background: "#4a2a2a", border: "1px solid #a55", borderRadius: "6px", padding: "8px", marginBottom: "12px" },
@@ -211,6 +218,9 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
     const guideLine = guides.length
       ? guides.map((g, i) => `#${i}: ${g.file.split("/").pop()} @ ${g.atSeconds}s (frame ${g.frameIdx})`).join("  ·  ")
       : null;
+    const loraLine = (clip.loras || []).length
+      ? (clip.loras || []).map((l) => `${l.file.split(/[\\/]/).pop()} (${l.strength})`).join("  ·  ")
+      : null;
     const preview = (clip.promptText || "").slice(0, 220).replace(/\s+/g, " ");
     list.append(el("div", {
       style: { border: "1px solid #444", borderRadius: "6px", padding: "8px" },
@@ -220,6 +230,7 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
       )]),
       el("div", { style: { color: "#aaa", margin: "4px 0" } }, [document.createTextNode(refLine)]),
       ...(guideLine ? [el("div", { style: { color: "#8ab", margin: "0 0 4px" } }, [document.createTextNode("Add Guide: " + guideLine)])] : []),
+      ...(loraLine ? [el("div", { style: { color: "#b9a", margin: "0 0 4px" } }, [document.createTextNode("LoRAs: " + loraLine)])] : []),
       el("div", { style: { color: "#ccc", fontStyle: "italic" } }, [document.createTextNode(preview + "…")]),
       el("div", { class: "pe-status", style: { marginTop: "4px", color: "#7ab" } }, []),
     ]));

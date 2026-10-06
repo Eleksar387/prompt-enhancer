@@ -1,7 +1,7 @@
 // Offline test for web/patch.js — no ComfyUI, no browser. Run with:
 //   node comfyui-prompt-enhancer-bridge/tests/test_patch.mjs
 import assert from "node:assert/strict";
-import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, patchForClip, findDirectorNode, directorWidgetValues } from "../web/patch.js";
+import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, patchForClip, findDirectorNode, directorWidgetValues } from "../web/patch.js";
 
 // A minimal stand-in for what app.graphToPrompt().output looks like for a
 // template with one PEClipPrompt, three PEClipImage slots (0,1,2), two
@@ -146,4 +146,23 @@ test("PEClipAudio nodes take voices in node-id order (or pinned by index); empty
   const pinned = patchForClip({ "5": { class_type: "PEClipAudio", inputs: { audio_path: "", index: 1 } } },
     { ...clip, voices: [{ absPath: "/v/a.mp3" }, { absPath: "/v/b.mp3" }] });
   assert.equal(pinned["5"].inputs.audio_path, "/v/b.mp3");
+});
+
+test("PEClipLora nodes take clip.loras in node-id order (or pinned); unused slots are cleared", () => {
+  const tpl = {
+    "20": { class_type: "PEClipLora", inputs: { lora_name: "stale.safetensors", strength: 1, index: -1 } },
+    "10": { class_type: "PEClipLora", inputs: { lora_name: "", strength: 1, index: -1 } },
+  };
+  const clip = { promptText: "", references: [], loras: [{ file: "MinimaxH3\\a.safetensors", strength: 0.5 }], durationSec: 5, outputName: "x" };
+  const out = patchForClip(tpl, clip);
+  assert.equal(out["10"].inputs.lora_name, "MinimaxH3\\a.safetensors");
+  assert.equal(out["10"].inputs.strength, 0.5);
+  assert.equal(out["20"].inputs.lora_name, "");
+  assert.equal(out["20"].inputs.strength, 0);
+  assert.equal(countLoraSlots(tpl), 2);
+  const pinned = patchForClip({ "5": { class_type: "PEClipLora", inputs: { lora_name: "", strength: 1, index: 1 } } },
+    { ...clip, loras: [{ file: "a", strength: 1 }, { file: "b", strength: 0.8 }] });
+  assert.equal(pinned["5"].inputs.lora_name, "b");
+  // a clip without a loras field (older export) clears every slot
+  assert.equal(patchForClip(tpl, { promptText: "", references: [] })["10"].inputs.lora_name, "");
 });

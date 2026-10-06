@@ -25,7 +25,7 @@ import {
   checkHealth, setWriteErrorHandler, HISTORY_EXPORT_URL,
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
-import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras } from './loras'
+import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras, loraManifestEntries } from './loras'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
@@ -769,6 +769,7 @@ export default function App() {
           durationSec: show.duration ? (parseFloat(String(duration || '').match(/(\d+(?:\.\d+)?)\s*seconds?/)?.[1]) || null) : null,
           outputName: single ? 'prompt' : `prompt-${i + 1}`,
           references,
+          loras: loraManifestEntries(loras, unionLoraIds),
         }))
       if (clips.length) {
         const manifest = { title: titleSlug(scene) || target, target, type: t.type, clips }
