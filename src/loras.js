@@ -26,6 +26,9 @@ export const LORA_STORE_KEY = 'prompt-enhancer-loras'
 export const LORA_KINDS = [
   { id: 'character', label: 'Character', short: 'C' },
   { id: 'style',     label: 'Style',     short: 'S' },
+  // No person behind it (a motion booster, a detail LoRA): global like 'style', so it is
+  // offered wherever style chips are.
+  { id: 'general',   label: 'General',   short: 'G' },
 ]
 
 // Every field is re-checked on read rather than trusted: the stored library is
@@ -37,7 +40,7 @@ export const sanitizeLoras = (list) => (Array.isArray(list) ? list : [])
     id: String(l.id || ''),
     name: typeof l.name === 'string' ? l.name : '',
     trigger: typeof l.trigger === 'string' ? l.trigger : '',
-    kind: l.kind === 'style' ? 'style' : 'character',
+    kind: ['style', 'general'].includes(l.kind) ? l.kind : 'character',
     note: typeof l.note === 'string' ? l.note : '',
     file: typeof l.file === 'string' ? l.file : '',
     strength: Number.isFinite(Number(l.strength)) && l.strength !== '' && l.strength != null ? Number(l.strength) : 1,
@@ -58,6 +61,11 @@ export const loraHasFile = (l) => !!(l && typeof l.file === 'string' && l.file.t
 // among `ids`, as `{ file, strength }`. Independent of `loraUsable` — a file-only
 // LoRA (a motion booster, no trigger) still has to be loaded. Deduped by file,
 // capped at the bridge workflow's PEClipLora slots.
+// LoRAs a reference image's own dropdown may offer: the ones activated in the LoRA panel,
+// plus any already bound to an image (so a set value never vanishes if its chip is toggled off).
+export const bindableLoras = (library, activeIds, images) =>
+  (library || []).filter(l => (activeIds || []).includes(l.id) || (images || []).some(im => im.loraId === l.id))
+
 export const MAX_LORA_SLOTS = 3
 export function loraManifestEntries(library, ids) {
   const seen = new Set()
@@ -87,7 +95,7 @@ export const targetTakesLoras = (targetId) => caps(targetId).loras !== false
 // it (the bound character's name); without one the instruction just says "the
 // character it names".
 const triggerLine = (l) => {
-  const where = l.kind === 'style'
+  const where = l.kind !== 'character'
     ? 'style trigger — put it in the opening style phrase'
     : `character trigger${l.subject ? ` for ${l.subject}` : ''} — put it immediately before or after the first mention of the character it names`
   return `- ${l.trigger}   (${where})`

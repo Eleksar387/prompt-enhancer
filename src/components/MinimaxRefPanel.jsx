@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, memo } from 'react'
 import { MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS } from '../constants'
 import { generateId } from '../db'
 import { imageHash, blobUrlToBase64 } from '../utils'
-import { loraUsable } from '../loras'
+import { bindableLoras, LORA_KINDS } from '../loras'
 import { numberSubjects } from '../manualH3'
 import { hasDragImage, takeDragImage, resolveDragImage } from '../imageDrag'
 import VoiceLibraryGallery from './VoiceLibraryGallery'
@@ -170,7 +170,7 @@ const refFromData = (d) => ({
 // via `captionImages()`'s audioBlock, Manual mode via `bindAudioToSubjects()`.
 // `manualMode` only still matters for the Note field's placeholder text below.
 function MinimaxRefPanel({
-  images, onChange, audios, onAudiosChange, loras = [], manualMode = false, duration,
+  images, onChange, audios, onAudiosChange, loras = [], activeLoraIds = [], manualMode = false, duration,
   voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
   onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
 }) {
@@ -253,7 +253,12 @@ function MinimaxRefPanel({
   // Subject-bearing references only — a Pose/Composition image never defines
   // a <Subject N>, so it's not a valid LoRA/audio binding target.
   const subjectBearing = images.filter(im => im.role !== 'pose_composition')
-  const characterLoras = loras.filter(l => l.kind === 'character' && loraUsable(l))
+  const loraChoices = bindableLoras(loras, activeLoraIds, images)
+  const loraLabel = (l) => {
+    const short = (LORA_KINDS.find(k => k.id === l.kind) || LORA_KINDS[0]).short
+    const name = l.name.trim() || l.trigger.trim() || (l.file || '').split(/[\\/]/).pop() || 'unnamed'
+    return `${short} · ${name}${activeLoraIds.includes(l.id) ? '' : ' (not active)'}`
+  }
 
   // <Picture N> always matches an image's list position, but <Subject M>
   // skips Pose/Composition images — so "Image 4" is not necessarily
@@ -325,10 +330,10 @@ function MinimaxRefPanel({
             {im.role !== 'pose_composition' && (
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
                 <div style={{ flex: '1 1 180px' }}>
-                  <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>LoRA</label>
+                  <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>LoRA <span style={{ opacity: 0.6 }}>(from the active ones above)</span></label>
                   <select style={{ ...miniSel, width: '100%' }} value={im.loraId || ''} onChange={e => updateImage(im.id, { loraId: e.target.value || null })}>
                     <option value="">— none —</option>
-                    {characterLoras.map(l => <option key={l.id} value={l.id}>{l.name.trim() || l.trigger.trim()}</option>)}
+                    {loraChoices.map(l => <option key={l.id} value={l.id}>{loraLabel(l)}</option>)}
                   </select>
                 </div>
                 <div style={{ flex: '1 1 180px' }}>

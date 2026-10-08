@@ -2025,7 +2025,7 @@ export default function App() {
       ) : frameMode === 'ref' ? (
         <>
           {ratioPicker}
-          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} manualMode={manualUI} duration={duration}
+          <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} activeLoraIds={activeLoraIds} manualMode={manualUI} duration={duration}
             voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={addVoiceLibraryFiles} onRemoveVoiceLibraryItem={removeVoiceLibraryItem}
             onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary} />
         </>
@@ -2380,7 +2380,7 @@ export default function App() {
           and every other target still has no other place to set one. */}
       {targetTakesLoras(target) && (
         <LoraPanel
-          loras={loras} activeIds={activeLoraIds} kinds={refMode ? ['style'] : null} editable={!isLoading}
+          loras={loras} activeIds={activeLoraIds} kinds={null} editable={!isLoading}
           onToggle={toggleLora} onSaveLoras={saveLoraLibrary}
           subjects={loraSubjects} onSubjectChange={setLoraSubject} />
       )}

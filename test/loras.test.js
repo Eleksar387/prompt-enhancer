@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   missingTriggers, withLoraTriggers, loraInstruction, lorasByIds,
-  targetTakesLoras, loraUsable, sanitizeLoras, loraManifestEntries, loraHasFile,
+  targetTakesLoras, loraUsable, sanitizeLoras, loraManifestEntries, loraHasFile, bindableLoras,
 } from '../src/loras.js'
 
 const L = [
@@ -199,5 +199,32 @@ describe('LoRA files for the ComfyUI bridge', () => {
     expect(loraManifestEntries(lib, ['b'])).toHaveLength(1)
     const many = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, file: `f${i}`, strength: 1 }))
     expect(loraManifestEntries(many, many.map(m => m.id))).toHaveLength(3)
+  })
+})
+
+describe('general LoRA kind', () => {
+  it('survives sanitizeLoras; unknown kinds still fall back to character', () => {
+    const [g, x] = sanitizeLoras([{ id: 'g', kind: 'general' }, { id: 'x', kind: 'nonsense' }])
+    expect(g.kind).toBe('general')
+    expect(x.kind).toBe('character')
+  })
+
+  it('is worded like a style trigger in the writer instruction', () => {
+    const out = loraInstruction([{ id: 'g', trigger: 'boost', kind: 'general' }], 'flux')
+    expect(out).toContain('style trigger')
+  })
+})
+
+describe('bindableLoras (per-image dropdown)', () => {
+  const lib = [
+    { id: 'a', kind: 'general', trigger: '', file: 'a.safetensors' },
+    { id: 'b', kind: 'character', trigger: 'x' },
+    { id: 'c', kind: 'style', trigger: 'y' },
+  ]
+  it('offers active LoRAs (even file-only) and hides inactive ones', () => {
+    expect(bindableLoras(lib, ['a'], []).map(l => l.id)).toEqual(['a'])
+  })
+  it('keeps a LoRA that is already bound to an image', () => {
+    expect(bindableLoras(lib, [], [{ loraId: 'b' }]).map(l => l.id)).toEqual(['b'])
   })
 })

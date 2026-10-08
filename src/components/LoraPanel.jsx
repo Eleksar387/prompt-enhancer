@@ -41,11 +41,15 @@ export default function LoraPanel({
 }) {
   const [open, setOpen] = useState(false)
 
-  const shown = kinds ? loras.filter(l => kinds.includes(l.kind)) : loras
+  // 'general' (no person behind it) rides along wherever 'style' is offered.
+  const allowed = kinds && (kinds.includes('style') ? [...new Set([...kinds, 'general'])] : kinds)
+  const shown = allowed ? loras.filter(l => allowed.includes(l.kind)) : loras
+  const hiddenCount = loras.length - shown.length
   const active = (id) => activeIds.includes(id)
 
   const patch = (id, changes) => onSaveLoras?.(loras.map(l => l.id === id ? { ...l, ...changes } : l))
-  const add = () => onSaveLoras?.([...loras, { id: generateId(), name: '', trigger: '', kind: 'character', note: '', file: '', strength: 1 }])
+  const newKind = allowed && !allowed.includes('character') ? 'general' : 'character'
+  const add = () => onSaveLoras?.([...loras, { id: generateId(), name: '', trigger: '', kind: newKind, note: '', file: '', strength: 1 }])
   const remove = (id) => onSaveLoras?.(loras.filter(l => l.id !== id))
 
   return (
@@ -82,6 +86,12 @@ export default function LoraPanel({
             </div>
           )
         })}
+        {hiddenCount > 0 && (
+          <span style={{ fontSize: 12, color: 'var(--pe-ink-3)', alignSelf: 'center' }}
+            title="Character LoRAs are bound to a reference image / cast member in this view, not toggled here.">
+            +{hiddenCount} character LoRA{hiddenCount > 1 ? 's' : ''} hidden here
+          </span>
+        )}
         {shown.length === 0 && (
           <span style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
             No LoRAs yet{kinds ? ' of this kind' : ''}.
@@ -99,6 +109,10 @@ export default function LoraPanel({
             The trigger is the exact token the LoRA was trained with — it is copied into the prompt
             character for character, so spelling, spacing and capitalization all matter. The LoRA file
             itself is chosen in your ComfyUI workflow — or, with a file name below, loaded automatically by the bridge's PEClipLora nodes (up to 3 per clip).
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--pe-ink-3)', marginBottom: 10 }}>
+            Character = a person (bound to an image / cast member where those exist) · Style = whole-film look ·
+            General = no person (e.g. a motion booster) — offered wherever Style is.
           </div>
           {loras.map(l => (
             <div key={l.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
