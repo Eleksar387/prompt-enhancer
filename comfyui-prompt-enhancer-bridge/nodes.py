@@ -24,6 +24,11 @@
 import os
 
 try:
+    from .lora_resolve import resolve_lora_name
+except ImportError:  # run outside a package (tests)
+    from lora_resolve import resolve_lora_name
+
+try:
     import numpy as np
     import torch
     from PIL import Image, ImageOps
@@ -328,10 +333,16 @@ class PEClipLora:
         import folder_paths
         import comfy.sd
         import comfy.utils
-        path = folder_paths.get_full_path("loras", lora_name.strip().replace("/", os.sep).replace("\\", os.sep))
+        name = lora_name.strip().replace("/", os.sep).replace("\\", os.sep)
+        path = folder_paths.get_full_path("loras", name)
         if not path or not os.path.isfile(path):
+            match, near = resolve_lora_name(lora_name, folder_paths.get_filename_list("loras"))
+            if match:
+                path = folder_paths.get_full_path("loras", match)
+        if not path or not os.path.isfile(path):
+            hint = f" Similar: {', '.join(near)}." if near else ""
             raise FileNotFoundError(
-                f"PEClipLora: LoRA '{lora_name}' not found under ComfyUI's models/loras folder."
+                f"PEClipLora: LoRA '{lora_name}' not found under ComfyUI's models/loras folder.{hint}"
             )
         if self._cache and self._cache[0] == path:
             lora = self._cache[1]

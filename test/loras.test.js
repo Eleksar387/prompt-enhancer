@@ -122,6 +122,21 @@ describe('withLoraTriggers — MiniMax H3', () => {
       .toMatch(/^integrated_multimodal_description: ohwx woman, aidmaMJ6\.1\. \[Shot 1\]/)
   })
 
+  it('re-injects a token that only sits in summary or in quoted dialogue', () => {
+    const t = 'summary:\nohwx woman waits.\n\ndetailed_description:\n[Shot 1] A shot. She says "aidmaMJ6.1".\n\noverall_soundscape:\nWind.'
+    const o = withLoraTriggers(t, L, 'minimax_h3')
+    expect(o).toMatch(/detailed_description:\nohwx woman, aidmaMJ6\.1\. \[Shot 1\]/)
+  })
+
+  it('leaves a token already in the prose field alone', () => {
+    const t = 'detailed_description:\n[Shot 1] ohwx woman, aidmaMJ6.1, a shot.\n\noverall_soundscape:\nWind.'
+    expect(withLoraTriggers(t, L, 'minimax_h3')).toBe(t)
+  })
+
+  it('does not count a trigger glued into a longer word', () => {
+    expect(missingTriggers('a stylish room', [{ id: 'x', trigger: 'style', kind: 'style' }])).toEqual(['style'])
+  })
+
   it('falls back to a prepend when neither field is present', () => {
     expect(withLoraTriggers('summary:\nsomething odd', L, 'minimax_h3'))
       .toBe('ohwx woman, aidmaMJ6.1. summary:\nsomething odd')
@@ -164,6 +179,17 @@ describe('loraInstruction', () => {
   it('adds the H3 field restriction only for H3', () => {
     expect(loraInstruction(L, 'minimax_h3')).toContain('detailed_description')
     expect(loraInstruction(L, 'flux')).not.toContain('detailed_description')
+  })
+
+  it('sends each LoRA note and a kind-specific placement', () => {
+    const s = loraInstruction([
+      { ...L[0], note: 'Mara, red hair' },
+      { id: 'g', trigger: 'boostX', kind: 'general', note: 'faster motion' },
+    ], 'flux')
+    expect(s).toContain('what it does: Mara, red hair')
+    expect(s).toContain('what it does: faster motion')
+    expect(s).toContain('general trigger')
+    expect(loraInstruction(L, 'flux')).not.toContain('what it does')
   })
 
   it('names the bound character when one is given', () => {
@@ -209,9 +235,10 @@ describe('general LoRA kind', () => {
     expect(x.kind).toBe('character')
   })
 
-  it('is worded like a style trigger in the writer instruction', () => {
+  it('is worded as a general (non-person) trigger in the writer instruction', () => {
     const out = loraInstruction([{ id: 'g', trigger: 'boost', kind: 'general' }], 'flux')
-    expect(out).toContain('style trigger')
+    expect(out).toContain('general trigger')
+    expect(out).not.toContain('character trigger')
   })
 })
 

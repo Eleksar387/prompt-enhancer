@@ -137,16 +137,16 @@ export default function LoraPanel({
                 </div>
               </div>
               <div style={{ flex: '1 1 160px' }}>
-                <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>Note</label>
+                <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>What it does</label>
                 <input value={l.note} onChange={e => patch(l.id, { note: e.target.value })}
-                  placeholder="optional — file name, weight, reminder" style={field({ width: '100%' })} />
+                  placeholder="e.g. my character Mara, red hair / film-grain look — sent to the writer to place the trigger" style={field({ width: '100%' })} />
               </div>
               <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ flex: '1 1 260px' }}>
                   <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>ComfyUI file</label>
                   <input value={l.file || ''} onChange={e => patch(l.id, { file: e.target.value })}
                     placeholder="optional — e.g. MinimaxH3\my_lora.safetensors" spellCheck={false}
-                    title="File name as ComfyUI lists it, relative to models/loras. Written to the export manifest; the bridge loads it per clip."
+                    title="File name relative to models/loras (a bare name is also tried under MinimaxH3\\). Written to the export manifest; the bridge loads it per clip."
                     style={field({ width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })} />
                 </div>
                 <div style={{ width: 90 }}>

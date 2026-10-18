@@ -16,8 +16,9 @@
 //
 // `kind` decides how it binds: a 'character' LoRA can be attached to a cast
 // member in the Scriptwriter and then rides only the clips that character
-// appears in; a 'style' LoRA applies to the whole generation. `name` and `note`
-// are for the user's own benefit and never reach a model.
+// appears in; a 'style' LoRA applies to the whole generation. `name`
+// is for the user's own benefit and never reaches a model. `note` describes what the LoRA does
+// and IS sent to the writer beside its trigger, so the writer can place the token where it belongs.
 
 import { makeLocalStore } from './localStore'
 import { caps, TARGETS } from './constants'
@@ -95,10 +96,13 @@ export const targetTakesLoras = (targetId) => caps(targetId).loras !== false
 // it (the bound character's name); without one the instruction just says "the
 // character it names".
 const triggerLine = (l) => {
-  const where = l.kind !== 'character'
-    ? 'style trigger — put it in the opening style phrase'
-    : `character trigger${l.subject ? ` for ${l.subject}` : ''} — put it immediately before or after the first mention of the character it names`
-  return `- ${l.trigger}   (${where})`
+  const where = l.kind === 'character'
+    ? `character trigger${l.subject ? ` for ${l.subject}` : ''} — put it immediately before or after the first mention of the character it names`
+    : l.kind === 'general'
+      ? 'general trigger — put it in the sentence describing the movement or element it affects, or in the opening phrase if its effect is global'
+      : 'style trigger — put it in the opening style phrase'
+  const does = (l.note || '').trim()
+  return `- ${l.trigger}   (${where})${does ? ` — what it does: ${does}` : ''}`
 }
 
 export function loraInstruction(active, targetId) {
@@ -109,6 +113,10 @@ export function loraInstruction(active, targetId) {
   const fields = TARGETS[targetId]?.loraInject?.fields
   return `\n\nLoRA trigger tokens — these are model activation keys, not words. Reproduce each one EXACTLY as written below, `
     + `character for character:\n${usable.map(triggerLine).join('\n')}\n`
+    + (usable.some(l => (l.note || '').trim())
+      ? `Where a line says what the LoRA does, use that to decide which part of the scene its token belongs to; `
+        + `the description itself never appears in the prompt. `
+      : '')
     + `Never translate, pluralize, re-capitalize, hyphenate, space out, abbreviate or explain a token, and never wrap `
     + `one in quotation marks. Each token appears once. They are not on-screen text, not dialogue, and not something `
     + `to describe — they are tokens the image model needs to read.`
@@ -126,11 +134,33 @@ export function loraInstruction(active, targetId) {
 // as missing, which is the intent: the LoRA would not have fired either.
 const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ')
 
-export function missingTriggers(text, active) {
-  const hay = norm(text)
+// Whole-token match: not glued to letters/digits, so "style" does not count inside "stylish".
+const hasToken = (hay, t) => {
+  const n = norm(t).trim()
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`).test(hay)
+}
+
+// The prose of the first of `fields` present in an H3 prompt, with quoted text (spoken
+// dialogue / on-screen text) removed — the only place a token counts as "made it in".
+const proseOf = (text, fields) => {
+  for (const f of fields) {
+    const m = text.match(new RegExp(`^[ \\t]*${f}[ \\t]*:[ \\t]*\\n?`, 'im'))
+    if (!m) continue
+    const rest = text.slice(m.index + m[0].length)
+    const end = rest.search(/\n[ \t]*[a-z_]+[ \t]*:/i)
+    return (end < 0 ? rest : rest.slice(0, end)).replace(/"[^"]*"/g, ' ')
+  }
+  return null
+}
+
+export function missingTriggers(text, active, targetId) {
+  const fields = TARGETS[targetId]?.loraInject?.fields
+  const prose = fields ? proseOf(text || '', fields) : null
+  const hay = norm(prose ?? text)
   return (active || []).filter(loraUsable)
     .map(l => l.trigger.trim())
-    .filter(t => !hay.includes(norm(t)))
+    .filter(t => !hasToken(hay, t))
 }
 
 // Dedupes triggers that repeat across LoRAs (two character LoRAs sharing a
@@ -155,7 +185,7 @@ const injectAfterLabel = (text, label, tokens) => {
 export function withLoraTriggers(text, active, targetId) {
   const body = text || ''
   if (!body.trim() || !targetTakesLoras(targetId)) return body
-  const missing = uniq(missingTriggers(body, active))
+  const missing = uniq(missingTriggers(body, active, targetId))
   if (!missing.length) return body
 
   // Where a repaired token may go is a property of the target's output FORMAT, so
