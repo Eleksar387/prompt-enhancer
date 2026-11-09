@@ -166,3 +166,7 @@ If the export ZIP contains `director/timeline.json` and the open workflow has a 
 ## LoRAs (`PEClipLora`)
 
 A manifest clip may carry `loras: [{ file, strength }]` (set per LoRA in the Prompt Enhancer's LoRA library: "ComfyUI file" + "Strength"). Put one or more `PEClipLora` nodes in the model chain (model in → model out, e.g. between a fixed LoRA and the sampler). Load Film fills them per clip: LoRA 1 goes to the lowest node id (or the node whose `index` is 0), and so on. A slot the clip doesn't use passes the model through unchanged — no bypassing. `file` is relative to ComfyUI's `models/loras` (e.g. `MinimaxH3\foo.safetensors`). The review panel warns if a clip needs more LoRAs than there are `PEClipLora` nodes.
+
+## Unload models after the film
+
+The review panel has a **🧹 Unload ComfyUI models after the last clip** checkbox (remembered in `localStorage` as `pe-bridge-free-after`). When ticked, once every clip has finished the panel sends `POST /free {unload_models: true, free_memory: true}` to ComfyUI, which drops its loaded models and cached memory. It fires once for the whole film, not between clips, so models aren't reloaded for each clip. Best-effort: a failure only changes the status line. Only the Run flow uses it — the Director path queues nothing.

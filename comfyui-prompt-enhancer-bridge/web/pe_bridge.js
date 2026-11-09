@@ -120,6 +120,21 @@ async function pollHistory(promptId, { intervalMs = 2000, timeoutMs = 600000 } =
   return { ok: false, error: "Timed out waiting for this clip." };
 }
 
+// Ask ComfyUI to drop its loaded models and free cached memory (POST /free) — the bridge's
+// counterpart of the Prompt Enhancer's "unload Ollama model after generation". Best-effort;
+// ComfyUI only acts on it once its queue is idle.
+const FREE_PREF_KEY = "pe-bridge-free-after";
+async function freeComfyMemory() {
+  try {
+    const res = await fetch("/free", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
 // --- UI ------------------------------------------------------------------
 
 function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
@@ -245,6 +260,13 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
     // get skipped, everything else still runs), not a reason to block all of it.
     disabled: !promptOk,
   }, [document.createTextNode("▶ Run all clips")]);
+  const freeBox = el("input", { type: "checkbox" }, []);
+  freeBox.checked = loadPos(FREE_PREF_KEY) === true;
+  freeBox.addEventListener("change", () => savePos(FREE_PREF_KEY, freeBox.checked));
+  const freeLabel = el("label", {
+    title: "After the last clip finishes, asks ComfyUI to unload its models and free cached memory (POST /free). The next run has to reload them, so it starts slower.",
+    style: { display: "flex", alignItems: "center", gap: "6px", marginTop: "12px", color: "#aaa", cursor: "pointer" },
+  }, [freeBox, document.createTextNode("🧹 Unload ComfyUI models after the last clip (frees RAM/VRAM)")]);
   const closeBtn = el("button", { style: { marginTop: "12px", padding: "6px 14px" }, onclick: () => { panel.remove(); onClose?.(); } }, [
     document.createTextNode("Close"),
   ]);
@@ -284,9 +306,14 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
     }
     status.textContent = "All clips submitted.";
     headerStatus.textContent = "✓ all submitted";
+    if (freeBox.checked) {
+      // Once, after the whole film — never between clips, which would reload the models each time.
+      const freed = await freeComfyMemory();
+      status.textContent = freed ? "All clips done — ComfyUI models unloaded." : "All clips done — couldn't ask ComfyUI to unload (POST /free failed).";
+    }
   });
 
-  body.append(runBtn, closeBtn, status);
+  body.append(freeLabel, runBtn, closeBtn, status);
   document.body.append(panel);
 }
 
