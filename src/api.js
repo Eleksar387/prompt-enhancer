@@ -1,7 +1,7 @@
 import { makeLocalStore } from './localStore'
 
 export const CFG_KEY = 'ollama-enhancer-config'
-export const DEFAULT_CFG = { base: 'https://api.x.ai/v1', apiKey: '', temperature: 0.7, maxTokens: 4096, imageModel: 'grok-imagine-image-2.0', videoModel: 'grok-imagine-video-1.5', geminiKey: '', geminiImageModel: 'gemini-2.5-flash-image' }
+export const DEFAULT_CFG = { base: 'https://api.x.ai/v1', apiKey: '', temperature: 0.7, maxTokens: 4096, imageModel: 'grok-imagine-image-2.0', videoModel: 'grok-imagine-video-1.5', geminiKey: '', geminiImageModel: 'gemini-2.5-flash-image', unloadAfter: false }
 
 const cfgStore = makeLocalStore(CFG_KEY, { defaults: DEFAULT_CFG })
 
@@ -130,6 +130,32 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     ? { input_tokens: data.usage.prompt_tokens ?? '?', output_tokens: data.usage.completion_tokens ?? '?' }
     : null
   return { text: text.trim(), usage }
+}
+
+// While a queue is draining, per-run unloads are suppressed so the model isn't reloaded
+// between items; the queue unloads once at the end.
+let unloadQuiet = false
+export const setUnloadQuiet = (q) => { unloadQuiet = !!q }
+export const unloadAfterRun = (cfg) => { if (!unloadQuiet) unloadOllamaModels(cfg) }
+
+// Evict every model Ollama currently holds in memory. The OpenAI-compatible /v1 surface
+// ignores keep_alive, so this uses the native API: GET /api/ps, then POST /api/generate
+// with keep_alive: 0. Best-effort — never throws. No-op for cloud bases or when the
+// "unload after generation" option is off.
+export async function unloadOllamaModels(cfg) {
+  if (!cfg || !cfg.unloadAfter || isCloud(cfg.base)) return
+  try {
+    const origin = (cfg.base || '').replace(/\/+$/, '').replace(/\/v1$/, '')
+    const res = await fetch(`${origin}/api/ps`)
+    if (!res.ok) return
+    const data = await res.json()
+    const names = (data.models || []).map(m => m.name || m.model).filter(Boolean)
+    await Promise.allSettled(names.map(model => fetch(`${origin}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keep_alive: 0 }),
+    })))
+  } catch {}
 }
 
 // xAI image generation / editing — POST {base}/images/generations, or /images/edits when

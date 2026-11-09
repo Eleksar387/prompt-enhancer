@@ -12,7 +12,7 @@ import {
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts, MINIMAX_H3_RESOLUTIONS,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isCloud } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isCloud, setUnloadQuiet, unloadAfterRun } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
   listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
@@ -1130,7 +1130,9 @@ export default function App() {
 
   const processAllQueue = async () => {
     setNotifyQuiet(true)
-    try { await queue.processAll(runAnyQueueItem) } finally { setNotifyQuiet(false) }
+    setUnloadQuiet(true)
+    try { await queue.processAll(runAnyQueueItem) } finally { setNotifyQuiet(false); setUnloadQuiet(false) }
+    unloadAfterRun(cfg)
     notifyDone('Queue finished', 'All queued items have been processed.')
   }
 
@@ -1160,10 +1162,12 @@ export default function App() {
         setResults([{ label: lbl, text, saved: text, usage, loading: false, error: '', h3Mode }])
         if (snapshot) saveHistory(snapshot, [{ label: lbl, text, h3Mode }])
         notifyDone('Prompt ready', TARGETS[target]?.label || '')
+        unloadAfterRun(cfg)
         return { ok: true }
       } catch (e) {
         setResults([{ label: lbl, text: '', usage: null, loading: false, error: e.message, h3Mode }])
         notifyDone('Generation failed', e.message)
+        unloadAfterRun(cfg)
         return { ok: false, error: e.message }
       }
     }
@@ -1186,6 +1190,7 @@ export default function App() {
     ))
     if (snapshot) saveHistory(snapshot, outs)
     notifyDone('Prompts ready', `${TARGETS[target]?.label || ''} · 3 variants`)
+    unloadAfterRun(cfg)
     return { ok: true }
   }
 
@@ -1931,7 +1936,9 @@ export default function App() {
     describeImage: async (img, roleId) => {
       if (!effectiveVision) throw new Error('no vision model selected')
       const base64 = await blobUrlToBase64(img.url)
-      return describeUnderRole(base64, img.mediaType, roleId, { fromCache: 0, fresh: 0 }, effectiveVision)
+      try {
+        return await describeUnderRole(base64, img.mediaType, roleId, { fromCache: 0, fresh: 0 }, effectiveVision)
+      } finally { unloadAfterRun(cfg) }
     },
     pickHistoryImage,
     saveCaption: historyActionsRef.current.saveCaption,

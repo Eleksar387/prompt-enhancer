@@ -3,7 +3,7 @@ import {
   TARGETS, DURATION_OPTIONS, PROMPT_LENGTH_INJECT, systemPromptFor, caps,
 } from '../constants'
 import { btn, selStyle, presetById } from '../utils'
-import { callOllama } from '../api'
+import { callOllama, unloadAfterRun } from '../api'
 import { ADAPT_TARGETS, foldCaption, buildStylePart, buildAdaptUserText } from '../adapt'
 import { withLoraTriggers } from '../loras'
 import { buildSnapshot } from '../workspace'
@@ -122,6 +122,7 @@ export default function AdaptPanel({
     } catch (e) {
       setResult({ text: '', usage: null, loading: false, error: e.message })
     }
+    unloadAfterRun(cfg)
   }
 
   // The history card's "→ Text2Video" shortcut sets `autoRun` to skip the

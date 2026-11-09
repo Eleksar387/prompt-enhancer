@@ -234,6 +234,14 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
             )}
           </div>
 
+          {!cloud && (
+            <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+              title="After a generation finishes, asks Ollama to evict every model it has loaded (keep_alive 0) so the RAM/VRAM is free for other work. Evicts all loaded Ollama models, not just this app's; the next generation has to reload the model, so it starts slower.">
+              <input type="checkbox" checked={!!cfg.unloadAfter} onChange={e => setCfg({ ...cfg, unloadAfter: e.target.checked })} />
+              🧹 Unload local Ollama model(s) after generation (frees RAM)
+            </label>
+          )}
+
           {notifySupported() && (
             <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
               title="Shows a desktop notification when a prompt, script or queue run finishes while this tab is in the background.">

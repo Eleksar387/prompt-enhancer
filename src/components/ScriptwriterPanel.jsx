@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { flushSync } from 'react-dom'
 import JSZip from 'jszip'
-import { callOllama, isCloud } from '../api'
+import { callOllama, isCloud, unloadAfterRun } from '../api'
 import {
   // The writer and director prompts this panel drives directly. The per-target
   // prompts (clip writers, frame-still writers) are NOT imported any more — they
@@ -1024,7 +1024,7 @@ export default function ScriptwriterPanel({
       setScript(data)
       setPhase('script')
       commitHistory({ ...basePayload('script', refs), script: data, directorsCut: null, finalPrompts: null })
-      if (!autoActive) notifyDone('Script ready', data.title || '')
+      if (!autoActive) { notifyDone('Script ready', data.title || ''); unloadAfterRun(cfg) }
     } catch (e) {
       setError(e.message)
       setPhase('input')
@@ -1179,7 +1179,7 @@ export default function ScriptwriterPanel({
         script, directorsCut: data, finalPrompts: null,
         framePrompts: serializeFramePrompts(freshFrames),
       })
-      if (!autoActive) notifyDone("Director's Cut ready", `${data.shots.length} clips`)
+      if (!autoActive) { notifyDone("Director's Cut ready", `${data.shots.length} clips`); unloadAfterRun(cfg) }
     } catch (e) {
       setError(e.message)
       setPhase('script')
@@ -1591,10 +1591,12 @@ export default function ScriptwriterPanel({
       setError(`Clip ${refusal.shotNumber} was refused by the model: "${refusal.message}" — stopped. Remove or replace the reference image(s)/hint responsible, then retry.`)
       setPhase('dircut')
       notifyDone('Clip refused', `Clip ${refusal.shotNumber} was refused by the model`)
+      unloadAfterRun(cfg)
       return
     }
     setPhase('done')
     notifyDone('Film prompts ready', `${results.length} clips`)
+    unloadAfterRun(cfg)
     commitHistory({
       ...basePayload('done', refs),
       script, directorsCut, finalPrompts: results,
@@ -1665,9 +1667,11 @@ export default function ScriptwriterPanel({
     else if (phase === 'dircut' && directorsCut && !error) { phase3Ref.current() }
     else if (phase === 'done') {
       autoDoneRef.current = true; setAutoActive(false)
+      unloadAfterRun(cfg)
       onAutoJobDone?.({ ok: true })
     } else if (error && (phase === 'input' || phase === 'script' || phase === 'dircut')) {
       autoDoneRef.current = true; setAutoActive(false)
+      unloadAfterRun(cfg)
       onAutoJobDone?.({ ok: false, error })
     }
   }, [phase, error])
