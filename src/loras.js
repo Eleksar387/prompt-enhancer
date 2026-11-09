@@ -58,6 +58,10 @@ export const loraUsable = (l) => !!(l && typeof l.trigger === 'string' && l.trig
 
 export const loraHasFile = (l) => !!(l && typeof l.file === 'string' && l.file.trim())
 
+// Equality-only normalization (never storage/display) — the user's two ComfyUI
+// installs may report `\` or `/` depending on host OS; compare trimmed, lowercased.
+export const normalizeLoraFile = (f) => (f || '').trim().replace(/\\/g, '/').toLowerCase()
+
 // manifest.json `loras` for one clip/generation: the file-bearing library entries
 // among `ids`, as `{ file, strength }`. Independent of `loraUsable` — a file-only
 // LoRA (a motion booster, no trigger) still has to be loaded. Deduped by file,
@@ -68,7 +72,11 @@ export const bindableLoras = (library, activeIds, images) =>
   (library || []).filter(l => (activeIds || []).includes(l.id) || (images || []).some(im => im.loraId === l.id))
 
 export const MAX_LORA_SLOTS = 3
-export function loraManifestEntries(library, ids) {
+// `overrides` ({ [loraId]: strength }, optional) lets one specific activation
+// (an active chip, a Scriptwriter character binding, a reference-image
+// binding) dial a LoRA's weight away from its shared library default without
+// changing that default for every other generation/clip/image that uses it.
+export function loraManifestEntries(library, ids, overrides) {
   const seen = new Set()
   const out = []
   for (const id of [...new Set(Array.isArray(ids) ? ids : [])]) {
@@ -77,7 +85,9 @@ export function loraManifestEntries(library, ids) {
     const file = l.file.trim()
     if (seen.has(file)) continue
     seen.add(file)
-    out.push({ file, strength: Number.isFinite(l.strength) ? l.strength : 1 })
+    const override = overrides?.[id]
+    const strength = Number.isFinite(override) ? override : (Number.isFinite(l.strength) ? l.strength : 1)
+    out.push({ file, strength })
   }
   return out.slice(0, MAX_LORA_SLOTS)
 }

@@ -26,6 +26,7 @@ import {
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras, loraManifestEntries } from './loras'
+import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries } from './refmods'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
@@ -35,6 +36,7 @@ import MinimaxRefPanel from './components/MinimaxRefPanel'
 import ImageRefsPanel from './components/ImageRefsPanel'
 import AdaptPanel from './components/AdaptPanel'
 import LoraPanel from './components/LoraPanel'
+import RefModPanel from './components/RefModPanel'
 import QueuePanel from './components/QueuePanel'
 import HistoryPanel from './components/HistoryPanel'
 import { useHistoryFilters } from './hooks/useHistoryFilters'
@@ -144,8 +146,28 @@ export default function App() {
   // next to that LoRA's chip in LoraPanel; a 'style' LoRA never has one.
   const [loraSubjects, setLoraSubjects] = useState({})
   const setLoraSubject = (id, name) => setLoraSubjects(prev => ({ ...prev, [id]: name }))
+  // Per-use override of an active chip LoRA's strength (id → number) — the
+  // library's own `strength` (src/loras.js) is the shared default; this lets
+  // one generation dial a LoRA's weight away from it without touching every
+  // other generation that also uses that LoRA. Blank/absent = use the default.
+  const [loraStrengths, setLoraStrengths] = useState({})
+  const setLoraStrength = (id, v) => setLoraStrengths(prev => {
+    if (v === '' || v == null) { const n = { ...prev }; delete n[id]; return n }
+    return { ...prev, [id]: Number(v) }
+  })
   const saveLoraLibrary = (list) => { setLoras(list); saveLoras(list) }
   const toggleLora = (id) => setActiveLoraIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  // RefMods — a parallel, simpler library for MiniMax H3's
+  // MiniMaxH3RefModsLoader node. No kind concept (and, unlike LoRA, no
+  // trigger word either — RefMod has none), so just flat chips.
+  const [refMods, setRefMods] = useState(loadRefMods)
+  const [activeRefModIds, setActiveRefModIds] = useState([])
+  const saveRefModLibrary = (list) => { setRefMods(list); saveRefMods(list) }
+  const toggleRefMod = (id) => setActiveRefModIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  // Which named character/subject an active RefMod's note describes —
+  // same idea as loraSubjects, but RefMod has no kind to gate it on.
+  const [refModSubjects, setRefModSubjects] = useState({})
+  const setRefModSubject = (id, name) => setRefModSubjects(prev => ({ ...prev, [id]: name }))
   // The language everyone in the video speaks. Lives outside the Dialogue block
   // because a target can need it with no typed dialogue at all (H3 writes a line
   // itself for a voice reference; DramaBox is all speech and shows no Dialogue
@@ -166,12 +188,21 @@ export default function App() {
   // (consumed only by loraInstruction() in src/loras.js, writer-LLM text).
   const characterLoraIdsFromImages = imgs.refImages.map(im => im.loraId).filter(Boolean)
   const unionLoraIds = [...new Set([...activeLoraIds, ...characterLoraIdsFromImages])]
+  // Per-id strength overrides for the manifest (loraManifestEntries) only —
+  // never affects prompt text. A reference image's own override is more
+  // specific than a chip override, so it wins when the same LoRA is both.
+  const loraStrengthOverrides = { ...loraStrengths }
+  for (const im of imgs.refImages) {
+    if (im.loraId && Number.isFinite(im.loraStrength)) loraStrengthOverrides[im.loraId] = im.loraStrength
+  }
   const activeLoras = lorasByIds(loras, unionLoraIds).map(l => {
     if (l.kind !== 'character') return l
     const boundImage = imgs.refImages.find(im => im.loraId === l.id)
     if (boundImage) return { ...l, subject: `the subject in Image ${imgs.refImages.indexOf(boundImage) + 1}` }
     return loraSubjects[l.id]?.trim() ? { ...l, subject: loraSubjects[l.id].trim() } : l
   })
+  const activeRefMods = refModsByIds(refMods, activeRefModIds).map(r =>
+    refModSubjects[r.id]?.trim() ? { ...r, subject: refModSubjects[r.id].trim() } : r)
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
@@ -242,7 +273,7 @@ export default function App() {
   const workspace = {
     targetType: t.type, show,
     target, duration, style, creativity, frameMode, negative, scene,
-    dialogue, delivery, spokenLangId, activeLoraIds, loraSubjects, manualMode,
+    dialogue, delivery, spokenLangId, activeLoraIds, loraSubjects, loraStrengths, manualMode, activeRefModIds, refModSubjects,
     firstImg: imgs.firstImg, midImg: imgs.midImg, lastImg: imgs.lastImg,
     h3RatioId, soundscape, music, refImages: imgs.refImages, refAudios: imgs.refAudios,
     promptLength,
@@ -256,7 +287,7 @@ export default function App() {
       target: setTarget, duration: setDuration, style: setStyle, creativity: setCreativity,
       frameMode: setFrameMode, negative: setNegative, scene: setScene,
       dialogue: setDialogue, delivery: setDelivery,
-      spokenLangId: setSpokenLangId, activeLoraIds: setActiveLoraIds, loraSubjects: setLoraSubjects,
+      spokenLangId: setSpokenLangId, activeLoraIds: setActiveLoraIds, loraSubjects: setLoraSubjects, loraStrengths: setLoraStrengths, activeRefModIds: setActiveRefModIds, refModSubjects: setRefModSubjects,
       manualMode: setManualMode,
       firstImg: imgs.setFirstImg, midImg: imgs.setMidImg, lastImg: imgs.setLastImg,
       h3RatioId: setH3RatioId, soundscape: setSoundscape, music: setMusic,
@@ -769,7 +800,8 @@ export default function App() {
           durationSec: show.duration ? (parseFloat(String(duration || '').match(/(\d+(?:\.\d+)?)\s*seconds?/)?.[1]) || null) : null,
           outputName: single ? 'prompt' : `prompt-${i + 1}`,
           references,
-          loras: loraManifestEntries(loras, unionLoraIds),
+          loras: loraManifestEntries(loras, unionLoraIds, loraStrengthOverrides),
+          refMods: refModManifestEntries(refMods, activeRefModIds),
         }))
       if (clips.length) {
         const manifest = { title: titleSlug(scene) || target, target, type: t.type, clips }
@@ -1150,7 +1182,8 @@ export default function App() {
   // compares the two. A null `snapshot` means "don't record this in history".
   const runWriterCall = async ({ user, system, snapshot, h3Mode = null }) => {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
-    // shape this target's output format expects.
+    // shape this target's output format expects. RefMods have no trigger to
+    // repair — they load via file/strength alone (see src/refmods.js).
     const repair = (raw) => withLoraTriggers(raw, activeLoras, target)
 
     if (outputCount === 1) {
@@ -1543,7 +1576,8 @@ export default function App() {
 
       // Same LoRA-trigger repair the AI path applies — pure text manipulation,
       // not an AI call, and TARGETS.minimax_h3.loraInject.fields already
-      // targets exactly the field names this module emits.
+      // targets exactly the field names this module emits. RefMods have no
+      // trigger to repair.
       const text = withLoraTriggers(built.text, activeLoras, target)
       setResults([{ label: 'manual', text, saved: text, usage: null, loading: false, error: '', h3Mode: mode }])
       const snapshot = buildWorkspaceSnapshot(workspace, { model: 'manual', vision: null, outputCount: 1, caption: null })
@@ -1559,7 +1593,7 @@ export default function App() {
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
       spokenLang: show.spokenLang ? spokenLangId : null,
-      loras: activeLoras, targetId: target,
+      loras: activeLoras, refMods: activeRefMods, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
@@ -1703,7 +1737,7 @@ export default function App() {
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
       spokenLang: show.spokenLang ? spokenLangId : null,
-      loras: activeLoras, targetId: target,
+      loras: activeLoras, refMods: activeRefMods, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
     setSavedCaption(caption)
@@ -2389,7 +2423,23 @@ export default function App() {
         <LoraPanel
           loras={loras} activeIds={activeLoraIds} kinds={null} editable={!isLoading}
           onToggle={toggleLora} onSaveLoras={saveLoraLibrary}
-          subjects={loraSubjects} onSubjectChange={setLoraSubject} />
+          subjects={loraSubjects} onSubjectChange={setLoraSubject}
+          strengths={loraStrengths} onStrengthChange={setLoraStrength}
+          comfyUrl={comfyCfg.url} />
+      )}
+
+      {/* RefMods — MiniMax H3's MiniMaxH3RefModsLoader node only; opt-in via
+          caps.refMods, so this is a no-op render on every other target. No
+          trigger word (RefMod has none) and no kind concept like LoRA, but
+          the same "which character/subject?" field shows on every active
+          chip, so a note can be attributed to the right person when several
+          RefMods are active at once. */}
+      {targetTakesRefMods(target) && (
+        <RefModPanel
+          refMods={refMods} activeIds={activeRefModIds} editable={!isLoading}
+          onToggle={toggleRefMod} onSaveRefMods={saveRefModLibrary}
+          subjects={refModSubjects} onSubjectChange={setRefModSubject}
+          comfyUrl={comfyCfg.url} />
       )}
 
       {/* Spoken language — nothing left to drive it in Manual mode; the user
@@ -2855,7 +2905,7 @@ export default function App() {
           sourceTs={adaptSourceOverride?.ts}
           autoRun={!!adaptSourceOverride?.autoRun}
           models={models} defaultModel={effectiveWriter} cfg={cfg}
-          workspace={workspace} activeLoras={activeLoras}
+          workspace={workspace} activeLoras={activeLoras} activeRefMods={activeRefMods}
           onSaveAdapt={(snap, outs) => saveHistory(snap, outs, false)}
           onClose={() => setAdaptSourceOverride(null)}
         />

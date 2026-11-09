@@ -1,7 +1,7 @@
 // Offline test for web/patch.js — no ComfyUI, no browser. Run with:
 //   node comfyui-prompt-enhancer-bridge/tests/test_patch.mjs
 import assert from "node:assert/strict";
-import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, patchForClip, findDirectorNode, directorWidgetValues } from "../web/patch.js";
+import { countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, countRefModSlots, patchForClip, patchWorkflowForClip, findDirectorNode, directorWidgetValues } from "../web/patch.js";
 
 // A minimal stand-in for what app.graphToPrompt().output looks like for a
 // template with one PEClipPrompt, three PEClipImage slots (0,1,2), two
@@ -165,4 +165,89 @@ test("PEClipLora nodes take clip.loras in node-id order (or pinned); unused slot
   assert.equal(pinned["5"].inputs.lora_name, "b");
   // a clip without a loras field (older export) clears every slot
   assert.equal(patchForClip(tpl, { promptText: "", references: [] })["10"].inputs.lora_name, "");
+});
+
+test("PEClipRefMod nodes take clip.refMods in node-id order (or pinned); unused slots are cleared", () => {
+  const tpl = {
+    "20": { class_type: "PEClipRefMod", inputs: { mod_name: "stale", strength: 1, index: -1 } },
+    "10": { class_type: "PEClipRefMod", inputs: { mod_name: "", strength: 1, index: -1 } },
+  };
+  const clip = { promptText: "", references: [], refMods: [{ file: "armor/chromevisor", strength: 0.5 }], durationSec: 5, outputName: "x" };
+  const out = patchForClip(tpl, clip);
+  assert.equal(out["10"].inputs.mod_name, "armor/chromevisor");
+  assert.equal(out["10"].inputs.strength, 0.5);
+  assert.equal(out["20"].inputs.mod_name, "");
+  assert.equal(out["20"].inputs.strength, 0);
+  assert.equal(countRefModSlots(tpl), 2);
+  const pinned = patchForClip({ "5": { class_type: "PEClipRefMod", inputs: { mod_name: "", strength: 1, index: 1 } } },
+    { ...clip, refMods: [{ file: "a", strength: 1 }, { file: "b", strength: 0.8 }] });
+  assert.equal(pinned["5"].inputs.mod_name, "b");
+  // a clip without a refMods field (older export) clears every slot
+  assert.equal(patchForClip(tpl, { promptText: "", references: [] })["10"].inputs.mod_name, "");
+});
+
+test("patchWorkflowForClip mirrors patchForClip's literal values into widgets_values, by declared field order", () => {
+  // Shapes match the real ComfyUI frontend's workflow JSON (verified against
+  // an actual exported _fixed.json): EVERY widget-capable field is listed in
+  // `inputs` with a `widget: {name}` marker and `link: null` when unconnected
+  // — only a real socket (e.g. PEClipLora's `model`) has a non-null `link`.
+  const workflow = {
+    nodes: [
+      { id: 1, type: "PEClipPrompt", widgets_values: [""], inputs: [{ name: "text", widget: { name: "text" }, link: null }] },
+      { id: 2, type: "PEClipImage", widgets_values: [0, ""], inputs: [
+        { name: "index", widget: { name: "index" }, link: null },
+        { name: "image_path", widget: { name: "image_path" }, link: null },
+      ] },
+      { id: 5, type: "SaveVideo", widgets_values: ["old"], inputs: [{ name: "images", link: 1 }] },
+      { id: 8, type: "PEClipDuration", widgets_values: [15], inputs: [{ name: "seconds", widget: { name: "seconds" }, link: null }] },
+      { id: 10, type: "PEClipLora", widgets_values: ["", 1, -1], inputs: [
+        { name: "model", type: "MODEL", link: 2 },
+        { name: "lora_name", widget: { name: "lora_name" }, link: null },
+        { name: "strength", widget: { name: "strength" }, link: null },
+        { name: "index", widget: { name: "index" }, link: null },
+      ] },
+      { id: 20, type: "PEClipRefMod", widgets_values: ["", 1, -1], inputs: [
+        { name: "mod_name", widget: { name: "mod_name" }, link: null },
+        { name: "strength", widget: { name: "strength" }, link: null },
+        { name: "index", widget: { name: "index" }, link: null },
+      ] },
+    ],
+  };
+  const promptOutput = {
+    "1": { class_type: "PEClipPrompt", inputs: { text: "" } },
+    "2": { class_type: "PEClipImage", inputs: { index: 0, image_path: "" } },
+    "5": { class_type: "SaveVideo", inputs: { filename_prefix: "old", images: ["4", 0] } },
+    "8": { class_type: "PEClipDuration", inputs: { seconds: 15 } },
+    "10": { class_type: "PEClipLora", inputs: { lora_name: "", strength: 1, index: -1 } },
+    "20": { class_type: "PEClipRefMod", inputs: { mod_name: "", strength: 1, index: -1 } },
+  };
+  const clip = {
+    outputName: "clip-01", promptText: "subject_definitions:\n<Subject 1> is ...", durationSec: 7,
+    references: [{ file: "r.jpg", absPath: "/staged/r.jpg", role: "subject_identity", preserve: "exact" }],
+    loras: [{ file: "MinimaxH3\\a.safetensors", strength: 0.5 }],
+    refMods: [{ file: "armor/chromevisor", strength: 0.8 }],
+  };
+  const patched = patchForClip(promptOutput, clip);
+  const patchedWorkflow = patchWorkflowForClip(workflow, patched);
+
+  const byId = (id) => patchedWorkflow.nodes.find((n) => n.id === id);
+  assert.equal(byId(1).widgets_values[0], clip.promptText);
+  assert.deepEqual(byId(2).widgets_values, [0, "/staged/r.jpg"]);
+  assert.equal(byId(8).widgets_values[0], 7);
+  // PEClipLora's `model` is a socket (in node.inputs), so only [lora_name, strength, index] get set
+  assert.deepEqual(byId(10).widgets_values, ["MinimaxH3\\a.safetensors", 0.5, -1]);
+  assert.deepEqual(byId(20).widgets_values, ["armor/chromevisor", 0.8, -1]);
+  // a third-party node (SaveVideo) is never touched here, even though patchForClip stamped its API-format input
+  assert.deepEqual(byId(5).widgets_values, ["old"]);
+
+  // original workflow must be unmodified (patchWorkflowForClip must clone, not mutate)
+  assert.equal(workflow.nodes[0].widgets_values[0], "");
+  assert.equal(workflow.nodes[1].widgets_values[1], "");
+});
+
+test("patchWorkflowForClip skips a node whose widgets_values length doesn't match its filtered field count", () => {
+  const workflow = { nodes: [{ id: 1, type: "PEClipPrompt", widgets_values: ["", "unexpected-extra"] }] };
+  const promptOutput = { "1": { class_type: "PEClipPrompt", inputs: { text: "new text" } } };
+  const patchedWorkflow = patchWorkflowForClip(workflow, promptOutput);
+  assert.deepEqual(patchedWorkflow.nodes[0].widgets_values, ["", "unexpected-extra"]);
 });

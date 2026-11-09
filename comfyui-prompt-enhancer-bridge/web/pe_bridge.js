@@ -8,7 +8,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, patchForClip, findDirectorNode, directorWidgetValues } from "./patch.js";
+import { PROMPT_NODE, IMAGE_NODE, GUIDE_IMAGE_NODE, DURATION_NODE, LORA_NODE, REFMOD_NODE, countImageSlots, countGuideSlots, hasPromptNode, hasDurationNode, countLoraSlots, countRefModSlots, patchForClip, patchWorkflowForClip, findDirectorNode, directorWidgetValues } from "./patch.js";
 
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
@@ -201,15 +201,57 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
   }
   const loraSlots = countLoraSlots(promptOutput);
   const maxLorasNeeded = Math.max(0, ...manifest.clips.map((c) => (c.loras || []).length));
-  if (maxLorasNeeded > loraSlots) {
+  // The zero-slot case (loraSlots === 0) gets its own louder, must-acknowledge
+  // block below instead of appearing here too — no point saying the same
+  // thing twice.
+  if (maxLorasNeeded > loraSlots && loraSlots > 0) {
     problems.push(
       `A clip needs ${maxLorasNeeded} LoRA(s), but your loaded workflow only has ${loraSlots} PEClipLora node(s). Add more, or the extra LoRAs will be skipped.`
+    );
+  }
+  const refModSlots = countRefModSlots(promptOutput);
+  const maxRefModsNeeded = Math.max(0, ...manifest.clips.map((c) => (c.refMods || []).length));
+  if (maxRefModsNeeded > refModSlots && refModSlots > 0) {
+    problems.push(
+      `A clip needs ${maxRefModsNeeded} RefMod(s), but your loaded workflow only has ${refModSlots} PEClipRefMod node(s). Add more, or the extra RefMods will be skipped.`
     );
   }
   if (problems.length) {
     body.append(el("div", {
       style: { background: "#4a2a2a", border: "1px solid #a55", borderRadius: "6px", padding: "8px", marginBottom: "12px" },
     }, problems.map((p) => el("div", {}, [document.createTextNode("⚠ " + p)]))));
+  }
+
+  // A "needs N, have 0" case is qualitatively worse than "needs N, have M<N"
+  // (partial truncation): the whole reference/LoRA is silently dropped, and
+  // in practice this means the deployed bridge pack is behind the workflow
+  // file that was exported for it (exactly today's reported bug — the
+  // RefMod never showed up because the installed nodes.py predated RefMod
+  // support entirely). This gets its own loud, must-acknowledge block rather
+  // than folding into the skimmable `problems` list above, and disables
+  // Run until acknowledged.
+  const criticalProblems = [];
+  if (maxLorasNeeded > 0 && loraSlots === 0) {
+    criticalProblems.push(
+      `This film needs LoRA(s), but your loaded workflow has ZERO ${LORA_NODE} node(s) — every clip's LoRA will be silently skipped. This usually means the loaded workflow or the installed bridge pack is out of date, not a one-off: double-check you reopened the right workflow file fresh, and that ComfyUI's custom_nodes/comfyui-prompt-enhancer-bridge was actually redeployed and ComfyUI restarted.`
+    );
+  }
+  if (maxRefModsNeeded > 0 && refModSlots === 0) {
+    criticalProblems.push(
+      `This film needs RefMod(s), but your loaded workflow has ZERO ${REFMOD_NODE} node(s) — every clip's RefMod will be silently skipped and the character/subject it carries will NOT appear in the render. This usually means the loaded workflow or the installed bridge pack is out of date, not a one-off: double-check you reopened the right workflow file fresh, and that ComfyUI's custom_nodes/comfyui-prompt-enhancer-bridge was actually redeployed and ComfyUI restarted.`
+    );
+  }
+  let ackBox = null;
+  if (criticalProblems.length) {
+    ackBox = el("input", { type: "checkbox" }, []);
+    body.append(el("div", {
+      style: { background: "#5a1a1a", border: "2px solid #e55", borderRadius: "6px", padding: "10px", marginBottom: "12px" },
+    }, [
+      ...criticalProblems.map((p) => el("div", { style: { marginBottom: "6px", fontWeight: "bold" } }, [document.createTextNode("🛑 " + p)])),
+      el("label", { style: { display: "flex", alignItems: "center", gap: "6px", fontWeight: "normal", cursor: "pointer" } }, [
+        ackBox, document.createTextNode("I understand — run anyway"),
+      ]),
+    ]));
   }
 
   // Non-blocking, distinct from `problems` above: a missing PEClipDuration
@@ -236,6 +278,9 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
     const loraLine = (clip.loras || []).length
       ? (clip.loras || []).map((l) => `${l.file.split(/[\\/]/).pop()} (${l.strength})`).join("  ·  ")
       : null;
+    const refModLine = (clip.refMods || []).length
+      ? (clip.refMods || []).map((m) => `${m.file.split(/[\\/]/).pop()} (${m.strength})`).join("  ·  ")
+      : null;
     const preview = (clip.promptText || "").slice(0, 220).replace(/\s+/g, " ");
     list.append(el("div", {
       style: { border: "1px solid #444", borderRadius: "6px", padding: "8px" },
@@ -246,6 +291,7 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
       el("div", { style: { color: "#aaa", margin: "4px 0" } }, [document.createTextNode(refLine)]),
       ...(guideLine ? [el("div", { style: { color: "#8ab", margin: "0 0 4px" } }, [document.createTextNode("Add Guide: " + guideLine)])] : []),
       ...(loraLine ? [el("div", { style: { color: "#b9a", margin: "0 0 4px" } }, [document.createTextNode("LoRAs: " + loraLine)])] : []),
+      ...(refModLine ? [el("div", { style: { color: "#9bb", margin: "0 0 4px" } }, [document.createTextNode("RefMods: " + refModLine)])] : []),
       el("div", { style: { color: "#ccc", fontStyle: "italic" } }, [document.createTextNode(preview + "…")]),
       el("div", { class: "pe-status", style: { marginTop: "4px", color: "#7ab" } }, []),
     ]));
@@ -255,11 +301,17 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
   const status = el("div", { style: { marginTop: "12px", minHeight: "18px" } }, []);
   const runBtn = el("button", {
     style: { marginTop: "12px", marginRight: "8px", padding: "6px 14px" },
-    // Only a missing PEClipPrompt node is a hard blocker — a too-small
+    // A missing PEClipPrompt node, or an unacknowledged critical (zero-slot)
+    // LoRA/RefMod mismatch, hard-blocks Run. A too-small (but non-zero)
     // PEClipImage count is a per-clip warning (that clip's extra references
     // get skipped, everything else still runs), not a reason to block all of it.
-    disabled: !promptOk,
+    disabled: !promptOk || criticalProblems.length > 0,
   }, [document.createTextNode("▶ Run all clips")]);
+  if (ackBox) {
+    ackBox.addEventListener("change", () => {
+      runBtn.disabled = !promptOk || (criticalProblems.length > 0 && !ackBox.checked);
+    });
+  }
   const freeBox = el("input", { type: "checkbox" }, []);
   freeBox.checked = loadPos(FREE_PREF_KEY) === true;
   freeBox.addEventListener("change", () => savePos(FREE_PREF_KEY, freeBox.checked));
@@ -286,12 +338,16 @@ function buildReviewPanel(manifest, promptOutput, workflow, onClose) {
       row.textContent = "queuing…";
       try {
         const patched = patchForClip(promptOutput, clip);
-        // `workflow` is the real captured graph (unpatched — recovering it
-        // from a finished clip shows the template's placeholder text/paths,
-        // not this specific clip's), not {}: an empty workflow object would
-        // still render fine but strips this run's provenance from ComfyUI's
-        // own history and breaks "drag the output back in to recover the graph".
-        const resp = await api.queuePrompt(0, { output: patched, workflow });
+        // `workflow` is the real captured graph, cloned and patched per clip
+        // (patchWorkflowForClip mirrors patched's own literal values into
+        // each PEClip* node's widgets_values) rather than {}: an empty
+        // workflow object would still render fine but strips this run's
+        // provenance from ComfyUI's own history and breaks "drag the output
+        // back in to recover the graph" — and an UNpatched workflow used to
+        // make that recovered graph show the template's placeholder
+        // text/paths instead of this clip's real ones.
+        const patchedWorkflow = patchWorkflowForClip(workflow, patched);
+        const resp = await api.queuePrompt(0, { output: patched, workflow: patchedWorkflow });
         const promptId = resp?.prompt_id;
         if (!promptId) throw new Error("ComfyUI didn't return a prompt_id.");
         row.textContent = `queued (${promptId.slice(0, 8)}…) — rendering…`;

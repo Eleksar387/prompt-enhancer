@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import {
   missingTriggers, withLoraTriggers, loraInstruction, lorasByIds,
   targetTakesLoras, loraUsable, sanitizeLoras, loraManifestEntries, loraHasFile, bindableLoras,
+  normalizeLoraFile,
 } from '../src/loras.js'
 
 const L = [
@@ -226,6 +227,29 @@ describe('LoRA files for the ComfyUI bridge', () => {
     const many = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, file: `f${i}`, strength: 1 }))
     expect(loraManifestEntries(many, many.map(m => m.id))).toHaveLength(3)
   })
+
+  describe('per-use strength overrides', () => {
+    it('an override for an id wins over the library strength', () => {
+      expect(loraManifestEntries(lib, ['a'], { a: 1.3 })).toEqual([
+        { file: 'MinimaxH3\\a.safetensors', strength: 1.3 },
+      ])
+    })
+
+    it('omitted or non-finite overrides fall back to the library value', () => {
+      expect(loraManifestEntries(lib, ['a'], {})).toEqual([{ file: 'MinimaxH3\\a.safetensors', strength: 0.6 }])
+      expect(loraManifestEntries(lib, ['a'], { a: NaN })).toEqual([{ file: 'MinimaxH3\\a.safetensors', strength: 0.6 }])
+      expect(loraManifestEntries(lib, ['a'])).toEqual([{ file: 'MinimaxH3\\a.safetensors', strength: 0.6 }])
+    })
+
+    it('an override for an unrelated id is ignored', () => {
+      expect(loraManifestEntries(lib, ['a'], { zzz: 2 })).toEqual([{ file: 'MinimaxH3\\a.safetensors', strength: 0.6 }])
+    })
+
+    it('an override can apply to a LoRA with no library strength at all', () => {
+      const noStrength = [{ id: 'q', file: 'q.safetensors' }]
+      expect(loraManifestEntries(noStrength, ['q'], { q: 0.4 })).toEqual([{ file: 'q.safetensors', strength: 0.4 }])
+    })
+  })
 })
 
 describe('general LoRA kind', () => {
@@ -253,5 +277,18 @@ describe('bindableLoras (per-image dropdown)', () => {
   })
   it('keeps a LoRA that is already bound to an image', () => {
     expect(bindableLoras(lib, [], [{ loraId: 'b' }]).map(l => l.id)).toEqual(['b'])
+  })
+})
+
+describe('normalizeLoraFile', () => {
+  it('equates backslash and forward-slash separators', () => {
+    expect(normalizeLoraFile('MinimaxH3\\foo.safetensors')).toBe(normalizeLoraFile('MinimaxH3/foo.safetensors'))
+  })
+  it('is case-insensitive and trims whitespace', () => {
+    expect(normalizeLoraFile('  MinimaxH3\\Foo.safetensors  ')).toBe('minimaxh3/foo.safetensors')
+  })
+  it('returns empty string for empty/undefined input', () => {
+    expect(normalizeLoraFile('')).toBe('')
+    expect(normalizeLoraFile(undefined)).toBe('')
   })
 })

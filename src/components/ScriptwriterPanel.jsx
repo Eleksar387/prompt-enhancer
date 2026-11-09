@@ -629,6 +629,15 @@ export default function ScriptwriterPanel({
   // triggers over every shot.
   const [activeLoraIds, setActiveLoraIds] = useState(() =>
     Array.isArray(initialState?.loraIds) ? initialState.loraIds : [])
+  // Per-use strength override for an active style LoRA (id → number) — the
+  // library's own `strength` is the shared default; overridden in turn by a
+  // bound character's own `loraStrength` for that clip (see loraOverridesForShot).
+  const [loraStrengths, setLoraStrengths] = useState(() =>
+    (initialState?.loraStrengths && typeof initialState.loraStrengths === 'object') ? initialState.loraStrengths : {})
+  const setLoraStrength = (id, v) => setLoraStrengths(prev => {
+    if (v === '' || v == null) { const n = { ...prev }; delete n[id]; return n }
+    return { ...prev, [id]: Number(v) }
+  })
   // The language the cast speaks. This picker SEEDS the film: Phase 1 is told to
   // write its dialogue in it and `script.language` is set from it. From then on
   // `script.language` (hand-editable in the script view, and what all four
@@ -947,6 +956,18 @@ export default function ScriptwriterPanel({
     const ids = Array.isArray(shot?.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
     return [...activeLoraIds, ...(script?.characters || []).filter(c => ids.includes(c.id) && c.lora).map(c => c.lora)]
   }
+  // Per-id strength overrides for this clip's manifest entries only — never
+  // affects prompt text. A bound cast member's own override is more specific
+  // than a chip override, so it wins when the same LoRA id is both.
+  const loraOverridesForShot = (shot) => {
+    const scene = script?.scenes?.find(sc => String(sc.id) === String(shot?.scene_id))
+    const ids = Array.isArray(shot?.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
+    const overrides = { ...loraStrengths }
+    for (const c of (script?.characters || [])) {
+      if (ids.includes(c.id) && c.lora && Number.isFinite(c.loraStrength)) overrides[c.lora] = c.loraStrength
+    }
+    return overrides
+  }
 
   // --- history payload assembly (shared by all four save sites) -----------
   const basePayload = (phaseName, refsOverride) => {
@@ -956,7 +977,7 @@ export default function ScriptwriterPanel({
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, mature, sourceMode, sceneCount, phase: phaseName,
-      promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds,
+      promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths,
       // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
       // the user's hint appended after it (see buildAutoIdea) — a plain
       // 80-char truncation of `idea` (as the History card does) always shows
@@ -1643,6 +1664,7 @@ export default function ScriptwriterPanel({
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
         setSpokenLangId(autoJob.spokenLang || DEFAULT_SPOKEN_LANG)
         setActiveLoraIds(Array.isArray(autoJob.loraIds) ? autoJob.loraIds : [])
+        setLoraStrengths((autoJob.loraStrengths && typeof autoJob.loraStrengths === 'object') ? autoJob.loraStrengths : {})
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
       })
@@ -2702,7 +2724,7 @@ export default function ScriptwriterPanel({
             mode: references.length ? 'Ref2VA' : 'T2VA',
             durationSec: shot?.duration || (isH3now ? 7 : 4),
             voices,
-            loras: shot ? loraManifestEntries(loras, loraIdsForShot(shot)) : [],
+            loras: shot ? loraManifestEntries(loras, loraIdsForShot(shot), loraOverridesForShot(shot)) : [],
             outputName: `${runLabel}-clip-${pad(p.shotNumber || i + 1)}`,
             references,
             guides,
@@ -3052,7 +3074,9 @@ export default function ScriptwriterPanel({
               <LoraPanel
                 loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
                 onToggle={toggleLora} onSaveLoras={onSaveLoras}
-                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'} />
+                strengths={loraStrengths} onStrengthChange={setLoraStrength}
+                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
+                comfyUrl={comfyCfg.url} />
               <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
                 {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
               </button>
@@ -3104,9 +3128,11 @@ export default function ScriptwriterPanel({
               <LoraPanel
                 loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
                 onToggle={toggleLora} onSaveLoras={onSaveLoras}
-                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'} />
+                strengths={loraStrengths} onStrengthChange={setLoraStrength}
+                hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
+                comfyUrl={comfyCfg.url} />
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, spokenLang: spokenLangId, loraIds: activeLoraIds })}
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths })}
                 disabled={refImages.length === 0 || isLoading || captioning}
                 style={genBtn(refImages.length === 0 || isLoading || captioning)}>
                 + Add to Queue (Full Auto)
@@ -3311,7 +3337,9 @@ export default function ScriptwriterPanel({
           <LoraPanel
             loras={loras} activeIds={activeLoraIds} kinds={['style']} editable={!isLoading}
             onToggle={toggleLora} onSaveLoras={onSaveLoras}
-            hint={'(style LoRAs for every clip — bind a character LoRA to its character below)'} />
+            strengths={loraStrengths} onStrengthChange={setLoraStrength}
+            hint={'(style LoRAs for every clip — bind a character LoRA to its character below)'}
+            comfyUrl={comfyCfg.url} />
 
           {/* Cast bible */}
           {Array.isArray(script.characters) && (
@@ -3344,6 +3372,18 @@ export default function ScriptwriterPanel({
                           <option key={l.id} value={l.id}>{l.name.trim() || l.trigger.trim()}</option>
                         ))}
                       </select>
+                      {c.lora && (
+                        <>
+                          <label style={{ ...lbl, marginTop: 6 }}>Strength <span style={{ textTransform: 'none', letterSpacing: 0 }}>(override for this film only — blank uses the library default)</span></label>
+                          <input
+                            type="number" step="0.05" min="-2" max="2"
+                            value={c.loraStrength ?? ''}
+                            placeholder={`${loraById(c.lora)?.strength ?? 1}`}
+                            onChange={e => updateCharacter(ci, 'loraStrength', e.target.value === '' ? null : Number(e.target.value))}
+                            style={{ ...field({ width: 100 }) }} onFocus={focusBorder} onBlur={blurBorder}
+                          />
+                        </>
+                      )}
                     </>
                   )}
                   {renderPortrait(c.id)}

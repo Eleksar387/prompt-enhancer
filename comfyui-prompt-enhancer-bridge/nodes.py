@@ -353,8 +353,43 @@ class PEClipLora:
         return (patched,)
 
 
+class PEClipRefMod:
+    """Supplies one RefMod slot's name + strength for MiniMaxH3RefModsLoader's
+    mod_N/strength_N inputs (converted from widgets to sockets in the template).
+    Unlike PEClipLora, this does no file I/O itself — the stock loader's own
+    `load()` resolves/validates the name and skips an empty/zero slot, and
+    (per its own VALIDATE_INPUTS) a LINKED mod_N is checked at execution time,
+    never at /prompt submission, so a stale name fails only this one slot.
+
+    `mod_name` / `strength` are overwritten per clip by the JS extension. Which
+    slot: by default, the PEClipRefMod nodes in ascending node-id order; set
+    `index` (0-based) to pin it.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mod_name": ("STRING", {"default": ""}),
+                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+            },
+            "optional": {
+                "index": ("INT", {"default": -1, "min": -1, "max": 7, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "FLOAT")
+    RETURN_NAMES = ("mod_name", "strength")
+    FUNCTION = "get"
+    CATEGORY = "Prompt Enhancer Bridge"
+
+    def get(self, mod_name, strength, index=-1):
+        return (mod_name, strength)
+
+
 NODE_CLASS_MAPPINGS = {
     "PEClipLora": PEClipLora,
+    "PEClipRefMod": PEClipRefMod,
     "PEClipPrompt": PEClipPrompt,
     "PEClipImage": PEClipImage,
     "PEClipGuideImage": PEClipGuideImage,
@@ -364,6 +399,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "PEClipRefMod": "PE Clip RefMod",
     "PEClipPrompt": "PE Clip Prompt",
     "PEClipImage": "PE Clip Reference Image",
     "PEClipGuideImage": "PE Clip Guide Image (Add Guide)",

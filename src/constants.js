@@ -1099,7 +1099,7 @@ Rules:
 - DIALOGUE: put a line only in the clip where it is spoken, and give that clip nothing else to do — H3 spreads mouth motion across the whole clip and starves its neighbours of screen time. Keep establishing and continuity-critical staging in silent clips (shot_type "establishing"), never in a dialogue clip. Copy each line verbatim from the script — it is already in the film's spoken language; never translate it. A line whose speaker name carries a "(V.O.)" suffix (e.g. "STEFFI (V.O.): line") is off-screen narration, not lip-synced speech — copy it through verbatim, suffix included. Its speaker does not need to be in this clip's "characters" list unless she is also visually on screen; when she is, she is performing the clip's own action (not talking to camera) while the narration plays over it. A voiceover line still claims the whole clip the same way spoken dialogue does — it is not free to share a clip with an unrelated second beat.
 - A scene whose script "emotional_turn" is not null usually gets one "insert" clip — a cutaway (a hand, an object, the thing being looked at) that gives the edit material to hide the reaction's first moment. This is the default under Pacing: STANDARD and LOOSE. Under Pacing: TIGHT, add it only when the transition genuinely cannot read without a cut to hide it (e.g. a visible design or identity change) — otherwise fold the reaction into the tail of the adjacent clip instead.
 - establishing clips are a single camera move, no dialogue, and carry the location's continuity. Under Pacing: TIGHT, a single-location scene may skip a dedicated establishing clip and open directly on the first performance beat, unless the location itself needs a beat before the character is legible in it.
-- duration is an integer 4–15. Budget ~4s for a complex beat (a prop hand-off). Leave the last ~1.5s of every clip as a settle with no new beat — H3 degrades over the final ~1.2–1.7s.
+- duration is an integer 4–15. Budget ~4s for a complex beat (a prop hand-off). Leave the last ~1.5s of every clip as a settle on one concrete, already-in-progress micro-beat (a held breath, a steady gaze) rather than a beat that explicitly stops — H3 degrades over the final ~1.2–1.7s, so nothing NEW may land there, but the clip should still read as alive, never frozen.
 - If the user message carries a cast/location bible or a "Reference images provided by the user" block, keep every clip's wardrobe, location detail, and lighting_mood consistent with it.
 - REFERENCE SELECTION: if the user message carries a numbered "Reference images" block, set "reference_images" on every clip to the 1-based numbers of the references that genuinely help that clip:
   - a subject / identity (face) reference ONLY when that character's face is actually visible in the clip — omit it when the face is under a helmet, hood or mask, covered by a blanket or hands, turned away from the camera, in silhouette, or too far for the face to read;
@@ -1412,8 +1412,17 @@ GENERAL RULES
    is in a cinematic, literary music-video style with soft lighting and a slightly desaturated colour palette."
    Derive it from the reference image in the keyframe modes, and from the "Film look:" line or the scene text
    otherwise; the look is still folded into the visuals and never restated as on-screen text.
-2. Never invent product claims, technical functions, brand wording, or legal text. Do not invent quoted speech
-   either — with one exception, the voice-timbre case in rule 6a.
+1b. INVENT SPECIFICS, DON'T DEFAULT TO GENERIC. Whatever a reference image or the scene text locks down (identity,
+   wardrobe, location, style), your job is to invent a specific, textured moment around it — not to restate the
+   caption as the scene. Give the shot a particular small action, object, or beat that isn't already implied by
+   the caption alone (what is this subject doing right now, and why, specifically, in this place) rather than the
+   most generic reading of it ("a person stands in a room" is not a scene — what are they doing there, and what
+   just happened or is about to). This still has to stay physically plausible and may never invent an object that
+   creates a collision or occlusion risk (rule 13) or contradicts what a preservation marker locks down (Ref2VA's
+   retention_analysis). A user's Creativity setting can dial this further toward restraint (Faithful) or further
+   toward invention (Loose); this rule is the floor under the default, not a ceiling on either extreme.
+2. Never invent product claims, technical functions, brand wording, or legal text. Quoted speech may only be
+   invented under the narrow conditions in rules 6a/6b below — never otherwise.
 3. Make actions physically observable and temporally plausible for the given duration. Follow a beginning state →
    trigger → action chain → reaction → ending state arc, where each step is the direct physical cause of the
    next — the trigger is what physically makes the action happen, the action is what physically produces the
@@ -1421,10 +1430,13 @@ GENERAL RULES
    not cram more beats than the duration can plausibly
    hold: ~1 shot at 4–6s, 1–3 shots at 7–10s, 2–4 shots at 11–15s. Give any multi-beat shot one primary change per
    beat with an observable end state — something a viewer could point at. Place the most important beat in the
-   middle of the timeline, not the very end. Leave the last ~1.5 seconds as a settle with no new beat and no
-   ending-state change — H3 commonly degrades into noise over the final 1.2–1.7s, so nothing that matters may land
-   there. Budget roughly 4 seconds for a complex beat (e.g. a prop hand-off). If the duration can't fit every
-   planned beat, drop or merge the least important one rather than compressing all of them.
+   middle of the timeline, not the very end. Leave the last ~1.5 seconds as a settle on one concrete,
+   already-in-progress micro-beat — a held breath rising and falling once, a steady gaze, a slow blink, a grip
+   that stays set — rather than a shot that explicitly stops having any beat at all: H3 commonly degrades into
+   noise over the final 1.2–1.7s, so no NEW or plot-critical beat may land there, but the shot should still read
+   as quietly alive, never frozen or inert. Budget roughly 4 seconds for a complex beat (e.g. a prop hand-off). If
+   the duration can't fit every planned beat, drop or merge the least important one rather than compressing all
+   of them.
 3a. EXPRESSION-BEAT DENSITY — the single highest-impact rule for performance. One shot holds at most TWO facial /
    emotional beats before H3 collapses them toward an average and the face goes still, silently, with no error.
    Before writing, count the expression beats in each shot: a brow move, an eye move, a lip move, a gaze shift, or
@@ -1443,8 +1455,13 @@ GENERAL RULES
    none is given, so leaving it unstated is never safe. Default to a MOVE, motivated by what the shot is actually
    doing, not to stillness: push in on a decision or a tightening beat, pull back to reveal scale or isolation,
    track or pan to follow a subject's own movement, arc to reveal a second subject or shift the vantage, tilt or
-   pedestal to follow vertical action. Vary the move from shot to shot within the same clip — don't repeat the same
-   camera behavior back to back. A shot carrying its own camera move needs a little more runway than an equivalent
+   pedestal to follow vertical action. Treat Arc Shot, Pedestal Up/Down, Truck Left/Right, and Roll
+   Clockwise/Counterclockwise as equally valid FIRST choices, not just fallback vocabulary reached for after
+   Push/Pull/Pan/Tilt — across a multi-shot clip, draw from across the whole vocabulary rather than settling into
+   the same one or two "safe" moves (a static shot, a slow push-in) every time. Let the specific trigger and the
+   specific thing each beat reveals choose its move, not a generic "something is happening." Vary the move from
+   shot to shot within the same clip — don't repeat the same camera behavior back to back. A shot carrying its
+   own camera move needs a little more runway than an equivalent
    static shot to read cleanly (roughly 1.5s more for one move on one action) — budget duration accordingly rather
    than cramming the move into a static-length shot. Reserve a genuinely locked-off frame for when the shot itself
    calls for it (a held confrontation, a single unbroken reaction) and state that choice positively — "a locked-off
@@ -1527,6 +1544,16 @@ GENERAL RULES
    The base modes have no label for it — there, fold the referenced voice into how you describe the speaker
    (pitch, timbre, rate, accent) and never write an <Audio N> label or any section the base format doesn't
    define.
+6b. NO VOICE REFERENCE EITHER, BUT THE SCENE CLEARLY CALLS FOR A LINE. When there's no "Spoken dialogue" section
+   and no voice-timbre reference, but the described action plainly implies speech — a greeting, a request, a
+   reaction, a brief exchange — you may invent ONE short line yourself, the same way rule 6a does: in character
+   for the speaker, motivated by what the scene is already doing, roughly 6–12 words so it fits the shot at an
+   unhurried speaking rate, tagged with the "Primary language:" language or [English] if none was given.
+   Everything in rule 6 still applies: the shot carrying the line holds only that delivery, the line pulls screen
+   time from its neighbours, and continuity-critical staging goes in a silent shot. Use this sparingly — most
+   shots, and plenty of whole clips, should stay silent; add a line only where the action plainly implies one,
+   never reflexively just because a character is on screen. If a "Spoken dialogue" section IS present it wins
+   outright over this rule: use those words verbatim and invent nothing.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
    Write 1–4 sentences as a single continuous paragraph. Use N/A here only when complete silence across the
@@ -1706,12 +1733,13 @@ field. [Shot 1] (0.00–4.00s) <Subject 1> stands at a workbench, her hands pres
 the bench buzzes once and lights up — the trigger — and her eyes drop to it, her shoulders drawing in as she
 reads the screen. At 4.00s, the camera cuts to [Shot 2] (4.00–10.00s), a close push in with small amplitude:
 <Subject 1> straightens, sets her jaw, and looks up toward the doorway (S1), saying in a clear, steady voice with
-an edge of defiance, [English] "I'm not asking again." She holds the look, her breath steady, and settles — no
-new beat, no further motion — through the final 1.5 seconds as the shot ends on her held gaze." Note what this
-does: the style opening precedes [Shot 1]; each shot's range is derived from its own cut timestamp and the next
-one (rule 5); the phone buzzing physically causes her reaction, which physically causes her decision to speak
-(rule 3); the dialogue pairs a vocal-quality descriptor with an emotional-coloring one (rule 6); and the clip ends
-on a held, already-settled state rather than a new motion (rules 3 and 11).
+an edge of defiance, [English] "I'm not asking again." She holds the look through the final 1.5 seconds, her
+breath rising and falling once, slow and even, her jaw staying set — the shot ends on that held gaze." Note what
+this does: the style opening precedes [Shot 1]; each shot's range is derived from its own cut timestamp and the
+next one (rule 5); the phone buzzing physically causes her reaction, which physically causes her decision to
+speak (rule 3); the dialogue pairs a vocal-quality descriptor with an emotional-coloring one (rule 6); and the
+clip ends on a concrete, already-in-progress micro-beat — not a new plot beat, but not frozen either (rules 3
+and 11).
 
 overall_soundscape / non_diegetic_music: as above. When an <Audio N> was defined, state its copy-or-reference
 relationship in whichever of the two matches the audible layer — ambience and effects in overall_soundscape,
@@ -1913,15 +1941,17 @@ export const TARGETS = {
     show: { duration: true, camera: true, dialogue: true, frameMode: true, twoStage: false, spokenLang: true },
     caps: {
       refImages: 6, audioFields: true, ratioPicker: true, structured: true,
-      loras: true, clipTarget: true,
+      loras: true, clipTarget: true, refMods: true,
     },
     slug: 'minimax', clipNoun: 'clip', clipShort: 'H3',
     clipSystem: SYSTEM_PROMPT_MINIMAX_H3,
     defaultRefRatio: 'port916',
-    // The one prose field a missing trigger may be added to. Never summary,
-    // subject_definitions, retention_analysis or either sound field, and never
-    // inside quotes — dialogue and on-screen text alike are spoken aloud or
-    // rendered on screen exactly as written, never a place for a LoRA token.
+    // The one prose field a missing LoRA trigger may be added to. Never
+    // summary, subject_definitions, retention_analysis or either sound field,
+    // and never inside quotes — dialogue and on-screen text alike are spoken
+    // aloud or rendered on screen exactly as written, never a place for a
+    // trigger token. Used by src/loras.js's withLoraTriggers only — RefMod
+    // has no trigger/token of its own (see src/refmods.js).
     loraInject: { fields: ['detailed_description', 'integrated_multimodal_description'] },
   },
 }

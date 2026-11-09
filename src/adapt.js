@@ -1,5 +1,6 @@
 import { TARGETS, STYLE_OPTIONS, spokenLanguageDirective, caps, ROLE_NONE, ROLE_GENERAL, normalizeRole, imageRoleDef } from './constants'
 import { loraInstruction } from './loras'
+import { refModInstruction } from './refmods'
 
 // Destination targets for "Adapt to text-only prompt" — every writer-capable
 // visual target. scriptwriter has no single-call writer path; dramabox is a TTS
@@ -19,7 +20,7 @@ export const ADAPT_TARGETS = Object.values(TARGETS)
 // instruction for H3's field layout.
 export function buildStylePart({
   style, creativity, targetType, showDialogue, dialogue = '', delivery = '', negative = '',
-  forceNonImageWording = false, spokenLang = null, loras = null, targetId = '',
+  forceNonImageWording = false, spokenLang = null, loras = null, refMods = null, targetId = '',
 }) {
   const styleObj = STYLE_OPTIONS.find(s => s.id === style)
   const creativityText = creativity === 'balanced' ? ''
@@ -50,6 +51,7 @@ export function buildStylePart({
     // performance rather than a description of one.
     + (spokenLang ? spokenLanguageDirective(spokenLang, { wholePrompt: targetType === 'text' }) : '')
     + loraInstruction(loras, targetId)
+    + refModInstruction(refMods, targetId)
     + (negative.trim()
       ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format.`
       : '')

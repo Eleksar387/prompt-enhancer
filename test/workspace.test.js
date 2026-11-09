@@ -34,8 +34,8 @@ const h3Workspace = () => ({
   target: 'minimax_h3', duration: '8 seconds', style: 'dramatic', creativity: 'loose',
   frameMode: 'ref', negative: 'watermark', scene: 'she turns',
   dialogue: 'Wir müssen gehen', delivery: 'urgent whisper',
-  spokenLangId: 'de', activeLoraIds: ['a', 'b'], loraSubjects: { a: 'Mara', b: '' },
-  manualMode: true,
+  spokenLangId: 'de', activeLoraIds: ['a', 'b'], loraSubjects: { a: 'Mara', b: '' }, loraStrengths: { a: 1.3 },
+  manualMode: true, activeRefModIds: ['r1'], refModSubjects: { r1: 'Mara' },
   firstImg: null, midImg: null, lastImg: null,
   h3RatioId: MINIMAX_H3_RESOLUTIONS[1].id, soundscape: 'rain', music: 'none',
   refImages: [{ ...img('ref.jpg'), role: 'character', preserve: 'strong', note: 'the lead' }],
@@ -47,8 +47,8 @@ const fluxWorkspace = () => ({
   targetType: 'image', show: TARGETS.flux.show,
   target: 'flux', duration: '5 seconds', style: 'calm', creativity: 'balanced',
   frameMode: 'single', negative: '', scene: 'a quiet room',
-  dialogue: 'ignored', delivery: 'ignored', spokenLangId: 'fr', activeLoraIds: [], loraSubjects: {},
-  manualMode: false,
+  dialogue: 'ignored', delivery: 'ignored', spokenLangId: 'fr', activeLoraIds: [], loraSubjects: {}, loraStrengths: {},
+  manualMode: false, activeRefModIds: [], refModSubjects: {},
   firstImg: img('in.jpg'), midImg: null, lastImg: null,
   h3RatioId: '', soundscape: 'ignored', music: 'ignored', refImages: [], refAudios: [],
 })
@@ -108,11 +108,18 @@ describe('image (de)serialization', () => {
     expect(back[0].preserve).toBe('strong')
     expect(back[0].note).toBe('')
     expect(back[0].loraId).toBeNull()
+    expect(back[0].loraStrength).toBeNull()
   })
 
   it('round-trips a reference image\'s assigned LoRA id', () => {
     const snap = refImagesToSnap([{ ...img('ref.jpg'), loraId: 'lora-1' }])
     expect(refImagesFromSnap(snap, newId)[0].loraId).toBe('lora-1')
+  })
+
+  it('round-trips a reference image\'s LoRA strength override', () => {
+    const snap = refImagesToSnap([{ ...img('ref.jpg'), loraId: 'lora-1', loraStrength: 1.3 }])
+    expect(snap[0].loraStrength).toBe(1.3)
+    expect(refImagesFromSnap(snap, newId)[0].loraStrength).toBe(1.3)
   })
 
   it('round-trips a reference image\'s Add Guide timeline anchor (atSeconds)', () => {
@@ -165,7 +172,7 @@ describe('buildSnapshot', () => {
       target: 'minimax_h3', duration: '8 seconds', style: 'dramatic', creativity: 'loose',
       frameMode: 'ref', negative: 'watermark', scene: 'she turns',
       dialogue: 'Wir müssen gehen', delivery: 'urgent whisper',
-      spokenLang: 'de', loraIds: ['a', 'b'],
+      spokenLang: 'de', loraIds: ['a', 'b'], loraStrengths: { a: 1.3 }, refModIds: ['r1'], refModSubjects: { r1: 'Mara' },
       soundscape: 'rain', music: 'none',
       model: 'qwen2.5:14b', vision: 'llava', outputCount: 1, caption: 'a rainy window',
     })
@@ -247,7 +254,10 @@ describe('snapshot → workspace round trip', () => {
     expect(back.spokenLangId).toBe(w.spokenLangId)
     expect(back.activeLoraIds).toEqual(w.activeLoraIds)
     expect(back.loraSubjects).toEqual(w.loraSubjects)
+    expect(back.loraStrengths).toEqual(w.loraStrengths)
     expect(back.manualMode).toBe(w.manualMode)
+    expect(back.activeRefModIds).toEqual(w.activeRefModIds)
+    expect(back.refModSubjects).toEqual(w.refModSubjects)
     expect(back.soundscape).toBe(w.soundscape)
     expect(back.music).toBe(w.music)
     expect(back.h3RatioId).toBe(w.h3RatioId)          // label → id resolves back
@@ -301,10 +311,28 @@ describe('restoring older entries', () => {
     expect(snapshotToWorkspace({ target: 'ltx', loraIds: 'nope' }, { newId }).activeLoraIds).toEqual([])
   })
 
+  it('defaults RefMod ids that were never saved, and rejects a non-array', () => {
+    expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).activeRefModIds).toEqual([])
+    expect(snapshotToWorkspace({ target: 'ltx', refModIds: 'nope' }, { newId }).activeRefModIds).toEqual([])
+  })
+
   it('defaults LoRA subjects that were never saved, and rejects a non-object', () => {
     expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).loraSubjects).toEqual({})
     expect(snapshotToWorkspace({ target: 'ltx', loraSubjects: 'nope' }, { newId }).loraSubjects).toEqual({})
     expect(snapshotToWorkspace({ target: 'ltx', loraSubjects: ['nope'] }, { newId }).loraSubjects).toEqual({})
+  })
+
+  it('defaults RefMod subjects that were never saved, and rejects a non-object', () => {
+    expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).refModSubjects).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', refModSubjects: 'nope' }, { newId }).refModSubjects).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', refModSubjects: ['nope'] }, { newId }).refModSubjects).toEqual({})
+  })
+
+  it('defaults LoRA strength overrides that were never saved, and rejects a non-object', () => {
+    expect(snapshotToWorkspace({ target: 'ltx' }, { newId }).loraStrengths).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', loraStrengths: 'nope' }, { newId }).loraStrengths).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', loraStrengths: ['nope'] }, { newId }).loraStrengths).toEqual({})
+    expect(snapshotToWorkspace({ target: 'ltx', loraStrengths: { a: 1.3 } }, { newId }).loraStrengths).toEqual({ a: 1.3 })
   })
 
   it('defaults manualMode that was never saved (an entry predating the field), and coerces a non-boolean', () => {
