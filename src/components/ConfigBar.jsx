@@ -1,11 +1,14 @@
 import { useState, memo } from 'react'
-import { isAnthropic, isGrok, isOpenRouter, providerOf } from '../api'
+import { isAnthropic, isGrok, isOpenRouter, isLangdock, providerOf } from '../api'
 import { notifySupported, notifyEnabled, setNotifyEnabled, requestNotifyPermission } from '../notify'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 const GROK_BASE = 'https://api.x.ai/v1'
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
+// Langdock has no browser CORS support — this must stay the relative, proxied path
+// (vite.config.js's /langdock entry), never the absolute api.langdock.com URL.
+const LANGDOCK_BASE = '/langdock/openai/eu/v1'
 
 function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCaptionCache }) {
   const [open, setOpen] = useState(false)
@@ -51,8 +54,9 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
   const anthropic = isAnthropic(cfg.base)
   const grok = isGrok(cfg.base)
   const openrouter = isOpenRouter(cfg.base)
-  const cloud = anthropic || grok || openrouter
-  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : openrouter ? 'OpenRouter' : cfg.base
+  const langdock = isLangdock(cfg.base)
+  const cloud = anthropic || grok || openrouter || langdock
+  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : openrouter ? 'OpenRouter' : langdock ? 'Langdock' : cfg.base
 
   const statusText = modelStatus.loading
     ? 'connecting…'
@@ -92,6 +96,9 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
               <button style={presetBtn(openrouter)} onClick={() => switchProvider(OPENROUTER_BASE)}>
                 OpenRouter
               </button>
+              <button style={presetBtn(langdock)} onClick={() => switchProvider(LANGDOCK_BASE)}>
+                Langdock
+              </button>
             </div>
           </div>
 
@@ -127,6 +134,19 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
                   <span style={{ color: 'var(--pe-accent-ink)' }}>openai/gpt-4o</span>,{' '}
                   <span style={{ color: 'var(--pe-accent-ink)' }}>google/gemini-2.5-flash</span>.
                 </>
+              ) : langdock ? (
+                <>
+                  Langdock's OpenAI-compatible endpoint, reached through this app's local dev-server
+                  proxy — Langdock's own API has no browser CORS support, so it can't be called with
+                  an absolute URL. Use your{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>Langdock API key</span> below. The path
+                  segment after <span style={{ color: 'var(--pe-accent-ink)' }}>/openai/</span> picks the
+                  region — <span style={{ color: 'var(--pe-accent-ink)' }}>eu</span> (default) or{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>us</span>, editable above. Model ids are
+                  plain, e.g. <span style={{ color: 'var(--pe-accent-ink)' }}>claude-sonnet-4-6</span>,{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>gpt-4o-mini</span> — not provider-prefixed
+                  like OpenRouter's.
+                </>
               ) : (
                 <>
                   Ollama direct: <span style={{ color: 'var(--pe-accent-ink)' }}>{OLLAMA_BASE}</span> (needs{' '}
@@ -139,11 +159,11 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 220px' }}>
-              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : openrouter ? 'OpenRouter API key' : 'API key (Open WebUI / remote only)'}</label>
+              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : openrouter ? 'OpenRouter API key' : langdock ? 'Langdock API key' : 'API key (Open WebUI / remote only)'}</label>
               <input
                 style={inputStyle} value={cfg.apiKey}
                 onChange={e => setKey(e.target.value)}
-                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : openrouter ? 'sk-or-v1-…' : 'leave blank for local Ollama'}
+                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : openrouter ? 'sk-or-v1-…' : langdock ? 'your Langdock API key' : 'leave blank for local Ollama'}
                 type="password" spellCheck={false}
               />
             </div>

@@ -12,7 +12,7 @@ import {
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts, MINIMAX_H3_RESOLUTIONS,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isCloud, setUnloadQuiet, unloadAfterRun } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isLangdock, isCloud, setUnloadQuiet, unloadAfterRun } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
   listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
@@ -2179,7 +2179,7 @@ export default function App() {
           </label>
           {models.length > 0
             ? <ModelSelect models={models} value={writerModel} onChange={e => { setWriterModel(e.target.value); rememberModel('writer', e.target.value) }} />
-            : <input style={selStyle} value={writerManual} onChange={e => { setWriterManual(e.target.value); rememberModel('writer', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
+            : <input style={selStyle} value={writerManual} onChange={e => { setWriterManual(e.target.value); rememberModel('writer', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
@@ -2188,7 +2188,7 @@ export default function App() {
             </label>
             {models.length > 0
               ? <ModelSelect models={models} value={visionModel} onChange={e => { setVisionModel(e.target.value); rememberModel('vision', e.target.value) }} />
-              : <input style={selStyle} value={visionManual} onChange={e => { setVisionManual(e.target.value); rememberModel('vision', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
+              : <input style={selStyle} value={visionManual} onChange={e => { setVisionManual(e.target.value); rememberModel('vision', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
           </div>
         )}
       </div>

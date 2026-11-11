@@ -36,11 +36,21 @@ function toOpenAIContent(userContent) {
 export const isAnthropic = (base) => (base || '').includes('anthropic.com')
 export const isGrok = (base) => (base || '').includes('api.x.ai')
 export const isOpenRouter = (base) => (base || '').includes('openrouter.ai')
+// Langdock's completion API has no browser CORS support, so it's only ever reached through the
+// Vite dev/preview proxy at the relative /langdock path (vite.config.js) — but also recognize the
+// absolute URL from Langdock's own docs, since a pasted copy of that needs to be normalized back
+// to the proxied path before it's fetched (see the rewrite in callOllama/fetchModels below).
+export const isLangdock = (base) => (base || '').includes('/langdock') || (base || '').includes('langdock.com')
 // Which provider slot a base URL belongs to — keys the per-provider API key store (cfg.apiKeys).
 export const providerOf = (base) =>
-  isAnthropic(base) ? 'anthropic' : isGrok(base) ? 'grok' : isOpenRouter(base) ? 'openrouter' : 'other'
+  isAnthropic(base) ? 'anthropic' : isGrok(base) ? 'grok' : isOpenRouter(base) ? 'openrouter' : isLangdock(base) ? 'langdock' : 'other'
 // Any hosted provider — as opposed to a local/self-hosted Ollama-compatible server.
-export const isCloud = (base) => isAnthropic(base) || isGrok(base) || isOpenRouter(base)
+export const isCloud = (base) => isAnthropic(base) || isGrok(base) || isOpenRouter(base) || isLangdock(base)
+
+// A base URL copied from Langdock's own docs (https://api.langdock.com/openai/<region>/v1) is an
+// absolute cross-origin URL the browser can never reach directly (no CORS there) — rewrite it to
+// the same-origin proxied path the dev/preview server actually forwards.
+const normalizeBase = (base) => (base || '').replace(/^https?:\/\/api\.langdock\.com/, '/langdock')
 
 export function authHeaders(cfg) {
   if (!cfg.apiKey) return {}
@@ -63,7 +73,7 @@ function stripThinking(text) {
 }
 
 export async function callOllama(model, userContent, system, cfg, temperature, opts = {}) {
-  const base = (cfg.base || '').replace(/\/+$/, '')
+  const base = normalizeBase(cfg.base).replace(/\/+$/, '')
   const messages = []
   if (system) messages.push({ role: 'system', content: system })
   messages.push({ role: 'user', content: toOpenAIContent(userContent) })
@@ -71,10 +81,16 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   // `format` is an Ollama-specific field name, not part of the OpenAI-compatible
   // surface — only send it to an actual Ollama-family server.
   const formatParam = opts.format && !isCloud(cfg.base) ? { format: opts.format } : {}
+  // Every provider here (including Langdock, for a Claude-routed request) honors plain
+  // `max_tokens`. Some OpenAI o-series/GPT-5-family models reject it outright and name
+  // `max_completion_tokens` in the error instead — the retry below switches to that key
+  // on demand rather than assuming it up front, since guessing wrong (as a prior version
+  // of this code did for Langdock) silently truncates output instead of erroring.
+  let maxTokensKey = 'max_tokens'
   const doFetch = (includeTemperature, maxTokens) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
-      model, messages, max_tokens: maxTokens, stream: false,
+      model, messages, [maxTokensKey]: maxTokens, stream: false,
       ...(includeTemperature ? { temperature } : {}),
       ...formatParam,
     }),
@@ -84,20 +100,27 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   try {
     res = await doFetch(true, baseMaxTokens)
   } catch (e) {
-    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : isOpenRouter(cfg.base) ? 'openrouter.ai' : base
+    const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : isOpenRouter(cfg.base) ? 'openrouter.ai' : isLangdock(cfg.base) ? 'api.langdock.com' : base
     throw new Error(`Network error reaching ${label}. ${isCloud(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
   }
   // Some newer Claude models reject a custom temperature outright; retry once without it.
+  // Some OpenAI o-series/GPT-5-family models reject `max_tokens` and name
+  // `max_completion_tokens` in the error instead; retry once with that key.
   if (!res.ok) {
     let msg = ''
-    try { const j = await res.clone().json(); msg = (j.error && (j.error.message || j.error)) || '' } catch {}
+    // Not every provider nests its error under `error.message` (OpenAI/OpenRouter's
+    // shape) — Langdock's own errors are a top-level `{ message }`.
+    try { const j = await res.clone().json(); msg = (j.error && (j.error.message || j.error)) || j.message || '' } catch {}
     if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
       try { res = await doFetch(false, baseMaxTokens) } catch {}
+    } else if (/max_completion_tokens/i.test(msg) && maxTokensKey === 'max_tokens') {
+      maxTokensKey = 'max_completion_tokens'
+      try { res = await doFetch(true, baseMaxTokens) } catch {}
     }
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
-    try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || msg } catch {}
+    try { const j = await res.json(); msg = (j.error && (j.error.message || j.error)) || j.message || msg } catch {}
     throw new Error(msg)
   }
   let data = await res.json()
@@ -124,6 +147,15 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
       throw new Error(`${model} ran out of output length while "thinking"${retried ? ' even after retrying with a much larger token budget' : ''} and never produced a final answer. Raise "Max output tokens" in ⚙ Backend, try a less reasoning-heavy model, or — if that doesn't help — its Ollama context window (num_ctx) itself is likely the real ceiling; increase that server-side (e.g. OLLAMA_CONTEXT_LENGTH or a Modelfile PARAMETER num_ctx).`)
     }
     throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+  }
+  // A JSON-mode call that got cut off mid-object still has non-empty `rawText` (just
+  // incomplete), so it would otherwise sail past the `!rawText` check above and get
+  // handed to the caller's JSON.parse as an indistinguishable "invalid JSON" failure.
+  // Plain-text callers aren't gated on this — a shorter-than-asked-for answer there is
+  // already expected/tolerated behavior.
+  if (opts.format && (data.choices?.[0]?.finish_reason === 'length' || data.choices?.[0]?.finish_reason === 'max_tokens')) {
+    const used = data.usage?.completion_tokens
+    throw new Error(`${model} hit the output token limit${used ? ` after ${used} completion tokens` : ''} while generating JSON (sent ${maxTokensKey}). Raise "Max output tokens" in ⚙ Backend — if it's already high, this provider/model may enforce its own lower ceiling regardless of what's sent.`)
   }
   const text = stripThinking(rawText)
   const usage = data.usage
@@ -371,7 +403,7 @@ export async function generateVideo(prompt, cfg, opts = {}) {
 }
 
 export async function fetchModels(cfg) {
-  const base = (cfg.base || '').replace(/\/+$/, '')
+  const base = normalizeBase(cfg.base).replace(/\/+$/, '')
   const res = await fetch(`${base}/models`, { headers: authHeaders(cfg) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
