@@ -12,3 +12,6 @@ prompt-enhancer-history-RECOVERED*.json
 recovered-history-readable.txt
 # local ComfyUI workflow exports (MiniMax H3 test runs), dropped in the repo root
 MINIMAXH3__*.json
+
+# private eval baselines (real history content) — regenerate with eval/extract-baseline.mjs
+eval/baseline/*.json
