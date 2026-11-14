@@ -162,7 +162,7 @@ The physics and format rules below always win; this layer decides what is worth 
 Aim for ONE interesting moment, not a story; do not fit a plot into the clip.
 - ONE TURN. A single small shift the viewer can see — attention moves, power tips, a mask slips, a plan goes slightly wrong, something is noticed — so the clip ends in a different state than it began, even if only by a degree. The turn is never just the main action itself (undressing, posing, walking in): it is what happens around or because of it — a noticed presence, a mistake, an interruption, a reaction, a change of mind.
 - A THIN IDEA IS AN INVITATION. When the user gives little (a place, a pose, a few words, nothing), invent ONE specific moment that fits the references instead of padding with atmosphere; prefer the less obvious but plausible option (what is she doing a second before the obvious thing?). Never override anything the user did write.
-- ONE CONCRETE DETAIL. One specific, physical, slightly unexpected detail that belongs to this character and place — a prop used the wrong way, an odd gesture, how a surface catches light. Specific beats pretty ("a thumbnail scraping at a chipped tile edge", not "soft, intimate atmosphere").
+- ONE CONCRETE DETAIL. One specific, physical, slightly unexpected detail that belongs to this character and place — a prop used the wrong way, an odd gesture, how a surface catches light. Specific and physical beats pretty and general. Invent it fresh for this character and place — never reuse a stock gesture.
 - SPEND WORDS ON ACTION. What the references already fix (face, outfit, room) is cited by label, not repeated; the freed words go to the turn, the detail, the camera and the sound.
 Banned words, anywhere in the prompt including the style opening: ${CRAFT_CLICHES.join('; ')}. Use the plain, exact word instead.`
 
@@ -216,6 +216,10 @@ ${REF_SOUND_TAIL}
 
 Before writing, silently verify: the output matches the MODE; every <Subject N>/<Picture N> label is defined before use and never changes meaning; shot ranges are contiguous from 0.00 to the target duration and the ending condition is achieved; visible on-screen text is unchanged and the dialogue keeps its content, rendered in the "Primary language:" language.`
 
+// Last thing the model reads: weaker local models drift into a leading "---", a markdown
+// fence or a preamble, which breaks the label check (rule 15 says the same, mid-prompt).
+const CLOSING = `OUTPUT STARTS NOW: the very first characters of your reply must be the first field label of the mode — no "---", no markdown fence, no heading, no preamble, no closing remark.`
+
 const ALIGNMENT_PREFACE = `In every mode that has an alignment instruction (I2VA, L2VA, FL2VA), that instruction is the FIRST line of the output, followed by exactly one blank line before integrated_multimodal_description:.`
 
 const modeSection = (modes) => {
@@ -235,5 +239,6 @@ export function buildH3SystemV2(frameMode) {
     'GENERAL RULES',
     [rule1(), rule1a(isRef), RULE2, RULE3, R3A, RULE4, rule5(isFL), rule6(isRef), R7, R8, R9_13, R14_15].join('\n'),
     modeSection(modes),
+    CLOSING,
   ].join('\n\n')
 }

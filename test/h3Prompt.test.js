@@ -85,6 +85,11 @@ describe('buildH3SystemV2', () => {
     expect(ref).toContain('is declared as an <Audio N> line in subject_definitions')
   })
 
+  it('ends with the start-of-output reminder, and carries no copyable example gesture', () => {
+    for (const m of [ref, single, last, firstlast]) expect(m.endsWith('no closing remark.')).toBe(true)
+    expect(ref).not.toContain('thumbnail')
+  })
+
   it('tells the writer not to leak its own rules', () => {
     expect(ref).toContain('never name, quote or label them in the output')
   })
