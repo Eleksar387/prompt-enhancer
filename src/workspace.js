@@ -169,8 +169,11 @@ const REF_IMAGES_FIELD = 'refImages'
 // Workspace → snapshot. `meta` carries the parts that are not compose fields:
 // the writer/vision model actually used, the output count, and the assembled
 // vision caption (null for a text-only run).
-export function buildSnapshot(w, { model, vision, outputCount, caption = null } = {}) {
+export function buildSnapshot(w, { model, vision, outputCount, caption = null, craftRules } = {}) {
   const snap = { ts: Date.now(), outputCount, model, vision }
+  // Generation metadata (like `model`), not a workspace field: records whether the
+  // MiniMax H3 creative-craft block was in the writer prompt. Never restored.
+  if (typeof craftRules === 'boolean') snap.craftRules = craftRules
   for (const f of WORKSPACE_FIELDS) {
     if (f.when && !f.when(w)) { snap[f.snap] = 'empty' in f ? f.empty : ''; continue }
     snap[f.snap] = f.to ? f.to(w) : w[f.state]

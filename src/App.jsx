@@ -1634,6 +1634,7 @@ export default function App() {
     vision: hasImg ? effectiveVision : null,
     outputCount: count,
     caption: frameDescription,
+    craftRules: target === 'minimax_h3' ? cfg.craftRules !== false : undefined,
   })
 
   const runWriter = async (frameDescription, stylePart, lengthPart, hasImg, opts = null) => {

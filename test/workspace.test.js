@@ -172,6 +172,15 @@ describe('buildSnapshot', () => {
     expect(s.ts).toBeGreaterThan(0)
   })
 
+  it('records the craft-rules setting only when given, and never restores it', () => {
+    expect(buildSnapshot(h3Workspace(), { ...meta, craftRules: true }).craftRules).toBe(true)
+    expect(buildSnapshot(h3Workspace(), { ...meta, craftRules: false }).craftRules).toBe(false)
+    expect('craftRules' in buildSnapshot(h3Workspace(), meta)).toBe(false)
+    expect('craftRules' in buildSnapshot(h3Workspace(), { ...meta, craftRules: undefined })).toBe(false)
+    const back = snapshotToWorkspace(buildSnapshot(h3Workspace(), { ...meta, craftRules: true }), { newId })
+    expect('craftRules' in back).toBe(false)
+  })
+
   it('stores the ratio as its label, not its id', () => {
     const s = buildSnapshot(h3Workspace(), meta)
     expect(s.ratio).toBe(MINIMAX_H3_RESOLUTIONS[1].label)
