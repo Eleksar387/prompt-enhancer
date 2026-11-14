@@ -17,8 +17,8 @@ describe('buildH3SystemV2', () => {
   const firstlast = buildH3SystemV2('firstlast')
 
   it('is much shorter than legacy', () => {
-    expect(ref.length).toBeLessThan(26000)
-    expect(single.length).toBeLessThan(20500)
+    expect(ref.length).toBeLessThan(28000)
+    expect(single.length).toBeLessThan(22000)
     expect(ref.length).toBeLessThan(legacy.length)
   })
 
@@ -88,6 +88,18 @@ describe('buildH3SystemV2', () => {
   it('ends with the start-of-output reminder, and carries no copyable example gesture', () => {
     for (const m of [ref, single, last, firstlast]) expect(m.endsWith('no closing remark.')).toBe(true)
     expect(ref).not.toContain('thumbnail')
+  })
+
+  it('carries the main-branch writer improvements (1b, rule 3 tail, rule 4 spread, 6b)', () => {
+    for (const m of [ref, single, last, firstlast]) {
+      expect(m).toContain('INVENT SPECIFICS, DON\'T DEFAULT TO GENERIC')
+      expect(m).toContain('already-in-progress micro-beat')
+      expect(m).toContain('equally valid FIRST choices')
+      expect(m).toContain('6b. NO VOICE REFERENCE EITHER')
+      expect(m).toContain('rules 6a/6b')
+    }
+    // every numbered rule heading the legacy prompt has also exists in V2
+    for (const h of legacy.match(/^(\d+[ab]?)\. /gm)) if (h !== '1b. ') expect(ref).toContain(h)  // 1b lives in the creative block
   })
 
   it('tells the writer not to leak its own rules', () => {
