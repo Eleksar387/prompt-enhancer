@@ -476,3 +476,27 @@ describe('length injection and aspect hints', () => {
     expect(out).toMatchSnapshot()
   })
 })
+
+describe('creative craft rules (MiniMax H3 writer)', () => {
+  const h3 = TARGETS.minimax_h3
+  const legacy = systemPromptFor(h3, 'ref')
+
+  it('is off by default — the system prompt is exactly the old one', () => {
+    expect(systemPromptFor(h3, 'ref', false)).toBe(legacy)
+    expect(legacy).toBe(h3.system)
+  })
+
+  it('when on, appends the craft block to the old prompt and changes nothing else', () => {
+    const on = systemPromptFor(h3, 'ref', true)
+    expect(on.startsWith(legacy)).toBe(true)
+    expect(on.slice(legacy.length)).toContain('CREATIVE DIRECTION')
+  })
+
+  it('never touches other targets or the Scriptwriter clip prompt', () => {
+    for (const t of Object.values(TARGETS)) {
+      if (t.id === 'minimax_h3') continue
+      expect(systemPromptFor(t, 'single', true)).toBe(systemPromptFor(t, 'single', false))
+    }
+    expect(h3.clipSystem).toBe(h3.system)
+  })
+})

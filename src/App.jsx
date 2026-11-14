@@ -201,7 +201,7 @@ export default function App() {
   // Declared after `t`/`frameMode` further down would be neater, but state has to
   // come before the effects that use it; the hook itself owns the reset-on-target
   // -change effect. See src/hooks/useAdminReview.js.
-  const admin = useAdminReview(TARGETS[target], frameMode)
+  const admin = useAdminReview(TARGETS[target], frameMode, cfg.craftRules !== false)
   // Queue: pending "generate this later" items, persisted server-side (see db.js).
   // The hook owns its state and the run bookkeeping every job kind shares; the two
   // job bodies stay here, below. See src/hooks/useQueue.js.
@@ -1661,7 +1661,7 @@ export default function App() {
       return { ok: false, error: 'paused for admin review' }
     }
 
-    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode), snapshot, h3Mode })
+    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode, cfg.craftRules !== false), snapshot, h3Mode })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -2510,7 +2510,7 @@ export default function App() {
             <div style={{ marginTop: 12 }}>
               <textarea value={admin.system} onChange={e => admin.setSystem(e.target.value)} rows={12}
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode, cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>

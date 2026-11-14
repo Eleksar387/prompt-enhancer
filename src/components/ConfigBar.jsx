@@ -234,6 +234,12 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
             )}
           </div>
 
+          <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            title="MiniMax H3 only: adds a creative-direction block to the writer prompt (one visible turn, one concrete detail, a motivated camera, dialogue that does work, sound as a beat). Off = the previous prompt, unchanged. Edit the rules in src/craft.js.">
+            <input type="checkbox" checked={cfg.craftRules !== false} onChange={e => setCfg({ ...cfg, craftRules: e.target.checked })} />
+            🎬 Creative craft rules for MiniMax H3 prompts
+          </label>
+
           {!cloud && (
             <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
               title="After a generation finishes, asks Ollama to evict every model it has loaded (keep_alive 0) so the RAM/VRAM is free for other work. Evicts all loaded Ollama models, not just this app's; the next generation has to reload the model, so it starts slower.">

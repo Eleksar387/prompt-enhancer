@@ -13,9 +13,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { systemPromptFor } from '../constants'
 
-export function useAdminReview(target, frameMode) {
+export function useAdminReview(target, frameMode, craft = false) {
   const [mode, setMode] = useState(false)
-  const [system, setSystem] = useState(() => systemPromptFor(target, frameMode))
+  const [system, setSystem] = useState(() => systemPromptFor(target, frameMode, craft))
   const [systemOpen, setSystemOpen] = useState(false)
   const [userMsg, setUserMsg] = useState('')
   const [pending, setPending] = useState(false)
@@ -29,10 +29,10 @@ export function useAdminReview(target, frameMode) {
   const h3ModeRef = useRef(null)
 
   useEffect(() => {
-    setSystem(systemPromptFor(target, frameMode))
+    setSystem(systemPromptFor(target, frameMode, craft))
     setPending(false)
     setUserMsg('')
-  }, [target, frameMode])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, frameMode, craft])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Called by the writer instead of sending: hold the assembled message and its
   // snapshot, and surface them for review.

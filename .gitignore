@@ -15,3 +15,5 @@ MINIMAXH3__*.json
 
 # private eval baselines (real history content) — regenerate with eval/extract-baseline.mjs
 eval/baseline/*.json
+eval/.key
+eval/out/
