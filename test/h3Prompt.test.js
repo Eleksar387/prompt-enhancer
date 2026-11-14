@@ -93,13 +93,22 @@ describe('buildH3SystemV2', () => {
   it('carries the main-branch writer improvements (1b, rule 3 tail, rule 4 spread, 6b)', () => {
     for (const m of [ref, single, last, firstlast]) {
       expect(m).toContain('INVENT SPECIFICS, DON\'T DEFAULT TO GENERIC')
-      expect(m).toContain('already-in-progress micro-beat')
+      expect(m).toContain('let the shot end mid-motion')
       expect(m).toContain('equally valid FIRST choices')
       expect(m).toContain('6b. NO VOICE REFERENCE EITHER')
       expect(m).toContain('rules 6a/6b')
     }
     // every numbered rule heading the legacy prompt has also exists in V2
     for (const h of legacy.match(/^(\d+[ab]?)\. /gm)) if (h !== '1b. ') expect(ref).toContain(h)  // 1b lives in the creative block
+  })
+
+  it('never teaches a stated hold at the end (no copyable "final 1.5 seconds" sentence)', () => {
+    for (const m of [ref, single, last, firstlast]) {
+      expect(m).not.toContain('through the final 1.5 seconds')
+      expect(m).not.toContain('She holds the look')
+      expect(m).not.toMatch(/settles? (without|with no)/i)
+      expect(m).toContain('Never write a sentence about the final seconds')
+    }
   })
 
   it('tells the writer not to leak its own rules', () => {

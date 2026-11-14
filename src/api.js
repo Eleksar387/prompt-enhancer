@@ -157,11 +157,52 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     const used = data.usage?.completion_tokens
     throw new Error(`${model} hit the output token limit${used ? ` after ${used} completion tokens` : ''} while generating JSON (sent ${maxTokensKey}). Raise "Max output tokens" in ⚙ Backend — if it's already high, this provider/model may enforce its own lower ceiling regardless of what's sent.`)
   }
-  const text = stripThinking(rawText)
-  const usage = data.usage
-    ? { input_tokens: data.usage.prompt_tokens ?? '?', output_tokens: data.usage.completion_tokens ?? '?' }
+  let text = stripThinking(rawText).trim()
+  let usageData = data.usage
+  // A model that fell into a repetition loop ("silver handles, silver handles, …" for
+  // 98k characters — seen with a local Gemma) must not reach the caller or the history
+  // as if it were an answer. Retry once, colder and with a repetition penalty (local
+  // servers only — a cloud model rarely loops and a penalty could be rejected), then
+  // fail loudly with something the user can act on.
+  if (looksDegenerate(text)) {
+    let second = ''
+    try {
+      const r2 = await fetch(`${base}/chat/completions`, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          model, messages, [maxTokensKey]: baseMaxTokens, stream: false,
+          temperature: Math.min(typeof temperature === 'number' ? temperature : 0.7, 0.3),
+          ...(isCloud(cfg.base) ? {} : { frequency_penalty: 0.3 }),
+          ...formatParam,
+        }),
+      })
+      if (r2.ok) {
+        const d2 = await r2.json()
+        second = stripThinking(d2.choices?.[0]?.message?.content || '').trim()
+        if (second) usageData = d2.usage || usageData
+      }
+    } catch {}
+    if (!second || looksDegenerate(second)) {
+      throw new Error(`${model} got stuck repeating itself and the output was discarded (also on a retry at a lower temperature). Try again, pick another Writer model, or — for a local Ollama model — check that its context length is large enough (the MiniMax H3 prompt needs roughly 16k tokens).`)
+    }
+    text = second
+  }
+  const usage = usageData
+    ? { input_tokens: usageData.prompt_tokens ?? '?', output_tokens: usageData.completion_tokens ?? '?' }
     : null
-  return { text: text.trim(), usage }
+  return { text, usage }
+}
+
+// True when `text` is a repetition loop rather than prose: enough words, yet very few
+// distinct 5-word windows. Real prompts and JSON sit near 1.0; the "silver handles,
+// silver handles, …" loop sits near 0. Pure, so it is unit-tested directly.
+export function looksDegenerate(text) {
+  const w = (text || '').split(/\s+/).filter(Boolean)
+  if (w.length < 300) return false
+  const grams = new Set()
+  let n = 0
+  for (let i = 0; i + 5 <= w.length; i++) { grams.add(w.slice(i, i + 5).join(' ')); n++ }
+  return grams.size / n < 0.25
 }
 
 // While a queue is draining, per-run unloads are suppressed so the model isn't reloaded
