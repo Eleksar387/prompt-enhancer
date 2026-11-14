@@ -1,4 +1,4 @@
-import { craftSystemPrompt } from './craft'
+import { buildH3SystemV2 } from './h3Prompt'
 const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   const modeSection = frameMode === 'firstlast' ? firstlast : frameMode === 'firstmidlast' ? firstmidlast : ''
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
@@ -1938,12 +1938,13 @@ export const TARGET_GROUPS = [
   { label: 'TTS',      ids: ['dramabox'] },
 ]
 
-// `craft` = cfg.craftRules !== false: adds the creative-direction block to the main
-// pipeline's MiniMax H3 writer (src/craft.js). Scriptwriter / Adapt never pass it.
-export const systemPromptFor = (target, frameMode, craft = false) => {
-  const base = target.buildSystem ? target.buildSystem(frameMode) : target.system
-  return craftSystemPrompt(base, target.id, craft)
-}
+// `craft` = cfg.craftRules !== false: the main pipeline's MiniMax H3 writer then gets
+// the condensed per-mode V2 prompt with the creative-direction rules built in
+// (src/h3Prompt.js); off = the legacy prompt. Scriptwriter / Adapt never pass it.
+export const systemPromptFor = (target, frameMode, craft = false) =>
+  craft && target.id === 'minimax_h3'
+    ? buildH3SystemV2(frameMode)
+    : (target.buildSystem ? target.buildSystem(frameMode) : target.system)
 
 // Read a target's capabilities by id or by object. Always returns an object, so a
 // caller can read caps(x).ratioPicker without guarding — an unknown target simply

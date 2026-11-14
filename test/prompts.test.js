@@ -481,15 +481,16 @@ describe('creative craft rules (MiniMax H3 writer)', () => {
   const h3 = TARGETS.minimax_h3
   const legacy = systemPromptFor(h3, 'ref')
 
-  it('is off by default — the system prompt is exactly the old one', () => {
+  it('is off by default — the system prompt is exactly the legacy one', () => {
     expect(systemPromptFor(h3, 'ref', false)).toBe(legacy)
     expect(legacy).toBe(h3.system)
   })
 
-  it('when on, appends the craft block to the old prompt and changes nothing else', () => {
+  it('when on, switches to the condensed per-mode V2 prompt', () => {
     const on = systemPromptFor(h3, 'ref', true)
-    expect(on.startsWith(legacy)).toBe(true)
-    expect(on.slice(legacy.length)).toContain('CREATIVE DIRECTION')
+    expect(on).not.toBe(legacy)
+    expect(on).toContain('WHAT IS WORTH FILMING')
+    expect(on.length).toBeLessThan(legacy.length)
   })
 
   it('never touches other targets or the Scriptwriter clip prompt', () => {
