@@ -10,6 +10,7 @@ export const DURATION_NODE = "PEClipDuration";
 export const AUDIO_NODE = "PEClipAudio";
 export const VIDEO_NODE = "PEClipVideo";
 export const LORA_NODE = "PEClipLora";
+export const REFMOD_NODE = "PEClipRefMod";
 
 export function hasDurationNode(promptOutput) {
   return Object.values(promptOutput).some((n) => n.class_type === DURATION_NODE);
@@ -44,6 +45,13 @@ export function countGuideSlots(promptOutput) {
 // How many PEClipLora nodes the template chains (= LoRAs one clip can load).
 export function countLoraSlots(promptOutput) {
   return Object.values(promptOutput).filter((n) => n.class_type === LORA_NODE).length;
+}
+
+// How many PEClipRefMod nodes the template wires into MiniMaxH3RefModsLoader
+// (= RefMods one clip can load). Same plain-count shape as countLoraSlots —
+// each node is an independent slot, not a chain.
+export function countRefModSlots(promptOutput) {
+  return Object.values(promptOutput).filter((n) => n.class_type === REFMOD_NODE).length;
 }
 
 export function hasPromptNode(promptOutput) {
@@ -99,6 +107,20 @@ export function patchForClip(promptOutput, clip) {
     loraPos[id] = explicit >= 0 ? explicit : loraFree[nextLora++];
   }
 
+  // PEClipRefMod: same slot rule as LoRA/audio — pinned `index` first, the rest ascending.
+  const refMods = clip.refMods || [];
+  const refModIds = Object.keys(patched).filter((id) => patched[id].class_type === REFMOD_NODE)
+    .sort((a, b) => Number(a) - Number(b));
+  const refModPinned = new Set(refModIds.map((id) => Number(patched[id].inputs?.index ?? -1)).filter((i) => i >= 0));
+  const refModFree = [];
+  for (let i = 0; refModFree.length < refModIds.length; i++) if (!refModPinned.has(i)) refModFree.push(i);
+  const refModPos = {};
+  let nextRefMod = 0;
+  for (const id of refModIds) {
+    const explicit = Number(patched[id].inputs?.index ?? -1);
+    refModPos[id] = explicit >= 0 ? explicit : refModFree[nextRefMod++];
+  }
+
   for (const [id, node] of Object.entries(patched)) {
     if (node.class_type === PROMPT_NODE) {
       node.inputs.text = clip.promptText || "";
@@ -118,6 +140,10 @@ export function patchForClip(promptOutput, clip) {
       const l = loras[loraPos[id]];
       node.inputs.lora_name = l ? l.file : "";
       node.inputs.strength = l ? l.strength : 0;
+    } else if (node.class_type === REFMOD_NODE) {
+      const m = refMods[refModPos[id]];
+      node.inputs.mod_name = m ? m.file : "";
+      node.inputs.strength = m ? m.strength : 0;
     } else if (node.class_type === VIDEO_NODE) {
       // the export carries no reference video; only overwrite when a clip names one
       if (clip.video && clip.video.absPath) node.inputs.video_path = clip.video.absPath;
@@ -128,6 +154,71 @@ export function patchForClip(promptOutput, clip) {
     }
   }
   return patched;
+}
+
+// Declared widget order (INPUT_TYPES: required then optional) for each PEClip*
+// class, per nodes.py — excludes any non-primitive (socket-only) input, i.e.
+// PEClipLora's `model`. A field converted to an input socket in the live
+// workflow is removed from `widgets_values` and appears in the node's own
+// `inputs` list instead, so patchWorkflowForClip filters those out before
+// mapping positionally.
+const WIDGET_FIELDS = {
+  [PROMPT_NODE]: ["text"],
+  [IMAGE_NODE]: ["index", "image_path"],
+  [GUIDE_IMAGE_NODE]: ["index", "image_path", "frame_idx"],
+  [DURATION_NODE]: ["seconds"],
+  [AUDIO_NODE]: ["audio_path", "index"],
+  [VIDEO_NODE]: ["video_path"],
+  [LORA_NODE]: ["lora_name", "strength", "index"],
+  [REFMOD_NODE]: ["mod_name", "strength", "index"],
+};
+
+// Clone the UI-format `workflow` (the embedded graph `app.graphToPrompt()`
+// also returns, kept for provenance / "drag the output back in") and patch
+// every PEClip* node's `widgets_values` to the SAME literal values
+// `patchForClip` just wrote into the API-format prompt for this clip — so the
+// metadata embedded in the rendered output actually matches what ran, instead
+// of showing the template's pre-patch placeholders (empty LoRA/RefMod/text
+// fields) on every single clip regardless of success.
+//
+// `patchedPromptOutput` must be `patchForClip(promptOutput, clip)`'s result —
+// this function reads the already-resolved literal values back off it by
+// node id, rather than re-deriving slot assignments a second time, so the two
+// patched representations can never drift apart from each other.
+//
+// Only PEClip* nodes are touched. A node whose `widgets_values` length
+// doesn't match its filtered widget-field count (an unexpected graph edit, a
+// nodes.py version mismatch) is left alone rather than guessed at, and a
+// third-party node (e.g. the Save node `patchForClip` stamps via
+// `filename_prefix`) is never touched here — its own widget order isn't ours
+// to know.
+export function patchWorkflowForClip(workflow, patchedPromptOutput) {
+  const cloned = JSON.parse(JSON.stringify(workflow || {}));
+  for (const node of cloned.nodes || []) {
+    const apiNode = patchedPromptOutput[String(node.id)];
+    if (!apiNode) continue;
+    const fields = WIDGET_FIELDS[apiNode.class_type];
+    if (!fields) continue;
+    // A current ComfyUI frontend lists EVERY widget-capable field in
+    // node.inputs (each carrying its own `widget: {name}` marker) whether or
+    // not it's actually wired up — so "present in node.inputs" is not "is a
+    // socket". Only a `link` that's actually set (non-null) means the field
+    // is driven by a connection and has no slot in widgets_values; an
+    // unlinked widget-capable entry still occupies one. An older frontend
+    // that never lists an unconverted widget in `inputs` at all also reads
+    // correctly here, since such a field is simply absent from `linkedNames`.
+    const linkedNames = new Set((node.inputs || []).filter((i) => i.link != null).map((i) => i.name));
+    const widgetFields = fields.filter((f) => !linkedNames.has(f));
+    if (!Array.isArray(node.widgets_values) || node.widgets_values.length !== widgetFields.length) {
+      console.warn(
+        `Prompt Enhancer Bridge: skipping embedded-workflow patch for ${apiNode.class_type} node ${node.id} ` +
+        `(expected ${widgetFields.length} widget value(s), found ${node.widgets_values?.length ?? "none"}).`
+      );
+      continue;
+    }
+    widgetFields.forEach((f, i) => { node.widgets_values[i] = apiNode.inputs[f]; });
+  }
+  return cloned;
 }
 
 // --- MiniMax H3 Director (Load Film's "fill it in, don't run it" path) ----------

@@ -141,3 +141,71 @@ export async function fetchComfyImageBlob(viewUrl) {
   if (!res.ok) throw new Error(`ComfyUI image fetch failed: HTTP ${res.status}`)
   return res.blob()
 }
+
+// --- discovering lora files -------------------------------------------------
+//
+// ComfyUI has no dedicated "list loras" endpoint; the standard way to get the
+// list is to read it off a lora-loader node's COMBO input via /object_info.
+// Tries LoraLoader first, then LoraLoaderModelOnly (a stripped/custom install
+// may keep only one, or neither).
+
+const LORA_LOADER_CLASSES = ['LoraLoader', 'LoraLoaderModelOnly']
+
+// COMBO inputs can be reported as either `[[...files], {...}]` (legacy) or
+// `['COMBO', { options: [...] }]` (newer schema) — accept both.
+function comboOptions(spec) {
+  if (!Array.isArray(spec)) return null
+  if (Array.isArray(spec[0])) return spec[0]
+  if (spec[0] === 'COMBO' && Array.isArray(spec[1]?.options)) return spec[1].options
+  return null
+}
+
+// Every lora filename ComfyUI reports under models/loras, relative paths with
+// whatever separator the ComfyUI host OS uses (e.g. Windows:
+// `MinimaxH3\foo.safetensors`). `[]` means ComfyUI has the node but no files;
+// throws only when neither node class is present or the network fails.
+export async function fetchComfyLoraFiles(comfyUrl) {
+  const base = (comfyUrl || '').replace(/\/+$/, '')
+  let lastDetail = 'no lora_name input found'
+  for (const cls of LORA_LOADER_CLASSES) {
+    let res
+    try {
+      res = await fetch(`${base}/object_info/${cls}`)
+    } catch (e) {
+      throw new Error(`Network error reaching ComfyUI at ${base}. Is it running, and started with --enable-cors-header? (${e.message})`)
+    }
+    if (!res.ok) { lastDetail = `HTTP ${res.status}`; continue }
+    let data
+    try { data = await res.json() } catch { lastDetail = 'bad JSON from /object_info'; continue }
+    const names = comboOptions(data?.[cls]?.input?.required?.lora_name)
+    if (names) return names
+  }
+  throw new Error(`ComfyUI has neither a LoraLoader nor a LoraLoaderModelOnly node — is this a stripped/custom install missing the stock lora loader nodes? (${lastDetail})`)
+}
+
+// --- discovering RefMod files ------------------------------------------------
+//
+// RefMods are loaded by a single custom node, MiniMaxH3RefModsLoader (from the
+// ComfyUI-MiniMaxH3Mod pack) — no fallback class exists. Its mod_1..mod_8 COMBO
+// inputs all share one options list, read here off mod_1; the list is prefixed
+// with a "(none)" sentinel that must be filtered out before it reaches the UI.
+
+const REF_MOD_NONE = '(none)'
+
+export async function fetchComfyRefModFiles(comfyUrl) {
+  const base = (comfyUrl || '').replace(/\/+$/, '')
+  let res
+  try {
+    res = await fetch(`${base}/object_info/MiniMaxH3RefModsLoader`)
+  } catch (e) {
+    throw new Error(`Network error reaching ComfyUI at ${base}. Is it running, and started with --enable-cors-header? (${e.message})`)
+  }
+  if (!res.ok) throw new Error(`ComfyUI RefMod lookup failed: HTTP ${res.status}`)
+  let data
+  try { data = await res.json() } catch { throw new Error('ComfyUI returned bad JSON for /object_info/MiniMaxH3RefModsLoader') }
+  const names = comboOptions(data?.MiniMaxH3RefModsLoader?.input?.required?.mod_1)
+  if (!names) {
+    throw new Error('ComfyUI has no MiniMaxH3RefModsLoader node — is the MiniMax H3 RefMod custom node pack (ComfyUI-MiniMaxH3Mod) installed, and ComfyUI restarted since?')
+  }
+  return names.filter(n => n !== REF_MOD_NONE)
+}

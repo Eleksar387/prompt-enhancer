@@ -84,6 +84,17 @@ def stage_zip(zip_bytes, runs_root):
                     strength = 1.0
                 clean.append({"file": l["file"].strip(), "strength": strength})
         clip["loras"] = clean
+        # `refMods` ([{file, strength}]) — same deal as loras, names ComfyUI resolves itself
+        # under models/refmods on the machine that runs the workflow.
+        clean = []
+        for m in clip.get("refMods") or []:
+            if isinstance(m, dict) and isinstance(m.get("file"), str) and m["file"].strip():
+                try:
+                    strength = float(m.get("strength", 1))
+                except (TypeError, ValueError):
+                    strength = 1.0
+                clean.append({"file": m["file"].strip(), "strength": strength})
+        clip["refMods"] = clean
         video = clip.get("video")
         if isinstance(video, dict) and video.get("file"):
             vpath = os.path.join(run_dir, *video["file"].split("/"))

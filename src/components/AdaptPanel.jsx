@@ -26,6 +26,7 @@ export default function AdaptPanel({
   models, defaultModel, cfg,
   workspace,
   activeLoras = [],
+  activeRefMods = [],
   onSaveAdapt, onClose,
   autoRun = false,
 }) {
@@ -79,7 +80,7 @@ export default function AdaptPanel({
         style, creativity, targetType: dest.type, showDialogue: dest.show.dialogue,
         dialogue, delivery, negative, forceNonImageWording: true,
         spokenLang: dest.show.spokenLang ? spokenLangId : null,
-        loras: activeLoras, targetId: destTarget,
+        loras: activeLoras, refMods: activeRefMods, targetId: destTarget,
       })
       const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
       // A target that writes an explicit aspect ratio into its prompt needs one
@@ -97,6 +98,7 @@ export default function AdaptPanel({
       const system = systemPromptFor(dest, 'single')
       const { text: raw, usage } = await callOllama(effectiveAdaptModel, userText, system, cfg, cfg.temperature ?? 0.7)
       // Put back any active LoRA trigger the writer dropped or mangled.
+      // RefMods have no trigger to repair.
       const text = withLoraTriggers(raw, activeLoras, destTarget)
       setResult({ text, usage, loading: false, error: '' })
 
@@ -113,6 +115,7 @@ export default function AdaptPanel({
           frameMode: 'single',
           scene: scene || '',
           activeLoraIds: activeLoras.map(l => l.id),
+          activeRefModIds: activeRefMods.map(r => r.id),
           h3RatioId: adaptRatioId,
           firstImg: null, midImg: null, lastImg: null, refImages: [], refAudios: [],
         }, { model: effectiveAdaptModel, vision: null, outputCount: 1, caption: null }),

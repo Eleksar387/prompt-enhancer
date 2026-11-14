@@ -44,6 +44,9 @@ export const refImagesToSnap = (list) => (list || []).map(im => ({
   // The character-kind LoRA (if any) assigned directly on this reference's own
   // card — see "Per-reference LoRA/voice binding" in MinimaxRefPanel.jsx.
   loraId: im.loraId || null,
+  // Per-use override of that LoRA's strength, for this image's binding only —
+  // blank/absent falls back to the library's own strength (src/loras.js).
+  loraStrength: Number.isFinite(im.loraStrength) ? im.loraStrength : null,
   // Add Guide timeline anchor (seconds) — see manualH3.js's anchorSentences /
   // App.jsx's "Manual Prompt" template and Manual mode assembler.
   atSeconds: im.atSeconds ?? null,
@@ -62,6 +65,7 @@ export const refImagesFromSnap = (list, newId) => (Array.isArray(list)
       preserve: im.preserve || 'strong',
       note: im.note || '',
       loraId: im.loraId || null,
+      loraStrength: Number.isFinite(im.loraStrength) ? im.loraStrength : null,
       atSeconds: im.atSeconds ?? null,
       hash: im.hash || imageHash(im.base64),
     }))
@@ -135,12 +139,24 @@ export const WORKSPACE_FIELDS = [
 
   { snap: 'loraIds', state: 'activeLoraIds', fallback: [],
     from: v => (Array.isArray(v) ? v : []) },
+  { snap: 'refModIds', state: 'activeRefModIds', fallback: [],
+    from: v => (Array.isArray(v) ? v : []) },
+  // Which named character/subject an active RefMod's trigger belongs to —
+  // same idea as loraSubjects below, but not gated on a kind (RefMod has none).
+  { snap: 'refModSubjects', state: 'refModSubjects', fallback: {},
+    from: v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {} },
   // Which named character each active *character*-kind LoRA's trigger belongs
   // to, for a generation with more than one active at once — keyed by LoRA id,
   // set in LoraPanel next to that LoRA's chip once it's toggled on. Mirrors the
   // Scriptwriter's own cast→LoRA binding (there it's `c.lora` on a bible
   // character; here there is no bible, so the name is typed directly).
   { snap: 'loraSubjects', state: 'loraSubjects', fallback: {},
+    from: v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {} },
+  // Per-use strength override for an active *chip* LoRA (id → number), keyed
+  // the same way as loraSubjects — set next to that LoRA's chip once it's
+  // toggled on. Overridden in turn by a reference image's own `loraStrength`
+  // when that same LoRA is also bound there (see refImagesToSnap above).
+  { snap: 'loraStrengths', state: 'loraStrengths', fallback: {},
     from: v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {} },
 
   { snap: 'firstImg', state: 'firstImg', to: w => imgToSnap(w.firstImg), from: imgFromSnap, fallback: null },

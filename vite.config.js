@@ -7,6 +7,11 @@ import react from '@vitejs/plugin-react'
 const API_PORT = process.env.PE_API_PORT || 8787
 const apiProxy = {
   '/api': { target: `http://localhost:${API_PORT}`, changeOrigin: false },
+  // Langdock's completion API has no browser CORS support at all (its OPTIONS
+  // preflight answers 405 with no access-control headers), so it can only be
+  // reached same-origin, through this proxy — never with an absolute URL from
+  // the browser.
+  '/langdock': { target: 'https://api.langdock.com', changeOrigin: true, rewrite: p => p.replace(/^\/langdock/, '') },
 }
 
 // strictPort: a silent move to 5174/5175 when 5173 is busy changes the page

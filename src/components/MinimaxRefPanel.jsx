@@ -336,6 +336,19 @@ function MinimaxRefPanel({
                     {loraChoices.map(l => <option key={l.id} value={l.id}>{loraLabel(l)}</option>)}
                   </select>
                 </div>
+                {im.loraId && (
+                  <div style={{ width: 100 }}>
+                    <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>Strength</label>
+                    <input
+                      type="number" step="0.05" min="-2" max="2"
+                      value={im.loraStrength ?? ''}
+                      placeholder={`${loraChoices.find(l => l.id === im.loraId)?.strength ?? 1}`}
+                      title={`Override this LoRA's strength for this image only (library default: ${loraChoices.find(l => l.id === im.loraId)?.strength ?? 1}). Leave blank to use the default.`}
+                      onChange={e => updateImage(im.id, { loraStrength: e.target.value === '' ? null : Number(e.target.value) })}
+                      style={{ ...noteInput }}
+                    />
+                  </div>
+                )}
                 <div style={{ flex: '1 1 180px' }}>
                   <label style={{ fontSize: 13.5, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 4 }}>Voice</label>
                   <select

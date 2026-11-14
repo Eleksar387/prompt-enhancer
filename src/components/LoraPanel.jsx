@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { LORA_KINDS } from '../loras'
+import { LORA_KINDS, normalizeLoraFile, loraHasFile } from '../loras'
 import { btn } from '../utils'
 import { generateId } from '../db'
+import { fetchComfyLoraFiles } from '../comfy'
 
 // Presentational LoRA panel, used by both the standalone workspace and the
 // Scriptwriter. All state lives in the parent: the library (persisted, shared)
@@ -34,12 +35,21 @@ const pill = (color, borderVar) => ({
 
 const kindShort = (kind) => (LORA_KINDS.find(k => k.id === kind) || LORA_KINDS[0]).short
 
+// Strips any subfolder (`\` or `/`) and extension, for "similar to existing" hints only.
+const basename = (f) => (f || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '')
+
 export default function LoraPanel({
   loras = [], activeIds = [], kinds = null, editable = true,
   onToggle, onSaveLoras, hint = '',
   subjects = {}, onSubjectChange,
+  strengths = {}, onStrengthChange,
+  comfyUrl = '',
 }) {
   const [open, setOpen] = useState(false)
+  const [scanState, setScanState] = useState('idle') // 'idle' | 'loading' | 'error'
+  const [scanError, setScanError] = useState('')
+  const [candidates, setCandidates] = useState(null) // null = closed, [] = scanned/none new, array = found
+  const [checked, setChecked] = useState(new Set())
 
   // 'general' (no person behind it) rides along wherever 'style' is offered.
   const allowed = kinds && (kinds.includes('style') ? [...new Set([...kinds, 'general'])] : kinds)
@@ -51,6 +61,37 @@ export default function LoraPanel({
   const newKind = allowed && !allowed.includes('character') ? 'general' : 'character'
   const add = () => onSaveLoras?.([...loras, { id: generateId(), name: '', trigger: '', kind: newKind, note: '', file: '', strength: 1 }])
   const remove = (id) => onSaveLoras?.(loras.filter(l => l.id !== id))
+
+  // Dedupes against the FULL library (not `shown`) — the Scriptwriter's
+  // instance filters `shown` to kind 'style', but an already-imported
+  // 'character' LoRA must still count as "already in the library" here.
+  const runScan = async () => {
+    setScanState('loading'); setScanError('')
+    try {
+      const files = await fetchComfyLoraFiles(comfyUrl)
+      const existing = new Set(loras.map(l => normalizeLoraFile(l.file)).filter(Boolean))
+      const fresh = files.filter(f => !existing.has(normalizeLoraFile(f)))
+      setCandidates(fresh)
+      setChecked(new Set())
+      setScanState('idle')
+    } catch (e) {
+      setScanState('error'); setScanError(e.message)
+    }
+  }
+
+  const toggleChecked = (f) => setChecked(s => {
+    const n = new Set(s)
+    n.has(f) ? n.delete(f) : n.add(f)
+    return n
+  })
+
+  const importSelected = () => {
+    const toAdd = candidates
+      .filter(f => checked.has(f))
+      .map(f => ({ id: generateId(), name: basename(f), trigger: '', kind: newKind, note: '', file: f, strength: 1 }))
+    onSaveLoras?.([...loras, ...toAdd])
+    setCandidates(null)
+  }
 
   return (
     <div style={{ marginBottom: 18 }}>
@@ -64,6 +105,7 @@ export default function LoraPanel({
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {shown.map(l => {
           const showSubject = l.kind === 'character' && active(l.id) && onSubjectChange
+          const showStrength = active(l.id) && loraHasFile(l) && onStrengthChange
           return (
             <div key={l.id} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <button type="button" onClick={() => onToggle?.(l.id)} disabled={!editable}
@@ -80,6 +122,17 @@ export default function LoraPanel({
                   disabled={!editable}
                   placeholder="which character?"
                   title="Name of the character this trigger belongs to — only needed once more than one character LoRA is active at the same time"
+                  style={field({ fontSize: 11.5, padding: '3px 7px', width: 112 })}
+                />
+              )}
+              {showStrength && (
+                <input
+                  type="number" step="0.05" min="-2" max="2"
+                  value={strengths[l.id] ?? ''}
+                  onChange={e => onStrengthChange(l.id, e.target.value)}
+                  disabled={!editable}
+                  placeholder={`strength ${l.strength ?? 1}`}
+                  title={`Override this LoRA's strength for this generation only (library default: ${l.strength ?? 1}). Leave blank to use the default.`}
                   style={field({ fontSize: 11.5, padding: '3px 7px', width: 112 })}
                 />
               )}
@@ -159,7 +212,64 @@ export default function LoraPanel({
               <button type="button" onClick={() => remove(l.id)} style={pill('var(--pe-danger)', '--pe-danger-line')}>✕</button>
             </div>
           ))}
-          <button type="button" onClick={add} style={pill('var(--pe-accent-ink)', '--pe-accent-line')}>+ Add LoRA</button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button type="button" onClick={add} style={pill('var(--pe-accent-ink)', '--pe-accent-line')}>+ Add LoRA</button>
+            {comfyUrl && (
+              <button type="button" onClick={runScan} disabled={scanState === 'loading'}
+                style={pill('var(--pe-accent-ink)', '--pe-accent-line')}>
+                {scanState === 'loading' ? 'Scanning…' : '🔄 Load from ComfyUI'}
+              </button>
+            )}
+          </div>
+          {scanState === 'error' && (
+            <div style={{ fontSize: 12.5, color: 'var(--pe-danger)', marginTop: 8 }}>{scanError}</div>
+          )}
+
+          {candidates !== null && (
+            <div style={{ marginTop: 10, border: '1px solid var(--pe-line)', borderRadius: 8, padding: 10 }}>
+              {candidates.length === 0 ? (
+                <div style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
+                  No new LoRA files found on ComfyUI — everything it reports is already in your library.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontSize: 12.5, color: 'var(--pe-ink-3)' }}>{candidates.length} new file(s) found</span>
+                    <button type="button" onClick={() => setChecked(checked.size ? new Set() : new Set(candidates))}
+                      style={{ fontSize: 12, color: 'var(--pe-accent-ink)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                      {checked.size ? 'Select none' : 'Select all'}
+                    </button>
+                  </div>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {candidates.map(f => {
+                      const base = basename(f)
+                      const similar = loras.find(l => basename(l.file || '') === base)
+                      return (
+                        <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 13 }}>
+                          <input type="checkbox" checked={checked.has(f)} onChange={() => toggleChecked(f)} />
+                          <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{f}</span>
+                          {similar && (
+                            <span style={{ color: 'var(--pe-ink-3)', fontSize: 11.5 }}>
+                              ⚠ similar to existing "{similar.name || similar.trigger || 'unnamed'}"
+                            </span>
+                          )}
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button type="button" onClick={importSelected} disabled={checked.size === 0}
+                      style={pill('var(--pe-accent-ink)', '--pe-accent-line')}>
+                      Import selected ({checked.size})
+                    </button>
+                    <button type="button" onClick={() => setCandidates(null)} style={pill('var(--pe-ink-2)', '--pe-line')}>
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
