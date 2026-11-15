@@ -18,6 +18,10 @@ import {
 import { btn, shrinkToJpeg, imageHash, mapWithConcurrency, exportTimestamp } from '../utils'
 import { formatTimestamp } from '../manualH3'
 import { buildDirectorTimeline } from '../directorExport'
+import {
+  RUNTIME_OPTIONS, sceneBudget, runtimeLine, sceneTimeLine, normalizeSceneSeconds, clampH3Duration,
+  mergedBeats, mergeBlocker, isMergeEligible as packMergeEligible, packMaxFor, unpackableScenes,
+} from '../clipPacker'
 import { lorasByIds, loraInstruction, withLoraTriggers, loraManifestEntries } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
@@ -402,11 +406,16 @@ const normalizeScript = (data) => {
     const raw = Array.isArray(s?.characters) ? s.characters
       : (Array.isArray(s?.dialogues) ? s.dialogues.map(d => String(d).split(':')[0]) : [])
     const ids = [...new Set(raw.map(resolveChar).filter(Boolean))]
+    // duration_s: the scene's time budget (Phase-1 "Target runtime" runs) — an
+    // integer 5–40 s, or dropped when the model left it out / wrote junk.
+    const { duration_s: rawDur, ...restS } = s || {}
+    const duration_s = normalizeSceneSeconds(rawDur)
     return {
-      ...s,
+      ...restS,
       id: s?.id ?? i + 1,
       characters: ids,
       location_id: resolveLoc(s?.location_id) || locs[0]?.id || '',
+      ...(duration_s ? { duration_s } : {}),
     }
   })
   // format_note: the writer's own flag that the idea was really a bigger story
@@ -527,8 +536,8 @@ const PACING_OPTIONS = [
   { id: 'loose',    label: 'Loose'    },
 ]
 const PACING_LINE = {
-  tight:    'Pacing: TIGHT — use the fewest clips that respect the two-beat limit. Aim for ~2 clips per scene; split only when a clip truly exceeds two facial beats.',
-  standard: 'Pacing: STANDARD — about 3 clips per scene.',
+  tight:    'Pacing: TIGHT — use the fewest, longest clips that respect the two-beat limit: aim for clips of 10–15 s (internal [Shot N] cuts carry the variety), about 1–2 clips per scene. Split only when a clip truly exceeds two facial beats or trips a SUBJECT LOCK trigger.',
+  standard: 'Pacing: STANDARD — clips of roughly 8–12 s (internal [Shot N] cuts for variety), about 2 clips per scene.',
   loose:    'Pacing: LOOSE — extra coverage is welcome; more reaction and insert clips are fine.',
 }
 
@@ -599,6 +608,10 @@ export default function ScriptwriterPanel({
   const [reviewPhase1, setReviewPhase1] = useState(null)   // { system, user, refs } | null
   const [reviewPhase2, setReviewPhase2] = useState(null)   // { system, user, refs } | null
   const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 1)
+  // Target runtime in seconds (0 = Auto, the writer sizes the film). When set it
+  // replaces the "Maximum number of scenes" line with a scene budget — see
+  // sceneBudget in src/clipPacker.js.
+  const [runtime, setRuntime] = useState(initialState?.runtime || 0)
   // Normalise on load so restored / older / model-broken entries self-repair
   // (the c1/l1 ids the whole ref-attachment path depends on).
   const [script, setScript] = useState(() => initialState?.script ? normalizeScript(initialState.script) : null)
@@ -718,6 +731,7 @@ export default function ScriptwriterPanel({
   // default is 'tight' since that's the value that actually keeps clip
   // counts down for an autonomous run.
   const [autoPacing, setAutoPacing] = useState('tight')
+  const [autoRuntime, setAutoRuntime] = useState(0)
   const autoDoneRef = useRef(false)
 
   const reset = () => {
@@ -976,7 +990,7 @@ export default function ScriptwriterPanel({
       id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
-      idea: idea.trim(), genre, mature, sourceMode, sceneCount, phase: phaseName,
+      idea: idea.trim(), genre, mature, sourceMode, sceneCount, runtime, phase: phaseName,
       promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths,
       // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
       // the user's hint appended after it (see buildAutoIdea) — a plain
@@ -1015,7 +1029,11 @@ export default function ScriptwriterPanel({
     const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
     const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\nMaximum number of scenes: ${sceneCount}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    // A Target runtime replaces the scene-count ceiling with a scene budget; Auto
+    // (runtime 0) keeps the original "Maximum number of scenes" line byte for byte.
+    const budget = sourceMode ? null : sceneBudget(runtime, sceneCap)
+    const sceneLine = budget ? runtimeLine(budget) : `Maximum number of scenes: ${sceneCount}`
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\n${sceneLine}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
     const phase1System = sourceMode ? SYSTEM_PROMPT_SCRIPTWRITER_SOURCE : SYSTEM_PROMPT_SCRIPTWRITER
     // DEV-only prompt inspection, independent of Admin mode below — lets a prod
     // (or non-admin) run be checked too. Open the browser console
@@ -1117,9 +1135,11 @@ export default function ScriptwriterPanel({
     const lookLine = isH3 && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3 && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
     const pacingLine = isH3 ? `\n${PACING_LINE[pacing] || PACING_LINE.standard}` : ''
+    const timeBudget = isH3 ? sceneTimeLine(script?.scenes) : ''
+    const timeLine = timeBudget ? `\n${timeBudget}` : ''
     const framingHint = aspectFramingHint(aspectRes(aspectRatio))
     const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${framingLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${timeLine}${framingLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
     const phase2System = isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR
     // See the note by window.__peLastPhase1Message above — same idea, one
     // phase later. This is the one to check when a scene the script clearly
@@ -1152,19 +1172,22 @@ export default function ScriptwriterPanel({
         const picked = isH3 ? resolveRefSelection(reference_images, capd) : null
         return {
           ...rest,
-          duration: s.duration || (isH3 ? 7 : 4),
+          duration: isH3 ? clampH3Duration(s.duration, 7) : (s.duration || 4),
           ...(picked ? { refs: picked } : {}),
         }
       })
-      // Full Auto, Pacing: TIGHT — deterministic merge pass. Prompt wording
-      // alone (PACING_LINE, the insert/establishing exceptions) did not
-      // reduce clip count across repeated live tests, weak and strong model
-      // alike — see isMergeEligible's comment. Guided-mode runs (autoActive
-      // false) are completely unaffected.
-      if (isH3 && autoActive && pacing === 'tight') {
+      // Deterministic clip packing — every H3 run except Pacing: LOOSE (which
+      // keeps the Director's coverage). Prompt wording alone did not reduce clip
+      // count across repeated live tests (see mergeShotPair's comment), so code
+      // decides which adjacent clips may combine (src/clipPacker.js: same scene /
+      // location / cast, no dialogue, at most TWO facial beats, within the
+      // pacing's clip cap) and the model only rewrites an already-compatible
+      // pair as one clip. Whatever still can't be packed is surfaced below.
+      const packMax = isH3 ? packMaxFor(pacing) : 0
+      if (isH3 && packMax) {
         let i = 0
         while (i < data.shots.length - 1) {
-          if (isMergeEligible(data.shots[i], data.shots[i + 1])) {
+          if (packMergeEligible(data.shots[i], data.shots[i + 1], { maxClip: packMax })) {
             try { data.shots = await mergeShotPair(data.shots, i, refs) }
             catch (e) {
               // A refusal means this script's content is the problem, not this
@@ -1660,7 +1683,8 @@ export default function ScriptwriterPanel({
         setVoiceRefs((autoJob.voiceRefs || []).map(rehydrateVoiceRef))
         setGenre(autoJob.genre || 'auto')
         setMature(!!autoJob.mature)
-        setSceneCount(1); setAspectRatio(DEFAULT_ASPECT_RATIO)
+        setRuntime(autoJob.runtime || 0)
+        setSceneCount(sceneBudget(autoJob.runtime)?.scenes || 1); setAspectRatio(DEFAULT_ASPECT_RATIO)
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
         setSpokenLangId(autoJob.spokenLang || DEFAULT_SPOKEN_LANG)
         setActiveLoraIds(Array.isArray(autoJob.loraIds) ? autoJob.loraIds : [])
@@ -1841,19 +1865,11 @@ export default function ScriptwriterPanel({
   // but it will never risk merging two real facial/emotional beats — that
   // would violate the one rule in h3-storyboard with direct empirical
   // (PSNR) backing, which this project has been careful not to touch.
-  const sameIdSet = (a, b) => {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
-    const sa = [...a].map(String).sort(), sb = [...b].map(String).sort()
-    return sa.every((v, i) => v === sb[i])
-  }
-  const NO_BEAT_SHOT_TYPES = new Set(['establishing', 'action'])
-  const isMergeEligible = (a, b) => !!a && !!b
-    && NO_BEAT_SHOT_TYPES.has(a.shot_type) && NO_BEAT_SHOT_TYPES.has(b.shot_type)
-    && String(a.scene_id) === String(b.scene_id)
-    && String(a.location_id ?? '') === String(b.location_id ?? '')
-    && sameIdSet(a.characters, b.characters)
-    && !(a.dialogue?.length) && !(b.dialogue?.length)
-    && (Number(a.duration) || 0) + (Number(b.duration) || 0) <= 15
+  // The eligibility rules live in src/clipPacker.js (pure, unit-tested):
+  // 'establishing'/'action' carry no facial beat, a performance/insert clip is one,
+  // and a merged clip may hold at most TWO — see mergeBlocker. Beat density is the
+  // one h3-storyboard rule with direct (PSNR) evidence and is never relaxed.
+  const isMergeEligible = (a, b, opts) => packMergeEligible(a, b, opts)
 
   // The one shared LLM call, used by both the manual button and the
   // automatic Full-Auto pass in runPhase2. Mirrors regenerateShot's "bridge"
@@ -1864,6 +1880,7 @@ export default function ScriptwriterPanel({
     const isH3now = promptTarget === 'minimax_h3'
     const noun = isH3now ? 'clip' : 'shot'
     const scene = script?.scenes?.find(s => String(s.id) === String(a.scene_id))
+    const beatsTotal = mergedBeats(a, b)
     const refBlock = assembleRefBlock(refsForCall || refImages, REF_HEADING_DIRECTOR, script)
     const lookLine = isH3now && script?.look?.trim() ? `\n\nFilm look: ${script.look.trim()}` : ''
     const langLine = isH3now && script?.language?.trim() ? `\nPrimary language: ${script.language.trim()}` : ''
@@ -1871,7 +1888,9 @@ export default function ScriptwriterPanel({
       `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${nsfwLine}${refBlock}\n\n`
       + `You already broke this script into the following ${noun}s:\n${JSON.stringify(shots, null, 2)}\n\n`
       + `Merge ${noun} ${a.shot_number} and ${noun} ${b.shot_number}${scene?.title ? ` (scene "${scene.title}")` : ''} into ONE ${noun} that covers both actions in sequence. `
-      + `They share the same scene, location and cast, and neither needs its own facial/emotional beat — this is a pure locomotion/setup run. `
+      + (beatsTotal === 0
+        ? `They share the same scene, location and cast, and neither needs its own facial/emotional beat — this is a pure locomotion/setup run. `
+        : `They share the same scene, location and cast and neither carries dialogue. Together they hold ${beatsTotal} facial/emotional beat${beatsTotal === 1 ? '' : 's'} (the limit is 2 per clip): keep every one, in order, as an observable physical change (use an internal [Shot N] cut between them if it helps) and do not add a new one. `)
       + `Use ONE camera move for the whole thing, and keep "duration" within the 4-15s H3 cap. `
       + `Keep "scene_id": ${JSON.stringify(a.scene_id)}. `
       + `Output only valid JSON: {"shots":[ <the one merged ${noun}, exactly the same fields as the others> ]}.`
@@ -1894,7 +1913,8 @@ export default function ScriptwriterPanel({
       shot_number: a.shot_number,
       scene_id: a.scene_id,
       scene_title: a.scene_title,
-      duration: Math.min(15, fresh.duration || ((Number(a.duration) || 0) + (Number(b.duration) || 0)) || 7),
+      duration: clampH3Duration(fresh.duration || ((Number(a.duration) || 0) + (Number(b.duration) || 0)) || 7),
+      beats: beatsTotal,
       ...(picked ? { refs: picked } : (mergedRefs ? { refs: mergedRefs } : {})),
       ...(mergedVoices ? { voiceCharacterIds: mergedVoices } : {}),
     }
@@ -2012,8 +2032,9 @@ export default function ScriptwriterPanel({
     if (phase !== 'dircut' || shotBusy !== null || promptBusy !== null || !directorsCut) return
     const a = directorsCut.shots[si], b = directorsCut.shots[si + 1]
     if (!a || !b) return
-    if (!isMergeEligible(a, b) && typeof window !== 'undefined' && !window.confirm(
-      `Clip ${a.shot_number} and ${b.shot_number} differ in scene, location, or cast — or one carries dialogue. Merging them may not read correctly. Merge anyway?`
+    const why = mergeBlocker(a, b)
+    if (why && typeof window !== 'undefined' && !window.confirm(
+      `Clip ${a.shot_number} and ${b.shot_number} shouldn't normally be merged: ${why}. Merging them may not read correctly. Merge anyway?`
     )) return
     setShotBusy(si); setError('')
     try {
@@ -3041,13 +3062,30 @@ export default function ScriptwriterPanel({
                     ))}
                   </div>
                 </div>
+                {!sourceMode && (
+                  <div>
+                    <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Target runtime</label>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {RUNTIME_OPTIONS.map(o => (
+                        <button key={o.id} type="button" title={o.note} disabled={isLoading}
+                          onClick={() => { setRuntime(o.id); const b = sceneBudget(o.id, sceneCap); if (b) setSceneCount(b.scenes) }}
+                          style={btn(runtime === o.id)}>{o.label}</button>
+                      ))}
+                    </div>
+                    {runtime > 0 && (
+                      <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                        Plans {sceneBudget(runtime, sceneCap).scenes} scenes of ~{sceneBudget(runtime, sceneCap).perScene} s — one dramatic unit each (one place, one turn).
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
-                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes (max)</label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1}
+                  <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scenes (max){!sourceMode && runtime > 0 ? ' — set by runtime' : ''}</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: !sourceMode && runtime > 0 ? 0.5 : 1 }}>
+                    <button onClick={() => setSceneCount(v => Math.max(1, v - 1))} disabled={isLoading || sceneCount <= 1 || (!sourceMode && runtime > 0)}
                       style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>−</button>
                     <span style={{ fontSize: 15, color: 'var(--pe-accent-ink)', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{sceneCount}</span>
-                    <button onClick={() => setSceneCount(v => Math.min(sceneCap, v + 1))} disabled={isLoading || sceneCount >= sceneCap}
+                    <button onClick={() => setSceneCount(v => Math.min(sceneCap, v + 1))} disabled={isLoading || sceneCount >= sceneCap || (!sourceMode && runtime > 0)}
                       style={{ ...btn(false), padding: '4px 12px', fontSize: 15 }}>+</button>
                   </div>
                 </div>
@@ -3114,15 +3152,26 @@ export default function ScriptwriterPanel({
                 </div>
               </div>
               <div style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Target runtime</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {RUNTIME_OPTIONS.map(o => (
+                    <button key={o.id} type="button" title={o.note} onClick={() => setAutoRuntime(o.id)} disabled={isLoading} style={btn(autoRuntime === o.id)}>{o.label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
+                  Auto = the writer sizes the film (usually 1 scene). ~60 s plans about 4 scenes, ~90 s about 6.
+                </div>
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how long clips run)</span></label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {PACING_OPTIONS.map(p => (
                     <button key={p.id} onClick={() => setAutoPacing(p.id)} disabled={isLoading} style={btn(autoPacing === p.id)}>{p.label}</button>
                   ))}
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
-                  Tight = fewest clips that still respect H3's two-beat limit, plus an automatic merge pass for
-                  same-scene locomotion clips. Loose = more reaction &amp; insert clips.
+                  Tight = longest clips (up to 15 s) that still respect H3's two-beat limit, with an automatic
+                  merge pass. Standard = up to 12 s. Loose = no merging, more reaction &amp; insert clips.
                 </div>
               </div>
               <LoraPanel
@@ -3132,7 +3181,7 @@ export default function ScriptwriterPanel({
                 hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
                 comfyUrl={comfyCfg.url} />
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths })}
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, runtime: autoRuntime, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths })}
                 disabled={refImages.length === 0 || isLoading || captioning}
                 style={genBtn(refImages.length === 0 || isLoading || captioning)}>
                 + Add to Queue (Full Auto)
@@ -3315,7 +3364,7 @@ export default function ScriptwriterPanel({
               </div>
               {promptTarget === 'minimax_h3' && (
                 <div style={{ marginTop: 12 }}>
-                  <label style={lbl}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how many clips per scene)</span></label>
+                  <label style={lbl}>Pacing <span style={{ textTransform: 'none', letterSpacing: 0 }}>(how long clips run)</span></label>
                   {phase === 'script' ? (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {PACING_OPTIONS.map(p => (
@@ -3326,7 +3375,7 @@ export default function ScriptwriterPanel({
                     <div style={{ fontSize: 13.5, color: 'var(--pe-accent-ink)', fontWeight: 600 }}>{PACING_OPTIONS.find(p => p.id === pacing)?.label || 'Standard'}</div>
                   )}
                   <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginTop: 6 }}>
-                    Tight = fewest clips that still respect H3's two-beat limit. Loose = more reaction &amp; insert clips.
+                    Tight = longest clips (up to 15 s) within H3's two-beat limit. Standard = up to 12 s. Loose = no merging, more reaction &amp; insert clips.
                     You can still insert or remove clips on the next screen.
                   </div>
                 </div>
@@ -3541,6 +3590,28 @@ export default function ScriptwriterPanel({
               </span>
             </div>
           )}
+          {/* Clip budget — what the packer did and which scenes are still split.
+              Computed live from the shots, so it stays right after a manual merge/insert. */}
+          {isH3 && directorsCut.shots.length > 0 && (() => {
+            const shots = directorsCut.shots
+            const total = shots.reduce((a, s) => a + (Number(s.duration) || 0), 0)
+            const open = unpackableScenes(shots, { maxClip: packMaxFor(pacing) || 15 })
+              .filter(r => r.reasons.length)
+            return (
+              <div style={{ ...card, fontSize: 12.5, lineHeight: 1.5, color: 'var(--pe-ink-3)', background: 'var(--pe-rail)', borderColor: 'var(--pe-line)' }}>
+                {shots.length} clip{shots.length === 1 ? '' : 's'} · {total}s total · avg {(total / shots.length).toFixed(1)}s
+                {open.length > 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    Still split into several clips (use ⇄ Merge to override):{' '}
+                    {open.map(r => {
+                      const sc = script?.scenes?.find(x => String(x.id) === String(r.sceneId))
+                      return `${sc?.title || `scene ${r.sceneId}`} (${r.clips} clips, ${r.seconds}s — ${r.reasons.join('; ')})`
+                    }).join(' · ')}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
           {/* Reference status — tells the user whether clips will be Ref2VA or T2VA.
               Two distinct "nothing will help" cases used to share one message
               ("no described references") whether zero images were ever added or
