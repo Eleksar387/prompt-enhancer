@@ -4,9 +4,11 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  refModVoiceKey, buildAudioBlock,
   sanitizeRefMods, refModHasFile, normalizeRefModFile,
   refModsByIds, targetTakesRefMods, refModInstruction, refModManifestEntries,
   refModHasLook, refModCanonBlock, describeRefModImage,
+  selectRefMods, refModLabels, refModReferenceLines,
 } from '../src/refmods.js'
 import { TARGETS } from '../src/constants.js'
 
@@ -17,7 +19,7 @@ const R = [
 describe('sanitizeRefMods', () => {
   it('fills defaults and coerces strength', () => {
     const [r] = sanitizeRefMods([{ id: 'x' }])
-    expect(r).toEqual({ id: 'x', name: '', note: '', description: '', file: '', strength: 1 })
+    expect(r).toEqual({ id: 'x', name: '', note: '', description: '', role: 'subject_identity', file: '', strength: 1 })
   })
   it('drops entries without an id', () => {
     expect(sanitizeRefMods([{ name: 'no id' }])).toEqual([])
@@ -151,6 +153,61 @@ describe('RefMod visible look (description)', () => {
   })
 })
 
+describe('RefMod virtual references (Ref2VA labels)', () => {
+  const lib = sanitizeRefMods([
+    { id: 'a', name: 'Mara', description: 'A tall woman in a black coat.', file: 'chars/mara', strength: 1 },
+    { id: 'b', name: 'Alley', note: 'rain-slick alley', role: 'environment', file: 'places/alley', strength: 0.8 },
+    { id: 'z', name: 'Zero', file: 'x/zero', strength: 0 },
+    { id: 'n', name: 'NoFile' },
+    { id: 'd', name: 'Dup', file: 'chars/mara' },
+    { id: 'e', name: 'Fourth', file: 'x/e' },
+    { id: 'f', name: 'Fifth', file: 'x/f' },
+  ])
+  it('selectRefMods: slot order, deduped by file, no-file and zero-strength dropped, capped at 3', () => {
+    const sel = selectRefMods(lib, ['a', 'z', 'n', 'b', 'd', 'e', 'f'])
+    expect(sel.map(s => s.file)).toEqual(['chars/mara', 'places/alley', 'x/e'])
+  })
+  it('manifest entries come from the same selection (zero-strength no longer exported)', () => {
+    expect(refModManifestEntries(lib, ['a', 'z', 'b'])).toEqual([
+      { file: 'chars/mara', strength: 1 }, { file: 'places/alley', strength: 0.8 },
+    ])
+  })
+  it('refModLabels tags each RefMod by what it is, counted per tag in slot order — never <Picture n>', () => {
+    const l = refModLabels(lib, ['a', 'b'])
+    expect(l.map(x => [x.label, x.role, x.preserve])).toEqual([
+      ['<Subject 1>', 'subject_identity', 'exact'],
+      ['<Location 1>', 'environment', 'guide'],
+    ])
+    expect(l.every(x => !/Picture/.test(x.label))).toBe(true)
+  })
+  it('<Subject M> continues after real subject-defining reference images', () => {
+    expect(refModLabels(lib, ['a'], { realSubjectCount: 1 })[0].label).toBe('<Subject 2>')
+  })
+  it('two subjects count up; a location starts its own counter', () => {
+    const two = sanitizeRefMods([
+      { id: 'p', name: 'P', file: 'a/p' }, { id: 'q', name: 'Q', file: 'a/q' },
+      { id: 'r', name: 'R', file: 'a/r', role: 'environment' },
+    ])
+    expect(refModLabels(two, ['p', 'q', 'r']).map(x => x.label)).toEqual(['<Subject 1>', '<Subject 2>', '<Location 1>'])
+  })
+  it('reference lines carry the tag, role, marker and look — no Image N, no <Picture n>', () => {
+    const out = refModReferenceLines(refModLabels(lib, ['a', 'b']))
+    expect(out).toContain('RefMod <Subject 1> — role: Subject / Identity, preservation: Exact (fully_preserved) [loaded straight into the video model; no image, no <Picture> tag]: A tall woman in a black coat.')
+    expect(out).toContain('RefMod <Location 1> — role: Location, preservation: Guide (attribute_transfer)')
+    expect(out).toContain('Alley — rain-slick alley') // no description -> name + note
+    expect(out).not.toMatch(/Image \d/)
+  })
+  it('instruction with labels asks the writer to CITE the tag and never invent a <Picture N>', () => {
+    const out = refModInstruction([lib[0]], 'minimax_h3', refModLabels(lib, ['a']))
+    expect(out).toContain('subject_definitions')
+    expect(out).toContain('never write or invent a <Picture N>')
+    expect(out).not.toContain('do NOT invent')
+  })
+  it('an unknown role falls back to subject_identity', () => {
+    expect(sanitizeRefMods([{ id: 'x', role: 'pose_composition' }])[0].role).toBe('subject_identity')
+  })
+})
+
 describe('RefMod files for the ComfyUI bridge', () => {
   const lib = sanitizeRefMods([
     { id: 'a', name: 'A', file: ' armor/chromevisor ', strength: '0.6' },
@@ -176,5 +233,48 @@ describe('RefMod files for the ComfyUI bridge', () => {
   it('caps at 3 slots', () => {
     const many = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, file: `f${i}`, strength: 1 }))
     expect(refModManifestEntries(many, many.map(m => m.id))).toHaveLength(3)
+  })
+})
+
+describe('RefMod-only writer message (main app path)', () => {
+  it('buildWriterUserText in ref mode carries MODE: Ref2VA and the RefMod reference line', async () => {
+    const { buildWriterUserText, buildStylePart } = await import('../src/adapt.js')
+    const lib = sanitizeRefMods([{ id: 'a', name: 'Mara', description: 'A tall woman in a black coat.', file: 'chars/mara' }])
+    const labels = refModLabels(lib, ['a'])
+    const msg = buildWriterUserText({
+      target: 'minimax_h3', targetType: 'video', frameMode: 'ref', scene: 'She crosses the alley.', duration: '8 seconds',
+      frameDescription: refModReferenceLines(labels), hasImg: false, refModsOnly: true,
+      ratio: null, soundscape: 'rain', music: '', stylePart: '', lengthPart: '',
+    })
+    expect(msg.startsWith('MODE: Ref2VA')).toBe(true)
+    expect(msg).toContain('RefMod <Subject 1> — role: Subject / Identity')
+    expect(msg).toContain('no <Picture N> tags')
+    expect(msg).toContain('A tall woman in a black coat.')
+    expect(msg).not.toContain('integrated_multimodal_description')
+    const style = buildStylePart({ targetType: 'video', refMods: lib, refModLabels: labels, targetId: 'minimax_h3' })
+    expect(style).toContain('subject_definitions')
+    expect(style).not.toContain('do NOT invent')
+  })
+})
+
+describe('RefMod voice binding', () => {
+  const lib = [{ id: 'a', name: 'Mara', note: '', description: 'tall', role: 'subject_identity', file: 'mara', strength: 1 }]
+  const labels = refModLabels(lib, ['a'], { realSubjectCount: 1 })
+  const audios = [{ fileName: 'v.mp3', subjectRef: refModVoiceKey('a') }, { fileName: 'w.mp3', subjectRef: 'h1' }]
+
+  it('names the RefMod subject (numbering from refModLabels)', () => {
+    const b = buildAudioBlock(audios, { refModLabels: labels, only: 'refmod' })
+    expect(b).toContain('Audio 1 —')
+    expect(b).toContain('the voice of <Subject 2> (Mara)')
+    expect(b).not.toContain('Audio 2')
+  })
+  it("'rest' leaves RefMod-bound voices out and keeps the original image wording", () => {
+    const b = buildAudioBlock(audios, { refs: [{ hash: 'h1', role: 'subject_identity' }], roleLabel: x => x, only: 'rest' })
+    expect(b).toContain('Audio 2 — voice-timbre reference (marker: reference) — for the subject in Image 1 (subject_identity)')
+    expect(b).not.toContain('Audio 1')
+  })
+  it('a stale RefMod id is emitted unbound', () => {
+    const b = buildAudioBlock([{ fileName: 'v.mp3', subjectRef: 'refmod:gone' }], { refModLabels: labels, only: 'refmod' })
+    expect(b).toContain('Audio 1 — voice-timbre reference (marker: reference): file')
   })
 })

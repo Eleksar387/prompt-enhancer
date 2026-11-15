@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { normalizeRefModFile } from '../refmods'
+import { normalizeRefModFile, REF_MOD_ROLE_IDS } from '../refmods'
+import { MINIMAX_H3_REF_ROLES } from '../constants'
 import { btn } from '../utils'
 import { generateId } from '../db'
 import { fetchComfyRefModFiles } from '../comfy'
@@ -53,7 +54,7 @@ export default function RefModPanel({
   const active = (id) => activeIds.includes(id)
 
   const patch = (id, changes) => onSaveRefMods?.(refMods.map(r => r.id === id ? { ...r, ...changes } : r))
-  const add = () => onSaveRefMods?.([...refMods, { id: generateId(), name: '', note: '', description: '', file: '', strength: 1 }])
+  const add = () => onSaveRefMods?.([...refMods, { id: generateId(), name: '', note: '', description: '', role: 'subject_identity', file: '', strength: 1 }])
   const remove = (id) => onSaveRefMods?.(refMods.filter(r => r.id !== id))
 
   // File pick -> bounded JPEG -> vision description -> into the editable "Visible
@@ -99,7 +100,7 @@ export default function RefModPanel({
   const importSelected = () => {
     const toAdd = candidates
       .filter(f => checked.has(f))
-      .map(f => ({ id: generateId(), name: basename(f), note: '', description: '', file: f, strength: 1 }))
+      .map(f => ({ id: generateId(), name: basename(f), note: '', description: '', role: 'subject_identity', file: f, strength: 1 }))
     onSaveRefMods?.([...refMods, ...toAdd])
     setCandidates(null)
   }
@@ -195,6 +196,14 @@ export default function RefModPanel({
                     placeholder="optional — name as ComfyUI's RefMod loader lists it" spellCheck={false}
                     title="Name as ComfyUI's MiniMaxH3RefModsLoader lists it (no .safetensors extension) — used only to flag a file you've already imported."
                     style={field({ width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' })} />
+                </div>
+                <div style={{ width: 150 }}>
+                  <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>Stands for</label>
+                  <select value={r.role || 'subject_identity'} onChange={e => patch(r.id, { role: e.target.value })}
+                    title="What this RefMod is, as an H3 reference role — sets the role and preservation in the Ref2VA reference line"
+                    style={field({ width: '100%' })}>
+                    {REF_MOD_ROLE_IDS.map(id => <option key={id} value={id}>{MINIMAX_H3_REF_ROLES.find(x => x.id === id)?.label || id}</option>)}
+                  </select>
                 </div>
                 <div style={{ width: 90 }}>
                   <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>Strength</label>

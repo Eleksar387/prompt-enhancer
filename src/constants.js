@@ -1665,7 +1665,7 @@ Output exactly these six sections, in order:
 subject_definitions:
 LABEL NUMBERING: <Picture N> always carries the same number as its source "Image N" — never renumber. <Subject M>
 numbers only the images that actually define a subject, so M and N will not always match. Once a label is
-assigned it keeps that exact meaning in every section below.
+assigned it keeps that exact meaning in every section below. A line starting "RefMod <Tag N> —" (e.g. <Subject 1>, <Location 1>) is a reference loaded straight into the video model's conditioning: it has no image and no <Picture> label, so never write or invent a <Picture N> for it. Cite it only by the tag on its line — define it in subject_definitions ("<Subject 1> is …, preserving …", no "from <Picture N>"), give it a retention_analysis line with its marker, and use the tag in the shots. An Audio line "the voice of <Subject M>" belongs to that RefMod subject.
 Most references define a subject and cite their picture INSIDE that definition, with no separate <Picture N>
 line: "<Subject 1> is the [role] from <Picture 1>, preserving [3–6 concrete, comma-separated attributes — e.g.
 face shape, hairstyle, skin tone]." List only identity-critical features drawn from the role and caption — never

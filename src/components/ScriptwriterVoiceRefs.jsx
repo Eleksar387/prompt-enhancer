@@ -26,7 +26,7 @@ const sel = {
 }
 
 export default function ScriptwriterVoiceRefs({
-  voices = [], editable, busy, max = 6, characters = [], onAdd, onRemove, onCharacter,
+  voices = [], editable, busy, max = 6, characters = [], refModSpeakers = [], onAdd, onRemove, onCharacter,
   voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
   onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
 }) {
@@ -37,7 +37,7 @@ export default function ScriptwriterVoiceRefs({
 
   if (!editable && voices.length === 0) return null
 
-  const nameOf = (id) => characters.find(c => c.id === id)?.name || ''
+  const nameOf = (id) => characters.find(c => c.id === id)?.name || refModSpeakers.find(r => r.id === id)?.name || ''
 
   // ---- read-only summary (phases after the prompts exist) -----------------
   if (!editable) {
@@ -133,6 +133,7 @@ export default function ScriptwriterVoiceRefs({
               >
                 <option value="">Any speaker</option>
                 {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {refModSpeakers.map(r => <option key={r.id} value={r.id}>RefMod · {r.name}</option>)}
               </select>
               {onSaveAudioToVoiceLibrary && (
                 <button onClick={() => saveToLibrary(v)} disabled={busy} title="Save this sample to the voice library, for reuse in other scripts"

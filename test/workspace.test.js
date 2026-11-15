@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   WORKSPACE_FIELDS, buildSnapshot, snapshotToWorkspace,
-  hasRequiredImages, canGenerate, isProposeMode, refModOnly, effectiveFrameMode,
+  hasRequiredImages, canGenerate, isProposeMode, refModOnly,
   imgToSnap, imgFromSnap, refImagesToSnap, refImagesFromSnap, refAudiosToSnap, refAudiosFromSnap,
 } from '../src/workspace.js'
 import { TARGETS, DEFAULT_SPOKEN_LANG, MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES } from '../src/constants.js'
@@ -453,13 +453,12 @@ describe('canGenerate', () => {
     expect(canGenerate(w({ frameMode: 'ref', scene: 'plenty of words', activeRefModIds: [] }))).toBe(false)
   })
 
-  it('refModOnly / effectiveFrameMode: only ref mode, zero images, >=1 RefMod becomes a text run', () => {
+  it('refModOnly: only ref mode, zero images, at least one active RefMod', () => {
     const ref = { frameMode: 'ref', refImages: [], activeRefModIds: ['m1'] }
     expect(refModOnly(ref)).toBe(true)
-    expect(effectiveFrameMode(ref)).toBe('single')
-    expect(effectiveFrameMode({ ...ref, refImages: [img()] })).toBe('ref')
-    expect(effectiveFrameMode({ ...ref, activeRefModIds: [] })).toBe('ref')
-    expect(effectiveFrameMode({ frameMode: 'firstlast', refImages: [], activeRefModIds: ['m1'] })).toBe('firstlast')
+    expect(refModOnly({ ...ref, refImages: [img()] })).toBe(false)
+    expect(refModOnly({ ...ref, activeRefModIds: [] })).toBe(false)
+    expect(refModOnly({ ...ref, frameMode: 'firstlast' })).toBe(false)
   })
 
   it('an image target with a stale image-first frameMode still generates from a scene', () => {

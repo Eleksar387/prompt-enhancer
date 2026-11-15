@@ -214,3 +214,22 @@ describe('checkH3Prompt — Timeline anchors (Add Guide, Scriptwriter-only)', ()
     expect(res.warnings.some(w => /matching timestamp/.test(w))).toBe(false)
   })
 })
+
+describe('checkH3Prompt — RefMod virtual references (Ref2VA with no images)', () => {
+  const text = [
+    'subject_definitions: <Subject 1> is the witchhunter, preserving a black coat and wide-brimmed hat.',
+    'summary: [reference generation] <Subject 1> crosses a rain-slick alley.',
+    'retention_analysis: <Subject 1> (appears in [Shot 1]): fully_preserved - identity locked.',
+    'detailed_description: [Shot 1] (0-8s) <Subject 1> walks slowly through the alley as rain falls.',
+    'overall_soundscape: rain on stone.',
+    'non_diegetic_music: N/A',
+  ].join('\n')
+  it('does not flag <Subject 1> when a RefMod stands in as a pseudo-reference', () => {
+    const r = checkH3Prompt(text, { mode: 'Ref2VA', refImages: [{ role: 'subject_identity' }] })
+    expect(r.warnings.filter(w => /no reference image defines/.test(w))).toEqual([])
+  })
+  it('flags them when nothing backs the labels', () => {
+    const r = checkH3Prompt(text, { mode: 'Ref2VA', refImages: [] })
+    expect(r.warnings.some(w => /<Subject 1>, but no reference image defines it/.test(w))).toBe(true)
+  })
+})

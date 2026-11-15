@@ -20,7 +20,7 @@ export const ADAPT_TARGETS = Object.values(TARGETS)
 // instruction for H3's field layout.
 export function buildStylePart({
   style, creativity, targetType, showDialogue, dialogue = '', delivery = '', negative = '',
-  forceNonImageWording = false, spokenLang = null, loras = null, refMods = null, targetId = '',
+  forceNonImageWording = false, spokenLang = null, loras = null, refMods = null, refModLabels = null, targetId = '',
 }) {
   const styleObj = STYLE_OPTIONS.find(s => s.id === style)
   const creativityText = creativity === 'balanced' ? ''
@@ -51,7 +51,7 @@ export function buildStylePart({
     // performance rather than a description of one.
     + (spokenLang ? spokenLanguageDirective(spokenLang, { wholePrompt: targetType === 'text' }) : '')
     + loraInstruction(loras, targetId)
-    + refModInstruction(refMods, targetId)
+    + refModInstruction(refMods, targetId, refModLabels)
     + (negative.trim()
       ? `\n\nThings to avoid — the user does not want these in the result: ${negative.trim()}. Do not depict or describe them; if one is a plausible default the model might add by mistake, actively steer the prompt away from it by describing the correct/positive alternative rather than using a negation. Only add a negative-prompt line or field for these terms if the OUTPUT FORMAT rules above already define one for this target — never invent a negative-prompt field or line that isn't part of this target's defined output format.`
       : '')
@@ -366,6 +366,9 @@ export function buildWriterUserText({
   ratio = null, soundscape = '', music = '',
   stylePart = '', lengthPart = '',
   refRole = null,
+  // True when the reference block holds only RefMod lines (no real images): the
+  // RefMods are cited by their own <Subject N>/<Location N> tag, never <Picture N>.
+  refModsOnly = false,
   // The roles of the reference images behind `frameDescription`, in order —
   // only consulted when there are two or more (then frameDescription is the
   // "Image N — role: …" block captionImages() builds); a single image keeps
@@ -392,7 +395,9 @@ export function buildWriterUserText({
     // the typed scene leads, explicitly framed as the brief, with the
     // reference block explicitly scoped to attributes only.
     if (frameMode === 'ref') {
-      const refsBlock = `Reference images — identity, wardrobe, location, style, and pose sources only. Cite them by their <Subject N>/<Picture N> labels; do not restate their descriptions as the scene:\n${frameDescription}`
+      const refsBlock = refModsOnly
+        ? `RefMods loaded straight into the video model (no images, no <Picture N> tags) — cite each ONLY by the <Subject N>/<Location N> tag on its line; do not restate its description as the scene (any Audio lines below are voice-timbre references — "the voice of <Subject N>" names the speaker):\n${frameDescription}`
+        : `Reference images — identity, wardrobe, location, style, and pose sources only. Cite them by their <Subject N>/<Picture N> labels; do not restate their descriptions as the scene:\n${frameDescription}`
       if (scene.trim()) {
         return `MODE: ${mode}\n\n${ratioLine}Target duration: ${duration}\n\nScene / action (this is the brief — the target video's action, beats, and camera plan must be built from THIS):\n${scene}\n\n${refsBlock}${stylePart}${audioPart}${lengthPart}`
       }

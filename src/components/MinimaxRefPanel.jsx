@@ -173,6 +173,7 @@ function MinimaxRefPanel({
   images, onChange, audios, onAudiosChange, loras = [], activeLoraIds = [], manualMode = false, duration,
   voiceLibrary = [], onAddVoiceLibraryFiles = null, onRemoveVoiceLibraryItem = null,
   onRenameVoiceLibraryCharacter = null, onSaveAudioToVoiceLibrary = null,
+  refModSubjects = [], // [{ key: 'refmod:<id>', label: '<Subject 1>', name }] — RefMod subjects a voice can bind to
 }) {
   const fileInputRef = useRef(null)
   const audioInputRef = useRef(null)
@@ -436,11 +437,27 @@ function MinimaxRefPanel({
               <div style={{ fontSize: 13, color: 'var(--pe-ink-3)' }}>
                 {(() => {
                   const linked = subjectBearing.find(im => im.hash === a.subjectRef)
+                  const rm = refModSubjects.find(r => r.key === a.subjectRef)
+                  if (rm) return `→ linked to RefMod ${rm.label}${rm.name ? ` (${rm.name})` : ''}`
                   return linked
                     ? `→ linked to Image ${images.indexOf(linked) + 1} (${MINIMAX_H3_REF_ROLES.find(r => r.id === linked.role)?.label || linked.role})`
                     : 'Not linked to a reference image — set this from the image card above.'
                 })()}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {refModSubjects.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+          {refModSubjects.map(rm => (
+            <div key={rm.key} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13.5, color: 'var(--pe-ink-3)' }}>RefMod {rm.label}{rm.name ? ` · ${rm.name}` : ''} — Voice</span>
+              <select style={{ ...miniSel }} value={audios.find(a => a.subjectRef === rm.key)?.id || ''}
+                onChange={e => setImageVoice(rm.key, e.target.value)}>
+                <option value="">— none —</option>
+                {audios.map((a, ai) => <option key={a.id} value={a.id}>Audio {ai + 1} · {a.fileName}</option>)}
+              </select>
             </div>
           ))}
         </div>

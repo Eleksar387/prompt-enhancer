@@ -29,7 +29,7 @@ import ScriptwriterRefImages from './ScriptwriterRefImages'
 import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import LoraPanel from './LoraPanel'
 import RefModPanel from './RefModPanel'
-import { refModsByIds, refModInstruction, refModManifestEntries, targetTakesRefMods, refModCanonBlock, refModHasLook, describeRefModImage } from '../refmods'
+import { refModsByIds, refModInstruction, refModManifestEntries, targetTakesRefMods, refModCanonBlock, refModHasLook, describeRefModImage, refModLabels, refModReferenceLines, refModVoiceKey } from '../refmods'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
 import { notifyDone } from '../notify'
@@ -1385,9 +1385,15 @@ export default function ScriptwriterPanel({
   // ("default voice") samples. Whenever a step would need to guess which TWO
   // of three-or-more candidates to send, it sends none instead — pin the set
   // by hand rather than have the app guess wrong.
+  // A voice can also belong to a RefMod subject: `characterId` then holds
+  // `refmod:<id>` (refModVoiceKey), so pins / chips / manifest all work unchanged.
+  const refModSpeakers = activeRefMods
+    .filter(r => (r.role || 'subject_identity') === 'subject_identity')
+    .map(r => ({ id: refModVoiceKey(r.id), name: (r.name || '').trim() || 'RefMod' }))
+  const voiceName = (id) => [...(script?.characters || []), ...refModSpeakers].find(c => c.id === id)?.name || ''
   const voicesForShot = (shot, scene, dialogues) => {
     if (!voiceRefs.length || !dialogues.length) return []
-    const chars = script?.characters || []
+    const chars = [...(script?.characters || []), ...refModSpeakers]
     const byChar = (id) => voiceRefs.find(v => v.characterId === id && v.base64)
     if (Array.isArray(shot?.voiceCharacterIds)) {
       return shot.voiceCharacterIds
@@ -1408,7 +1414,7 @@ export default function ScriptwriterPanel({
       .filter(x => x.v)
     if (hits.length >= 1 && hits.length <= MAX_VOICES_PER_SHOT) return hits.map(h => ({ ...h.v, speaker: h.name }))
     if (hits.length > MAX_VOICES_PER_SHOT) return []
-    const cast = (shot.characters?.length ? shot.characters : scene?.characters) || []
+    const cast = [...((shot.characters?.length ? shot.characters : scene?.characters) || []), ...refModSpeakers.map(r => r.id)]
     const castHits = cast
       .map(id => ({ v: byChar(id), name: chars.find(c => c.id === id)?.name || '' }))
       .filter(x => x.v)
@@ -1457,11 +1463,20 @@ export default function ScriptwriterPanel({
   // MINIMAX_H3's Ref2VA parser reads) when the shot has captioned references;
   // otherwise MODE: T2VA with the bible's appearance text inlined so the look
   // still carries. Section labels match the minimax_h3 branch of runWriter().
+  // Active RefMods are virtual Ref2VA references, cited by what they are (<Subject 1>,
+  // <Location 1>) — no image, no <Picture n> (src/refmods.js). Film-wide: every clip
+  // carries them.
+  const virtualRefsFor = (realRefs) => (promptTarget === 'minimax_h3'
+    ? refModLabels(refMods, activeRefModIds, {
+        realSubjectCount: realRefs.filter(im => im.role !== 'pose_composition').length,
+      })
+    : [])
   const buildH3ShotMessage = (shot, ratio, refsList = refImages) => {
     const scene = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
     const refs = shotRefs(shot, scene, refsList)
-    const isRef = refs.length > 0
-    const anchors = isRef ? activeAnchorsForRefs(shot, refs) : []
+    const virtualRefs = virtualRefsFor(refs)
+    const isRef = refs.length > 0 || virtualRefs.length > 0
+    const anchors = refs.length ? activeAnchorsForRefs(shot, refs) : []
 
     const dialogues = shotDialogues(shot, scene)
     const dialogueBlock = dialogues.length
@@ -1473,9 +1488,14 @@ export default function ScriptwriterPanel({
     // labelled exactly as the Ref2VA section of SYSTEM_PROMPT_MINIMAX_H3
     // expects to read them.
     const voices = voicesForShot(shot, scene, dialogues)
+    // A RefMod-bound voice is named by its <Subject M> tag (same numbering as the RefMod lines).
+    const speakerLabel = (voice) => {
+      const l = virtualRefs.find(x => x.tag === 'Subject' && refModVoiceKey(x.refMod.id) === voice.characterId)
+      return l ? `${l.label} (${voice.speaker})` : voice.speaker
+    }
     const voiceLine = voices.length
       ? voices.map((voice, vi) =>
-          `Audio ${vi + 1} — voice-timbre reference (marker: reference): file "${voice.fileName}"${voice.speaker ? ` — the voice of ${voice.speaker}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words are the dialogue given below and nothing else.`
+          `Audio ${vi + 1} — voice-timbre reference (marker: reference): file "${voice.fileName}"${voice.speaker ? ` — the voice of ${speakerLabel(voice)}` : ''}. Reference ONLY its timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. The spoken words are the dialogue given below and nothing else.`
         ).join('\n\n') + '\n\n'
       : ''
 
@@ -1501,7 +1521,9 @@ export default function ScriptwriterPanel({
       const anchorBlock = anchors.length
         ? `Timeline anchors (Add Guide — continuous, not automatically a cut):\n${anchors.map(a => `<Picture ${a.pictureN}> — target composition at ${formatTimestamp(a.atSeconds)}`).join('\n')}\n\n`
         : ''
-      block = `Reference images:\n${lines.join('\n\n')}\n\n${anchorBlock}${voiceLine}`
+      if (virtualRefs.length) lines.push(refModReferenceLines(virtualRefs))
+      const blockHead = refs.length ? 'Reference images:' : 'RefMods loaded straight into the video model (no images, no <Picture N> tags — cite each by the tag on its line):'
+      block = `${blockHead}\n${lines.join('\n\n')}\n\n${anchorBlock}${voiceLine}`
     } else {
       head = 'MODE: T2VA'
       const chars = Array.isArray(shot.characters) && shot.characters.length ? shot.characters : (scene?.characters || [])
@@ -1560,7 +1582,12 @@ export default function ScriptwriterPanel({
   // the full run and the per-clip "Rewrite" button on the video-prompts screen.
   const buildShotPromptMsg = (shot, refs, ratio) => {
     const loraPart = loraInstruction(lorasForShot(shot), promptTarget)
-    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + loraPart + refModInstruction(activeRefMods, promptTarget) + nsfwLine
+    if (promptTarget === 'minimax_h3') {
+      const sceneOfShot = script?.scenes?.find(s => String(s.id) === String(shot.scene_id))
+      const clipRefs = shotRefs(shot, sceneOfShot, refs)
+      return buildH3ShotMessage(shot, ratio, refs) + loraPart
+        + refModInstruction(activeRefMods, promptTarget, virtualRefsFor(clipRefs)) + nsfwLine
+    }
     const action = shot.visual_action || shot.primary_beat || ''
     const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
     const framingHint = aspectFramingHint(ratio)
@@ -2702,7 +2729,7 @@ export default function ScriptwriterPanel({
       const voiceFileById = new Map()
       ;(voiceRefs || []).forEach((v, i) => {
         if (!v.base64) return
-        const who = (script?.characters || []).find(c => c.id === v.characterId)?.name || 'any-speaker'
+        const who = voiceName(v.characterId) || 'any-speaker'
         const fname = `voices/${fileSafe(who)}-${i + 1}.${audioExt(v.mediaType)}`
         zip.file(fname, v.base64, { base64: true })
         voiceFileById.set(v.id, fname)
@@ -2761,7 +2788,7 @@ export default function ScriptwriterPanel({
             // consumer never has to parse clipHeader()'s prose back out.
             promptFile: `prompts/clip-${pad(p.shotNumber || i + 1)}.txt`,
             promptText: p.text || '',
-            mode: references.length ? 'Ref2VA' : 'T2VA',
+            mode: (references.length || (isH3now && refModManifestEntries(refMods, activeRefModIds).length)) ? 'Ref2VA' : 'T2VA',
             durationSec: shot?.duration || (isH3now ? 7 : 4),
             voices,
             loras: shot ? loraManifestEntries(loras, loraIdsForShot(shot), loraOverridesForShot(shot)) : [],
@@ -3045,6 +3072,7 @@ export default function ScriptwriterPanel({
         busy={isLoading || captioning}
         max={MAX_VOICE_REFS}
         characters={script?.characters || []}
+        refModSpeakers={refModSpeakers}
         onAdd={addVoiceRef}
         onRemove={removeVoiceRef}
         onCharacter={setVoiceCharacter}
@@ -3921,7 +3949,7 @@ export default function ScriptwriterPanel({
                 const pinned = Array.isArray(shot.voiceCharacterIds)
                 const refsEditable = phase === 'dircut' || phase === 'done'
                 const editable = refsEditable && shotBusy === null && promptBusy === null
-                const nameOf = (id) => (script?.characters || []).find(c => c.id === id)?.name || id
+                const nameOf = (id) => voiceName(id) || id
                 return (
                   <div style={{ marginBottom: 10, borderTop: '1px solid var(--pe-line-soft)', paddingTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
@@ -4255,8 +4283,9 @@ export default function ScriptwriterPanel({
                       // on finalPrompts) has no p.h3Mode — fall back to the
                       // same signal buildH3ShotMessage itself uses (captioned
                       // references present -> Ref2VA, none -> T2VA).
-                      const mode = p.h3Mode || (refs.length ? 'Ref2VA' : 'T2VA')
-                      return <H3SyntaxBadge text={p.text} mode={mode} refImages={refs} anchors={activeAnchorsForRefs(shot, refs)} />
+                      const virtualRefs = virtualRefsFor(refs)
+                      const mode = p.h3Mode || ((refs.length || virtualRefs.length) ? 'Ref2VA' : 'T2VA')
+                      return <H3SyntaxBadge text={p.text} mode={mode} refImages={[...refs, ...virtualRefs.filter(l => l.tag === 'Subject').map(l => ({ role: l.role }))]} anchors={activeAnchorsForRefs(shot, refs)} />
                     })()}
                     </>}
                   </div>

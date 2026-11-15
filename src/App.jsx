@@ -26,7 +26,7 @@ import {
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras, loraManifestEntries } from './loras'
-import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries, describeRefModImage } from './refmods'
+import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries, describeRefModImage, refModLabels, refModReferenceLines, buildAudioBlock, refModVoiceKey } from './refmods'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
@@ -46,7 +46,7 @@ import { useQueue } from './hooks/useQueue'
 import { useImageSlots } from './hooks/useImageSlots'
 import {
   buildSnapshot as buildWorkspaceSnapshot, snapshotToWorkspace,
-  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs, effectiveFrameMode,
+  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs,
   refAudiosFromSnap,
 } from './workspace'
 import { buildSingleDirectorTimeline } from './directorExport'
@@ -203,6 +203,13 @@ export default function App() {
   })
   const activeRefMods = refModsByIds(refMods, activeRefModIds).map(r =>
     refModSubjects[r.id]?.trim() ? { ...r, subject: refModSubjects[r.id].trim() } : r)
+  // MiniMax Reference mode: each loaded RefMod is a virtual reference, cited in the
+  // prompt by what it is (<Subject 1>, <Location 1>) — no image, no <Picture n> (refmods.js).
+  const refModVirtual = (target === 'minimax_h3' && frameMode === 'ref')
+    ? refModLabels(refMods, activeRefModIds, {
+        realSubjectCount: imgs.refImages.filter(im => im.role !== 'pose_composition').length,
+      })
+    : []
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
@@ -232,7 +239,7 @@ export default function App() {
   // Declared after `t`/`frameMode` further down would be neater, but state has to
   // come before the effects that use it; the hook itself owns the reset-on-target
   // -change effect. See src/hooks/useAdminReview.js.
-  const admin = useAdminReview(TARGETS[target], effectiveFrameMode({ frameMode, refImages: imgs.refImages, activeRefModIds }), cfg.craftRules !== false)
+  const admin = useAdminReview(TARGETS[target], frameMode, cfg.craftRules !== false)
   // Queue: pending "generate this later" items, persisted server-side (see db.js).
   // The hook owns its state and the run bookkeeping every job kind shares; the two
   // job bodies stay here, below. See src/hooks/useQueue.js.
@@ -802,6 +809,12 @@ export default function App() {
           references,
           loras: loraManifestEntries(loras, unionLoraIds, loraStrengthOverrides),
           refMods: refModManifestEntries(refMods, activeRefModIds),
+          // Voice samples in refAudios order — what the bridge's PEClipAudio nodes read
+          // (voices[k] → k-th node). `speaker` = the RefMod a voice is bound to, if any.
+          voices: (imgs.refAudios || []).map((a, k) => ({
+            file: `voice-reference-${k + 1}.${(a.fileName && a.fileName.includes('.') ? a.fileName.split('.').pop() : imgExt(a.mediaType)).toLowerCase()}`,
+            speaker: refMods.find(r => refModVoiceKey(r.id) === a.subjectRef)?.name || '',
+          })),
         }))
       if (clips.length) {
         const manifest = { title: titleSlug(scene) || target, target, type: t.type, clips }
@@ -1399,11 +1412,8 @@ export default function App() {
       // of the image references above. When the user explicitly bound this
       // audio to one image (MinimaxRefPanel's per-image "Voice" select), name
       // it so the writer isn't left guessing which subject it belongs to.
-      const audioBlock = (s.refAudios || []).map((a, i) => {
-        const boundIdx = refs.findIndex(im => im.hash && im.hash === a.subjectRef)
-        const boundNote = boundIdx >= 0 ? ` — for the subject in Image ${boundIdx + 1} (${roleLabel(refs[boundIdx].role)})` : ''
-        return `Audio ${i + 1} — voice-timbre reference (marker: reference)${boundNote}: file "${a.fileName}". Reference ONLY the timbre, pitch and delivery for the speaking subject; never transcribe or guess at its original wording. If no spoken dialogue is supplied elsewhere in this message, write one short line for that subject yourself so the voice reference has speech to act on.`
-      }).join('\n\n')
+      // RefMod-bound voices are emitted by runWriter next to the RefMod lines.
+      const audioBlock = buildAudioBlock(s.refAudios, { refs, roleLabel, only: 'rest' })
       const text = audioBlock ? `${imageBlock}\n\n${audioBlock}` : imageBlock
       return { text, stats: condensed ? { ...stats, condensed: true } : stats }
     }
@@ -1593,7 +1603,7 @@ export default function App() {
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
       spokenLang: show.spokenLang ? spokenLangId : null,
-      loras: activeLoras, refMods: activeRefMods, targetId: target,
+      loras: activeLoras, refMods: activeRefMods, refModLabels: refModVirtual, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
 
@@ -1672,11 +1682,20 @@ export default function App() {
   })
 
   const runWriter = async (frameDescription, stylePart, lengthPart, hasImg, opts = null) => {
-    // RefMod-only (ref mode, no reference images) writes as plain T2VA text.
-    const runFrameMode = effectiveFrameMode(workspace)
+    // Active RefMods are virtual Ref2VA references ("RefMod <Subject 1>" lines, no
+    // image / no <Picture n>): appended to the reference block so the writer defines
+    // and cites them like any other reference. The history snapshot below keeps the
+    // plain frameDescription (the stored caption is the vision text only).
+    const refModLines = refModReferenceLines(refModVirtual)
+    // Voice references bound to a RefMod subject (all of them when there are no real
+    // images — captionImages never ran, so nothing else would carry them).
+    const refModAudio = refModLines
+      ? buildAudioBlock(imgs.refAudios, { refModLabels: refModVirtual, only: hasImg ? 'refmod' : 'all' })
+      : ''
+    const writerFrameDescription = refModLines ? [frameDescription, refModLines, refModAudio].filter(Boolean).join('\n\n') : frameDescription
     const userText = buildWriterUserText({
-      target, targetType: t.type, frameMode: runFrameMode, scene, duration,
-      frameDescription, hasImg,
+      target, targetType: t.type, frameMode, scene, duration,
+      frameDescription: writerFrameDescription, hasImg, refModsOnly: !!refModLines && !frameDescription,
       ratio: selectedRatio, soundscape, music,
       stylePart, lengthPart,
       // Derived from the same list captionImages() described — so a lone
@@ -1689,7 +1708,7 @@ export default function App() {
     // Captured now, from the exact frameMode/hasImg this message was built
     // for — not recomputed later from possibly-changed live state (see
     // H3SyntaxBadge / checkH3Prompt).
-    const h3Mode = tcaps.structured ? h3ModeFor(runFrameMode, hasImg) : null
+    const h3Mode = tcaps.structured ? h3ModeFor(frameMode, hasImg) : null
 
     // Admin mode intercepts here: hold the assembled message for review instead
     // of sending it. A queued run never pauses — nobody is watching it.
@@ -1698,7 +1717,7 @@ export default function App() {
       return { ok: false, error: 'paused for admin review' }
     }
 
-    return runWriterCall({ user: userText, system: systemPromptFor(t, runFrameMode, cfg.craftRules !== false), snapshot, h3Mode })
+    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode, cfg.craftRules !== false), snapshot, h3Mode })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -1740,7 +1759,7 @@ export default function App() {
     const stylePart = buildStylePart({
       style, creativity, targetType: t.type, showDialogue: show.dialogue, dialogue, delivery, negative,
       spokenLang: show.spokenLang ? spokenLangId : null,
-      loras: activeLoras, refMods: activeRefMods, targetId: target,
+      loras: activeLoras, refMods: activeRefMods, refModLabels: refModVirtual, targetId: target,
     })
     const lengthPart = PROMPT_LENGTH_INJECT[promptLength] || ''
     setSavedCaption(caption)
@@ -2071,7 +2090,8 @@ export default function App() {
           {ratioPicker}
           <MinimaxRefPanel images={imgs.refImages} onChange={imgs.setRefImages} audios={imgs.refAudios} onAudiosChange={imgs.setRefAudios} loras={loras} activeLoraIds={activeLoraIds} manualMode={manualUI} duration={duration}
             voiceLibrary={voiceLibrary} onAddVoiceLibraryFiles={addVoiceLibraryFiles} onRemoveVoiceLibraryItem={removeVoiceLibraryItem}
-            onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary} />
+            onRenameVoiceLibraryCharacter={renameVoiceLibraryCharacter} onSaveAudioToVoiceLibrary={saveAudioToVoiceLibrary}
+            refModSubjects={refModVirtual.filter(l => l.tag === 'Subject').map(l => ({ key: refModVoiceKey(l.refMod.id), label: l.label, name: l.refMod.name }))} />
         </>
       ) : frameMode === 'firstmidlast' ? (
         <>
@@ -2569,7 +2589,7 @@ export default function App() {
             <div style={{ marginTop: 12 }}>
               <textarea value={admin.system} onChange={e => admin.setSystem(e.target.value)} rows={12}
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => admin.setSystem(systemPromptFor(t, effectiveFrameMode(workspace), cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode, cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>
@@ -2839,7 +2859,7 @@ export default function App() {
                   onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
               )}
               {target === 'minimax_h3' && r.text && !r.loading && !r.error && (
-                <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={imgs.refImages}
+                <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={[...imgs.refImages, ...refModVirtual.filter(l => l.tag === 'Subject').map(l => ({ role: l.role }))]}
                   anchors={(imgs.refImages || []).map((im, i) => ({ pictureN: i + 1, atSeconds: im.atSeconds })).filter(a => a.atSeconds != null)} />
               )}
               {r.imgError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Render failed: {r.imgError}</div>}
