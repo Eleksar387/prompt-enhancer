@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   WORKSPACE_FIELDS, buildSnapshot, snapshotToWorkspace,
-  hasRequiredImages, canGenerate, isProposeMode,
+  hasRequiredImages, canGenerate, isProposeMode, refModOnly, effectiveFrameMode,
   imgToSnap, imgFromSnap, refImagesToSnap, refImagesFromSnap, refAudiosToSnap, refAudiosFromSnap,
 } from '../src/workspace.js'
 import { TARGETS, DEFAULT_SPOKEN_LANG, MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES } from '../src/constants.js'
@@ -439,6 +439,27 @@ describe('canGenerate', () => {
     expect(canGenerate(w({ frameMode: 'firstlast', scene: 'plenty of words' }))).toBe(false)
     expect(canGenerate(w({ frameMode: 'firstlast', firstImg: img(), lastImg: img() }))).toBe(true)
     expect(canGenerate(w({ frameMode: 'ref', scene: 'plenty of words' }))).toBe(false)
+  })
+
+  it('ref mode with NO images but an active RefMod generates from a typed scene', () => {
+    expect(canGenerate(w({ frameMode: 'ref', scene: 'she crosses the alley', activeRefModIds: ['m1'] }))).toBe(true)
+  })
+
+  it('ref mode + RefMod still needs the scene (the writer has nothing to write from otherwise)', () => {
+    expect(canGenerate(w({ frameMode: 'ref', scene: '  ', activeRefModIds: ['m1'] }))).toBe(false)
+  })
+
+  it('ref mode with no images and no RefMod is still blocked', () => {
+    expect(canGenerate(w({ frameMode: 'ref', scene: 'plenty of words', activeRefModIds: [] }))).toBe(false)
+  })
+
+  it('refModOnly / effectiveFrameMode: only ref mode, zero images, >=1 RefMod becomes a text run', () => {
+    const ref = { frameMode: 'ref', refImages: [], activeRefModIds: ['m1'] }
+    expect(refModOnly(ref)).toBe(true)
+    expect(effectiveFrameMode(ref)).toBe('single')
+    expect(effectiveFrameMode({ ...ref, refImages: [img()] })).toBe('ref')
+    expect(effectiveFrameMode({ ...ref, activeRefModIds: [] })).toBe('ref')
+    expect(effectiveFrameMode({ frameMode: 'firstlast', refImages: [], activeRefModIds: ['m1'] })).toBe('firstlast')
   })
 
   it('an image target with a stale image-first frameMode still generates from a scene', () => {

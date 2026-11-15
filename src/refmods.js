@@ -16,7 +16,13 @@
 // repair).
 //
 // Store shape, one entry per RefMod the user owns:
-//   { id, name, note, file, strength }
+//   { id, name, note, description, file, strength }
+//
+// `description` is the RefMod's VISIBLE LOOK (face/build/clothing/setting) in plain
+// prose — typed by hand or produced once from an image by the vision model
+// (describeRefModImage). Without it the writer only has a name and is told not
+// to guess, so a RefMod-only film gets a prompt that never says what is visible.
+// It is writer-facing text only: never part of the bridge manifest.
 
 import { makeLocalStore } from './localStore'
 import { caps } from './constants'
@@ -29,6 +35,7 @@ export const sanitizeRefMods = (list) => (Array.isArray(list) ? list : [])
     id: String(r.id || ''),
     name: typeof r.name === 'string' ? r.name : '',
     note: typeof r.note === 'string' ? r.note : '',
+    description: typeof r.description === 'string' ? r.description : '',
     file: typeof r.file === 'string' ? r.file : '',
     strength: Number.isFinite(Number(r.strength)) && r.strength !== '' && r.strength != null ? Number(r.strength) : 1,
   }))
@@ -94,19 +101,61 @@ export const targetTakesRefMods = (targetId) => caps(targetId).refMods === true
 const refModLine = (r) => {
   const who = (r.subject || '').trim() || r.name.trim() || 'this generation\'s subject'
   const note = r.note.trim()
+  const look = (r.description || '').trim()
+  if (look) return `- ${who} — visible look: ${look}${note ? ` (represents: ${note})` : ''}`
   return note ? `- ${who} — represents: ${note}` : `- ${who}`
+}
+
+export const refModHasLook = (r) => !!(r && typeof r.description === 'string' && r.description.trim())
+
+// Film-level canon block for Scriptwriter Phases 1 and 2: only RefMods that have a
+// description (a bare name tells those phases nothing). Empty when none do.
+export function refModCanonBlock(active, targetId = 'minimax_h3') {
+  if (!targetTakesRefMods(targetId)) return ''
+  const list = (active || []).filter(refModHasLook)
+  if (!list.length) return ''
+  return `\n\nRefMods loaded into the video model for this film — treat their descriptions as canon for what these `
+    + `characters / outfits / props / places actually look like. Write the cast and location bible (and any shot) `
+    + `consistently with them, folding each into the matching character or location (match by name or note); never `
+    + `invent a different look for what a RefMod covers:\n${list.map(refModLine).join('\n')}`
 }
 
 export function refModInstruction(active, targetId) {
   if (!targetTakesRefMods(targetId)) return ''
   const list = active || []
   if (!list.length) return ''
-  return `\n\nActive RefMod reference(s) for this generation — each one loads a specific visual concept `
+  const described = list.filter(refModHasLook)
+  const bare = list.filter(r => !refModHasLook(r))
+  const head = `\n\nActive RefMod reference(s) for this generation — each one loads a specific visual concept `
     + `(an identity, outfit, prop, or location) directly into the model by file; there is no activation word, `
-    + `trigger token or <Subject n> tag for them, and they are never named or quoted in the prose. For the `
-    + `element each one below stands in for, do NOT invent new, specific visual details of your own (face, hair, `
-    + `build, exact garment pattern, exact room layout, etc.) — describe it in general, neutral terms and let the `
-    + `loaded reference supply the actual look, the same way the official usage example does ("prompt for a candy `
-    + `racer in a karting scene" — the scene and action, never a physical description of the racer):\n`
-    + `${list.map(refModLine).join('\n')}`
+    + `trigger token or <Subject n> tag for them, and they are never named or quoted in the prose.`
+  const lookPart = described.length
+    ? ` For the element each "visible look" line below stands for, DESCRIBE what is visible in the prompt — `
+      + `face, build, clothing, setting as given — consistently with that description; never contradict it or `
+      + `invent a different look:\n${described.map(refModLine).join('\n')}`
+    : ''
+  const barePart = bare.length
+    ? ` For the element each of the following stands in for, do NOT invent new, specific visual details of your own `
+      + `(face, hair, build, exact garment pattern, exact room layout, etc.) — describe it in general, neutral terms `
+      + `and let the loaded reference supply the actual look, the same way the official usage example does ("prompt `
+      + `for a candy racer in a karting scene" — the scene and action, never a physical description of the racer):\n`
+      + `${bare.map(refModLine).join('\n')}`
+    : ''
+  return head + lookPart + barePart
+}
+
+// One-off vision call: an image of what the RefMod depicts -> the editable
+// "visible look" text. `call(model, content, system)` is injected (App wraps
+// cachedVision, the Scriptwriter wraps callOllama) so this stays pure and
+// testable; the image itself is never stored, only the returned text.
+export async function describeRefModImage(call, { model, base64, mediaType, hint = '' }, visionSystem) {
+  if (!model) throw new Error('No vision model selected — pick one to describe an image.')
+  const note = (hint || '').trim()
+  const text = await call(model, [
+    { type: 'image', source: { type: 'base64', media_type: mediaType || 'image/jpeg', data: base64 } },
+    { type: 'text', text: `Describe what is visible in this image so a video writer can reproduce the look in words.${note ? ` Intended use: ${note}.` : ''}` },
+  ], visionSystem)
+  const out = String(text || '').trim()
+  if (!out) throw new Error('The vision model returned no description.')
+  return out
 }

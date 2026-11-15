@@ -36,6 +36,7 @@ export default function ScriptwriterRefImages({
   onAddFiles, onRemove, onNote, onCaption, onDescribe,
   linkTypes = [], characters = [], locations = [], roles = [], preserves = [],
   onLinkType, onField,
+  voices = [], onVoice = null,
   // Scroll target for the Director's-Cut "no described references" banners'
   // "↑ Jump to Reference Images" button (ScriptwriterPanel.jsx) — forwarded
   // onto whichever root element is actually rendered below.
@@ -147,6 +148,14 @@ export default function ScriptwriterRefImages({
                   <select style={sel} value={im.linkId || ''} disabled={busy} onChange={e => onField(im.id, { linkId: e.target.value })}>
                     <option value="">— which character —</option>
                     {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+                {im.linkType === 'character' && im.linkId && onVoice && voices.some(v => v.base64) && (
+                  <select style={sel} value={voices.find(v => v.characterId === im.linkId)?.id || ''} disabled={busy}
+                    title="Voice-timbre sample for this character (rides the clips where they speak)"
+                    onChange={e => onVoice(im, e.target.value)}>
+                    <option value="">🔊 Voice: none</option>
+                    {voices.filter(v => v.base64).map((v, i) => <option key={v.id} value={v.id}>🔊 Audio {i + 1} · {v.fileName}</option>)}
                   </select>
                 )}
                 {im.linkType === 'location' && locations.length > 0 && (

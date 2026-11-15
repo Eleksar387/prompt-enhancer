@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   sanitizeRefMods, refModHasFile, normalizeRefModFile,
   refModsByIds, targetTakesRefMods, refModInstruction, refModManifestEntries,
+  refModHasLook, refModCanonBlock, describeRefModImage,
 } from '../src/refmods.js'
 import { TARGETS } from '../src/constants.js'
 
@@ -16,7 +17,7 @@ const R = [
 describe('sanitizeRefMods', () => {
   it('fills defaults and coerces strength', () => {
     const [r] = sanitizeRefMods([{ id: 'x' }])
-    expect(r).toEqual({ id: 'x', name: '', note: '', file: '', strength: 1 })
+    expect(r).toEqual({ id: 'x', name: '', note: '', description: '', file: '', strength: 1 })
   })
   it('drops entries without an id', () => {
     expect(sanitizeRefMods([{ name: 'no id' }])).toEqual([])
@@ -100,6 +101,53 @@ describe('refModInstruction', () => {
     const withSubject = [{ ...R[0], subject: 'Mara' }]
     const out = refModInstruction(withSubject, 'minimax_h3')
     expect(out).toContain('Mara — represents: chrome visor helmet look')
+  })
+})
+
+describe('RefMod visible look (description)', () => {
+  const L = [{ id: 'm', name: 'Mara', note: 'the witchhunter', description: 'A tall woman in a weathered black coat and wide-brimmed hat.', file: 'f', strength: 1 }]
+  it('sanitizeRefMods keeps a string description and drops junk', () => {
+    expect(sanitizeRefMods([{ id: 'x', description: 'a look' }])[0].description).toBe('a look')
+    expect(sanitizeRefMods([{ id: 'x', description: 5 }])[0].description).toBe('')
+  })
+  it('refModHasLook needs a non-blank description', () => {
+    expect(refModHasLook(L[0])).toBe(true)
+    expect(refModHasLook({ ...L[0], description: '  ' })).toBe(false)
+  })
+  it('instruction tells the writer to DESCRIBE a described RefMod consistently, not to avoid it', () => {
+    const out = refModInstruction(L, 'minimax_h3')
+    expect(out).toContain('visible look: A tall woman in a weathered black coat')
+    expect(out).toContain('DESCRIBE what is visible')
+    expect(out).not.toContain('do NOT invent')
+  })
+  it('mixed list: described gets the describe wording, bare keeps "do NOT invent"', () => {
+    const out = refModInstruction([...L, { id: 'b', name: 'Visor', note: '', file: 'g', strength: 1 }], 'minimax_h3')
+    expect(out).toContain('visible look: A tall woman')
+    expect(out).toContain('do NOT invent')
+    expect(out).toMatch(/^- Visor$/m)
+  })
+  it('refModCanonBlock lists only described RefMods; empty otherwise / off-target', () => {
+    expect(refModCanonBlock([{ id: 'b', name: 'Visor', note: '', file: 'g', strength: 1 }])).toBe('')
+    expect(refModCanonBlock(L, 'flux')).toBe('')
+    const out = refModCanonBlock(L)
+    expect(out).toContain('canon')
+    expect(out).toContain('Mara — visible look: A tall woman')
+    expect(out).toContain('(represents: the witchhunter)')
+  })
+  it('description never reaches the bridge manifest', () => {
+    expect(refModManifestEntries(L, ['m'])).toEqual([{ file: 'f', strength: 1 }])
+  })
+  it('describeRefModImage passes an image block + system, trims, and rejects empty / no model', async () => {
+    let seen
+    const call = async (m, content, sys) => { seen = { m, content, sys }; return '  A knight in chrome armor.  ' }
+    const out = await describeRefModImage(call, { model: 'v', base64: 'AAA', mediaType: 'image/png', hint: 'chrome knight' }, 'SYS')
+    expect(out).toBe('A knight in chrome armor.')
+    expect(seen.m).toBe('v')
+    expect(seen.sys).toBe('SYS')
+    expect(seen.content[0]).toEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } })
+    expect(seen.content[1].text).toContain('chrome knight')
+    await expect(describeRefModImage(call, { model: '', base64: 'x' }, 'S')).rejects.toThrow(/vision model/)
+    await expect(describeRefModImage(async () => ' ', { model: 'v', base64: 'x' }, 'S')).rejects.toThrow(/no description/)
   })
 })
 

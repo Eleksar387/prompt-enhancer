@@ -3,6 +3,7 @@ import { normalizeRefModFile } from '../refmods'
 import { btn } from '../utils'
 import { generateId } from '../db'
 import { fetchComfyRefModFiles } from '../comfy'
+import { shrinkToJpeg } from '../utils'
 
 // Presentational RefMod panel — a smaller sibling of LoraPanel.jsx for
 // MiniMax H3's RefMods. Unlike LoRAs, a RefMod has no trigger word at all
@@ -37,18 +38,43 @@ export default function RefModPanel({
   onToggle, onSaveRefMods, hint = '',
   subjects = {}, onSubjectChange,
   comfyUrl = '',
+  // (base64, mediaType, refMod) => Promise<string> — one-off vision description of an
+  // image of what the RefMod depicts. Omit to hide the button (no vision model wired).
+  onDescribe = null,
 }) {
   const [open, setOpen] = useState(false)
   const [scanState, setScanState] = useState('idle') // 'idle' | 'loading' | 'error'
   const [scanError, setScanError] = useState('')
   const [candidates, setCandidates] = useState(null) // null = closed, [] = scanned/none new, array = found
   const [checked, setChecked] = useState(new Set())
+  const [descBusy, setDescBusy] = useState(null)   // refMod id being described
+  const [descError, setDescError] = useState({})    // id -> message
 
   const active = (id) => activeIds.includes(id)
 
   const patch = (id, changes) => onSaveRefMods?.(refMods.map(r => r.id === id ? { ...r, ...changes } : r))
-  const add = () => onSaveRefMods?.([...refMods, { id: generateId(), name: '', note: '', file: '', strength: 1 }])
+  const add = () => onSaveRefMods?.([...refMods, { id: generateId(), name: '', note: '', description: '', file: '', strength: 1 }])
   const remove = (id) => onSaveRefMods?.(refMods.filter(r => r.id !== id))
+
+  // File pick -> bounded JPEG -> vision description -> into the editable "Visible
+  // look" box (never saved silently over an existing text without the user seeing
+  // it: it lands in the textarea, which saves on every edit like the other fields,
+  // so describing REPLACES the box — the old text is shown in the confirm).
+  const describeFrom = async (r, file) => {
+    if (!file || !onDescribe) return
+    if ((r.description || '').trim() && typeof window !== 'undefined'
+      && !window.confirm('Replace the current visible look with a description of this image?')) return
+    setDescBusy(r.id); setDescError(e => ({ ...e, [r.id]: '' }))
+    try {
+      const { base64, mediaType } = await shrinkToJpeg(file)
+      const text = await onDescribe(base64, mediaType, r)
+      patch(r.id, { description: text })
+    } catch (e) {
+      setDescError(m => ({ ...m, [r.id]: e?.message || 'Could not describe the image.' }))
+    } finally {
+      setDescBusy(null)
+    }
+  }
 
   const runScan = async () => {
     setScanState('loading'); setScanError('')
@@ -73,7 +99,7 @@ export default function RefModPanel({
   const importSelected = () => {
     const toAdd = candidates
       .filter(f => checked.has(f))
-      .map(f => ({ id: generateId(), name: basename(f), note: '', file: f, strength: 1 }))
+      .map(f => ({ id: generateId(), name: basename(f), note: '', description: '', file: f, strength: 1 }))
     onSaveRefMods?.([...refMods, ...toAdd])
     setCandidates(null)
   }
@@ -124,9 +150,9 @@ export default function RefModPanel({
         <div style={{ marginTop: 10, background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '12px 14px' }}>
           <div style={{ fontSize: 13, color: 'var(--pe-ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
             RefMods have no activation phrase or trigger word — they load purely via the ComfyUI file below
-            at the given strength. "What it represents" is optional and only tells the writer what the
-            RefMod depicts, so the scene it writes naturally lines up with what's actually loaded; it is
-            never inserted into the prompt as a token. The RefMod file itself is chosen by hand on ComfyUI's
+            at the given strength. "Visible look" is what the writer actually describes in the prompt (type
+            it, or generate it once from an image); "What it represents" is a short label. Neither is ever
+            inserted into the prompt as a token. The RefMod file itself is chosen by hand on ComfyUI's
             MiniMaxH3RefModsLoader node; the name here is for your own reference and to flag a file you've
             already imported when scanning.
           </div>
@@ -141,6 +167,26 @@ export default function RefModPanel({
                 <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>What it represents</label>
                 <input value={r.note} onChange={e => patch(r.id, { note: e.target.value })}
                   placeholder="e.g. chrome visor helmet look — tells the writer what to describe" style={field({ width: '100%' })} />
+              </div>
+              <div style={{ flex: '1 1 100%' }}>
+                <label style={{ ...lbl, marginBottom: 4, fontSize: 12 }}>
+                  Visible look <span style={lblNote}>(what the writer describes — face, build, clothing, setting)</span>
+                </label>
+                <textarea value={r.description || ''} onChange={e => patch(r.id, { description: e.target.value })}
+                  rows={3} spellCheck={false}
+                  placeholder="e.g. a tall woman in a weathered black coat and wide-brimmed hat, pale scarred face… — without this the writer only knows the name and won't describe what is visible"
+                  style={field({ width: '100%', resize: 'vertical', lineHeight: 1.45 })} />
+                {onDescribe && (
+                  <div style={{ marginTop: 4, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <label style={{ ...pill('var(--pe-ink-2)', '--pe-line'), display: 'inline-block', opacity: descBusy ? 0.6 : 1 }}>
+                      {descBusy === r.id ? '👁 Describing…' : '👁 Describe from image'}
+                      <input type="file" accept="image/*" disabled={descBusy !== null} style={{ display: 'none' }}
+                        onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; describeFrom(r, f) }} />
+                    </label>
+                    <span style={{ fontSize: 12, color: 'var(--pe-ink-3)' }}>one-off — the image is not stored, only the text</span>
+                    {descError[r.id] && <span style={{ fontSize: 12, color: 'var(--pe-danger)' }}>✗ {descError[r.id]}</span>}
+                  </div>
+                )}
               </div>
               <div style={{ flex: '1 1 100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ flex: '1 1 260px' }}>

@@ -7,7 +7,7 @@ import {
   STYLE_OPTIONS, CREATIVITY_OPTIONS, CAMERA_GROUPS,
   PROMPT_LENGTH_OPTIONS, PROMPT_LENGTH_INJECT,
   VISION_PROMPT_LTX_SINGLE, VISION_PROMPT_LTX_FIRSTLAST, VISION_PROMPT_LTX_FIRSTMIDLAST,
-  DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF,
+  DEFAULT_FRAME_MODE_OPTIONS, VISION_PROMPT_MINIMAX_H3_REF, VISION_PROMPT_SCRIPTWRITER,
   MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, ROLE_NONE, ROLE_GENERAL, normalizeRole, imageRoleDef,
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts, MINIMAX_H3_RESOLUTIONS,
@@ -26,7 +26,7 @@ import {
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras, loraManifestEntries } from './loras'
-import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries } from './refmods'
+import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries, describeRefModImage } from './refmods'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
@@ -46,7 +46,7 @@ import { useQueue } from './hooks/useQueue'
 import { useImageSlots } from './hooks/useImageSlots'
 import {
   buildSnapshot as buildWorkspaceSnapshot, snapshotToWorkspace,
-  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs,
+  hasRequiredImages, canGenerate as canGenerateFrom, isProposeMode, stillImageRefs, effectiveFrameMode,
   refAudiosFromSnap,
 } from './workspace'
 import { buildSingleDirectorTimeline } from './directorExport'
@@ -232,7 +232,7 @@ export default function App() {
   // Declared after `t`/`frameMode` further down would be neater, but state has to
   // come before the effects that use it; the hook itself owns the reset-on-target
   // -change effect. See src/hooks/useAdminReview.js.
-  const admin = useAdminReview(TARGETS[target], frameMode, cfg.craftRules !== false)
+  const admin = useAdminReview(TARGETS[target], effectiveFrameMode({ frameMode, refImages: imgs.refImages, activeRefModIds }), cfg.craftRules !== false)
   // Queue: pending "generate this later" items, persisted server-side (see db.js).
   // The hook owns its state and the run bookkeeping every job kind shares; the two
   // job bodies stay here, below. See src/hooks/useQueue.js.
@@ -1672,8 +1672,10 @@ export default function App() {
   })
 
   const runWriter = async (frameDescription, stylePart, lengthPart, hasImg, opts = null) => {
+    // RefMod-only (ref mode, no reference images) writes as plain T2VA text.
+    const runFrameMode = effectiveFrameMode(workspace)
     const userText = buildWriterUserText({
-      target, targetType: t.type, frameMode, scene, duration,
+      target, targetType: t.type, frameMode: runFrameMode, scene, duration,
       frameDescription, hasImg,
       ratio: selectedRatio, soundscape, music,
       stylePart, lengthPart,
@@ -1687,7 +1689,7 @@ export default function App() {
     // Captured now, from the exact frameMode/hasImg this message was built
     // for — not recomputed later from possibly-changed live state (see
     // H3SyntaxBadge / checkH3Prompt).
-    const h3Mode = tcaps.structured ? h3ModeFor(frameMode, hasImg) : null
+    const h3Mode = tcaps.structured ? h3ModeFor(runFrameMode, hasImg) : null
 
     // Admin mode intercepts here: hold the assembled message for review instead
     // of sending it. A queued run never pauses — nobody is watching it.
@@ -1696,7 +1698,7 @@ export default function App() {
       return { ok: false, error: 'paused for admin review' }
     }
 
-    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode, cfg.craftRules !== false), snapshot, h3Mode })
+    return runWriterCall({ user: userText, system: systemPromptFor(t, runFrameMode, cfg.craftRules !== false), snapshot, h3Mode })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -2227,6 +2229,8 @@ export default function App() {
           setComfyCfg={setComfyCfg}
           loras={loras}
           onSaveLoras={saveLoraLibrary}
+          refMods={refMods}
+          onSaveRefMods={saveRefModLibrary}
           autoJob={scriptwriterAutoJob}
           onAutoJobDone={(res) => scriptwriterAutoResolveRef.current?.(res)}
           onQueueAutoJob={addScriptwriterAutoJob}
@@ -2440,7 +2444,11 @@ export default function App() {
           refMods={refMods} activeIds={activeRefModIds} editable={!isLoading}
           onToggle={toggleRefMod} onSaveRefMods={saveRefModLibrary}
           subjects={refModSubjects} onSubjectChange={setRefModSubject}
-          comfyUrl={comfyCfg.url} />
+          comfyUrl={comfyCfg.url}
+          onDescribe={(base64, mediaType, r) => describeRefModImage(
+            async (model, content, sys) => cachedVision(content, sys, { fromCache: 0, fresh: 0 }, model),
+            { model: effectiveVision, base64, mediaType, hint: (r.note || r.name || '').trim() },
+            VISION_PROMPT_SCRIPTWRITER)} />
       )}
 
       {/* Spoken language — nothing left to drive it in Manual mode; the user
@@ -2561,7 +2569,7 @@ export default function App() {
             <div style={{ marginTop: 12 }}>
               <textarea value={admin.system} onChange={e => admin.setSystem(e.target.value)} rows={12}
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode, cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+              <button onClick={() => admin.setSystem(systemPromptFor(t, effectiveFrameMode(workspace), cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>

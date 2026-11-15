@@ -28,6 +28,8 @@ import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImag
 import ScriptwriterRefImages from './ScriptwriterRefImages'
 import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import LoraPanel from './LoraPanel'
+import RefModPanel from './RefModPanel'
+import { refModsByIds, refModInstruction, refModManifestEntries, targetTakesRefMods, refModCanonBlock, refModHasLook, describeRefModImage } from '../refmods'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
 import { notifyDone } from '../notify'
@@ -58,7 +60,7 @@ const NSFW_HINT = 'Adult content — nudity, sex, graphic violence and other mat
 // the user to type one — the reference images (+ genre, + an optional
 // one-line hint) carry the whole premise. runPhase1 itself is untouched: it
 // just sees a normal idea string plus the usual reference-image block.
-const AUTO_IDEA_BASE = 'Invent a complete, concrete short-film premise, cast, and plot entirely from the attached reference images and the chosen genre. Make confident creative choices — do not ask for more input or leave anything vague.'
+const AUTO_IDEA_BASE = 'Invent a complete, concrete short-film premise, cast, and plot entirely from the attached reference images (and/or the RefMod descriptions, when no images are attached) and the chosen genre. Make confident creative choices — do not ask for more input or leave anything vague.'
 const buildAutoIdea = (hint) => (hint && hint.trim())
   ? `${AUTO_IDEA_BASE}\n\nStory hint from the user (incorporate this): ${hint.trim()}`
   : AUTO_IDEA_BASE
@@ -556,6 +558,9 @@ export default function ScriptwriterPanel({
   // and persisted there); this panel only reads it and edits it through the
   // callback. Which style LoRAs a film uses is local state below.
   loras = [], onSaveLoras = null,
+  // RefMods (MiniMax H3 MiniMaxH3RefModsLoader): same ownership as the LoRA library.
+  // No trigger word — they load via file + strength only. Film-wide selection.
+  refMods = [], onSaveRefMods = null,
   // Full Auto: `autoJob` is a queued job spec ({ refImages, voiceRefs, genre, mature,
   // hint, pacing, spokenLang, loraIds } plus a per-start `runId` — see startedAutoRuns) to
   // run headlessly on mount — see the mount effect below. `onAutoJobDone`
@@ -642,6 +647,12 @@ export default function ScriptwriterPanel({
   // triggers over every shot.
   const [activeLoraIds, setActiveLoraIds] = useState(() =>
     Array.isArray(initialState?.loraIds) ? initialState.loraIds : [])
+  // Active RefMods for this film (H3 only) — loaded on every clip by file + strength.
+  const [activeRefModIds, setActiveRefModIds] = useState(() =>
+    Array.isArray(initialState?.refModIds) ? initialState.refModIds : [])
+  const toggleRefMod = (id) => setActiveRefModIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  const activeRefMods = refModsByIds(refMods, activeRefModIds)
+  const refModsOn = promptTarget === 'minimax_h3' && targetTakesRefMods('minimax_h3')
   // Per-use strength override for an active style LoRA (id → number) — the
   // library's own `strength` is the shared default; overridden in turn by a
   // bound character's own `loraStrength` for that clip (see loraOverridesForShot).
@@ -824,6 +835,12 @@ export default function ScriptwriterPanel({
   const removeRefImage   = (id) => setRefImages(prev => prev.filter(im => im.id !== id))
   const addVoiceRef      = (d) => setVoiceRefs(prev => prev.length >= MAX_VOICE_REFS ? prev : [...prev, rehydrateVoiceRef(d)])
   const removeVoiceRef   = (id) => setVoiceRefs(prev => prev.filter(v => v.id !== id))
+  const setRefVoice = (im, voiceId) => {
+    if (!im?.linkId) return
+    setVoiceRefs(prev => prev.map(v => v.id === voiceId
+      ? { ...v, characterId: im.linkId }
+      : (v.characterId === im.linkId ? { ...v, characterId: '' } : v)))
+  }
   const setVoiceCharacter = (id, characterId) => setVoiceRefs(prev => prev.map(v => v.id === id ? { ...v, characterId } : v))
   const updateRefNote    = (id, note) => setRefImages(prev => prev.map(im => {
     if (im.id !== id) return im
@@ -991,7 +1008,7 @@ export default function ScriptwriterPanel({
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, mature, sourceMode, sceneCount, runtime, phase: phaseName,
-      promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths,
+      promptTarget, aspectRatio, pacing, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths, refModIds: activeRefModIds,
       // Full Auto's `idea` is a fixed ~180-char boilerplate instruction plus
       // the user's hint appended after it (see buildAutoIdea) — a plain
       // 80-char truncation of `idea` (as the History card does) always shows
@@ -1031,9 +1048,10 @@ export default function ScriptwriterPanel({
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
     // A Target runtime replaces the scene-count ceiling with a scene budget; Auto
     // (runtime 0) keeps the original "Maximum number of scenes" line byte for byte.
+    const refModCanon = promptTarget === 'minimax_h3' ? refModCanonBlock(activeRefMods, promptTarget) : ''
     const budget = sourceMode ? null : sceneBudget(runtime, sceneCap)
     const sceneLine = budget ? runtimeLine(budget) : `Maximum number of scenes: ${sceneCount}`
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\n${sceneLine}${formatLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\n${sceneLine}${formatLine}${nsfwLine}${refBlock}${refModCanon}\n\nOutput only valid JSON.`
     const phase1System = sourceMode ? SYSTEM_PROMPT_SCRIPTWRITER_SOURCE : SYSTEM_PROMPT_SCRIPTWRITER
     // DEV-only prompt inspection, independent of Admin mode below — lets a prod
     // (or non-admin) run be checked too. Open the browser console
@@ -1139,7 +1157,7 @@ export default function ScriptwriterPanel({
     const timeLine = timeBudget ? `\n${timeBudget}` : ''
     const framingHint = aspectFramingHint(aspectRes(aspectRatio))
     const framingLine = framingHint ? `\nFraming for delivery: ${framingHint}` : ''
-    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${timeLine}${framingLine}${nsfwLine}${refBlock}\n\nOutput only valid JSON.`
+    const userMsg = `Script:\n${JSON.stringify(script, null, 2)}${lookLine}${langLine}${pacingLine}${timeLine}${framingLine}${nsfwLine}${refBlock}${isH3 ? refModCanonBlock(activeRefMods, promptTarget) : ''}\n\nOutput only valid JSON.`
     const phase2System = isH3 ? SYSTEM_PROMPT_DIRECTOR_H3 : SYSTEM_PROMPT_DIRECTOR
     // See the note by window.__peLastPhase1Message above — same idea, one
     // phase later. This is the one to check when a scene the script clearly
@@ -1542,7 +1560,7 @@ export default function ScriptwriterPanel({
   // the full run and the per-clip "Rewrite" button on the video-prompts screen.
   const buildShotPromptMsg = (shot, refs, ratio) => {
     const loraPart = loraInstruction(lorasForShot(shot), promptTarget)
-    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + loraPart + nsfwLine
+    if (promptTarget === 'minimax_h3') return buildH3ShotMessage(shot, ratio, refs) + loraPart + refModInstruction(activeRefMods, promptTarget) + nsfwLine
     const action = shot.visual_action || shot.primary_beat || ''
     const ltxRefBlock = assembleRefBlock(refs, REF_HEADING_SHOT, script)
     const framingHint = aspectFramingHint(ratio)
@@ -1688,6 +1706,7 @@ export default function ScriptwriterPanel({
         setPromptTarget(DEFAULT_PROMPT_TARGET); setPacing(autoJob.pacing || 'tight')
         setSpokenLangId(autoJob.spokenLang || DEFAULT_SPOKEN_LANG)
         setActiveLoraIds(Array.isArray(autoJob.loraIds) ? autoJob.loraIds : [])
+        setActiveRefModIds(Array.isArray(autoJob.refModIds) ? autoJob.refModIds : [])
         setLoraStrengths((autoJob.loraStrengths && typeof autoJob.loraStrengths === 'object') ? autoJob.loraStrengths : {})
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
@@ -2746,6 +2765,7 @@ export default function ScriptwriterPanel({
             durationSec: shot?.duration || (isH3now ? 7 : 4),
             voices,
             loras: shot ? loraManifestEntries(loras, loraIdsForShot(shot), loraOverridesForShot(shot)) : [],
+            refMods: (shot && isH3now) ? refModManifestEntries(refMods, activeRefModIds) : [],
             outputName: `${runLabel}-clip-${pad(p.shotNumber || i + 1)}`,
             references,
             guides,
@@ -2921,6 +2941,17 @@ export default function ScriptwriterPanel({
   const STEP_PHASE = ['script', 'dircut', 'done']
 
   const isLoading = ['scripting', 'directing', 'prompting'].includes(phase) || !!reviewPhase1 || !!reviewPhase2
+  const refModPanel = refModsOn && (
+    <RefModPanel
+      refMods={refMods} activeIds={activeRefModIds} editable={!isLoading}
+      onToggle={toggleRefMod} onSaveRefMods={onSaveRefMods} comfyUrl={comfyCfg?.url || ''}
+      onDescribe={(base64, mediaType, r) => describeRefModImage(
+        async (model, content, sys) => (await callOllama(model, content, sys, cfg, 0.3)).text,
+        { model: visModel, base64, mediaType, hint: (r.note || r.name || '').trim() },
+        VISION_PROMPT_SCRIPTWRITER)}
+      hint={'(loaded on every clip by file + strength — no trigger word)'}
+    />
+  )
   const isH3 = promptTarget === 'minimax_h3'
   const H3_DURATIONS = [4, 5, 6, 7, 8, 10, 12, 15]
   const LTX_DURATIONS = [4, 8, 12, 16, 20]
@@ -3002,6 +3033,8 @@ export default function ScriptwriterPanel({
         preserves={MINIMAX_H3_PRESERVE_OPTIONS}
         onLinkType={setRefLinkType}
         onField={updateRefField}
+        voices={voiceRefs}
+        onVoice={setRefVoice}
         panelRef={refImagesPanelRef}
         h3={isH3}
       />
@@ -3115,6 +3148,7 @@ export default function ScriptwriterPanel({
                 strengths={loraStrengths} onStrengthChange={setLoraStrength}
                 hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
                 comfyUrl={comfyCfg.url} />
+                {refModPanel}
               <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
                 {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
               </button>
@@ -3180,10 +3214,17 @@ export default function ScriptwriterPanel({
                 strengths={loraStrengths} onStrengthChange={setLoraStrength}
                 hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
                 comfyUrl={comfyCfg.url} />
+                {refModPanel}
+              {refImages.length === 0 && activeRefMods.length > 0 && !activeRefMods.some(refModHasLook) && (
+                <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', margin: '0 0 8px' }}>
+                  ⚠ No images and no RefMod has a "Visible look" yet — the writer only knows the RefMod name. Add a
+                  description (Manage → 👁 Describe from image) or a story hint above.
+                </div>
+              )}
               <button
-                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, runtime: autoRuntime, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths })}
-                disabled={refImages.length === 0 || isLoading || captioning}
-                style={genBtn(refImages.length === 0 || isLoading || captioning)}>
+                onClick={() => onQueueAutoJob?.({ refImages: serializeRefImages(refImages), voiceRefs: serializeVoiceRefs(voiceRefs), genre, mature, hint: autoHint.trim(), pacing: autoPacing, runtime: autoRuntime, spokenLang: spokenLangId, loraIds: activeLoraIds, loraStrengths, refModIds: activeRefModIds })}
+                disabled={(refImages.length === 0 && activeRefMods.length === 0) || isLoading || captioning}
+                style={genBtn((refImages.length === 0 && activeRefMods.length === 0) || isLoading || captioning)}>
                 + Add to Queue (Full Auto)
               </button>
               {queueProps && (
@@ -3389,6 +3430,7 @@ export default function ScriptwriterPanel({
             strengths={loraStrengths} onStrengthChange={setLoraStrength}
             hint={'(style LoRAs for every clip — bind a character LoRA to its character below)'}
             comfyUrl={comfyCfg.url} />
+            {refModPanel}
 
           {/* Cast bible */}
           {Array.isArray(script.characters) && (

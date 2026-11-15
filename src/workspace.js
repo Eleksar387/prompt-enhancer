@@ -255,10 +255,27 @@ export function hasRequiredImages(w) {
   }
 }
 
+// Reference mode, no reference images, at least one active RefMod. (RefMods only
+// exist on targets that opt in — MiniMax H3 — so no target check is needed here.)
+export const refModOnly = (w) => w.frameMode === 'ref' && !(w.refImages || []).length
+  && Array.isArray(w.activeRefModIds) && w.activeRefModIds.length > 0
+
+// The frame mode the WRITER sees. A RefMod-only run is a text run (MODE: T2VA, the
+// plain system prompt, no <Subject>/<Picture> reference block) — Ref2VA with no
+// images would emit a reference skeleton with nothing to reference. The history
+// snapshot keeps the user's chosen frameMode; only the writer path uses this.
+export const effectiveFrameMode = (w) => (refModOnly(w) ? 'single' : w.frameMode)
+
 // Is there enough to generate at all? Image-first modes need their frames; every
 // other case needs either a typed scene or one image to describe.
 export function canGenerate(w) {
-  if (w.targetType !== 'image' && IMAGE_HUNGRY_MODES.has(w.frameMode)) return hasRequiredImages(w)
+  if (w.targetType !== 'image' && IMAGE_HUNGRY_MODES.has(w.frameMode)) {
+    // Reference mode with no reference images is still a valid run when RefMods are
+    // active: they load the subject into the model, so the typed scene (plus the
+    // RefMods' own visible-look text) is the brief — see effectiveFrameMode.
+    if (w.frameMode === 'ref' && !hasRequiredImages(w) && refModOnly(w)) return !!(w.scene || '').trim()
+    return hasRequiredImages(w)
+  }
   return !!(w.scene || '').trim() || (w.targetType === 'image' ? stillImageRefs(w).length > 0 : !!w.firstImg)
 }
 
