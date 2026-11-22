@@ -41,8 +41,6 @@ import QueuePanel from './components/QueuePanel'
 import HistoryPanel from './components/HistoryPanel'
 import { useHistoryFilters } from './hooks/useHistoryFilters'
 import { useAdminReview } from './hooks/useAdminReview'
-import { h3ProfileFor } from './modelProfiles'
-import { normalizeH3Sections, musicIsOff } from './h3Normalize'
 import { useRenderSettings } from './hooks/useRenderSettings'
 import { useQueue } from './hooks/useQueue'
 import { useImageSlots } from './hooks/useImageSlots'
@@ -1234,12 +1232,7 @@ export default function App() {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
     // shape this target's output format expects. RefMods have no trigger to
     // repair — they load via file/strength alone (see src/refmods.js).
-    // Small writer models (profile 'compact') get their H3 section order/separators
-    // repaired in code; every other model's output is left exactly as written.
-    const fixSections = (raw) => (target === 'minimax_h3' && h3ProfileFor(effectiveWriter) === 'compact' && h3Mode)
-      ? normalizeH3Sections(raw, h3Mode, { musicOff: musicIsOff(music), refs: frameMode === 'ref' ? imgs.refImages.map((r, i) => ({ role: r.role, preserve: r.preserve, caption: extractRefImageCaption(refCaptionBlockRef.current, i + 1) || '' })) : null })
-      : raw
-    return withLoraTriggers(target === 'minimax_h3' ? fixSections(stripCrossCutTags(raw)) : raw, activeLoras, target)
+    return withLoraTriggers(target === 'minimax_h3' ? stripCrossCutTags(raw) : raw, activeLoras, target)
   }
 
   const runWriterCall = async ({ user, system, snapshot, h3Mode = null }) => {
