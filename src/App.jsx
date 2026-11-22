@@ -52,7 +52,7 @@ import {
   refAudiosFromSnap,
 } from './workspace'
 import { buildSingleDirectorTimeline } from './directorExport'
-import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions, knownRefCaption } from './adapt'
+import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions, knownRefCaption, buildRefineUserText, REFINE_SYSTEM_ADDENDUM } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
 import HighlightedTextarea from './components/HighlightedTextarea'
 import { stripCrossCutTags, sceneRequestsSpeech, wordBudget } from './dialogueSpans'
@@ -92,6 +92,33 @@ const blobToBase64 = (blob) => new Promise((resolve, reject) => {
   fr.onerror = () => reject(fr.error)
   fr.readAsDataURL(blob)
 })
+
+// One-line "tell the AI what to change" bar under a result (prompt refinement).
+function RefineBar({ busy, canUndo, error, onRefine, onUndo }) {
+  const [draft, setDraft] = useState('')
+  const go = () => { if (draft.trim() && !busy) { onRefine(draft); setDraft('') } }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)} disabled={busy}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); go() } }}
+          placeholder="Tell the AI what to change… (e.g. make it moodier, drop the dialogue, add rain)"
+          style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '7px 10px', fontSize: 13.5, color: 'var(--pe-ink)', outline: 'none' }} />
+        <button onClick={go} disabled={busy || !draft.trim()}
+          style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 8, border: '1px solid var(--pe-accent-line)', background: 'none', color: (busy || !draft.trim()) ? 'var(--pe-ink-3)' : 'var(--pe-accent-ink)', fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : (!draft.trim() ? 'not-allowed' : 'pointer') }}>
+          {busy ? 'Refining…' : '✦ Refine'}
+        </button>
+        {canUndo && !busy && (
+          <button onClick={onUndo} title="Restore the text from before the last refinement"
+            style={{ flexShrink: 0, padding: '6px 12px', borderRadius: 8, border: '1px solid var(--pe-line)', background: 'none', color: 'var(--pe-ink-3)', fontSize: 13, cursor: 'pointer' }}>
+            ↶ Undo
+          </button>
+        )}
+      </div>
+      {error && <div style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-danger)' }}>Refine failed: {error}</div>}
+    </div>
+  )
+}
 
 const resultTA = (target) => (target === 'minimax_h3' ? HighlightedTextarea : 'textarea')
 
@@ -1199,7 +1226,8 @@ export default function App() {
   //
   // `saved` is set alongside `text` because the hand-edit detector (resultsEdited)
   // compares the two. A null `snapshot` means "don't record this in history".
-  const runWriterCall = async ({ user, system, snapshot, h3Mode = null }) => {
+  // Shared output repair for generation AND refinement.
+  const repairWriterOutput = (raw, h3Mode) => {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
     // shape this target's output format expects. RefMods have no trigger to
     // repair — they load via file/strength alone (see src/refmods.js).
@@ -1208,7 +1236,11 @@ export default function App() {
     const fixSections = (raw) => (target === 'minimax_h3' && h3ProfileFor(effectiveWriter) === 'compact' && h3Mode)
       ? normalizeH3Sections(raw, h3Mode, { musicOff: musicIsOff(music), refs: frameMode === 'ref' ? imgs.refImages.map(r => ({ role: r.role, preserve: r.preserve })) : null })
       : raw
-    const repair = (raw) => withLoraTriggers(target === 'minimax_h3' ? fixSections(stripCrossCutTags(raw)) : raw, activeLoras, target)
+    return withLoraTriggers(target === 'minimax_h3' ? fixSections(stripCrossCutTags(raw)) : raw, activeLoras, target)
+  }
+
+  const runWriterCall = async ({ user, system, snapshot, h3Mode = null }) => {
+    const repair = (raw) => repairWriterOutput(raw, h3Mode)
 
     if (outputCount === 1) {
       const lbl = effectiveWriter
@@ -1765,6 +1797,34 @@ export default function App() {
 
   const copy = (idx) => { navigator.clipboard.writeText(results[idx].text); setCopied(idx); setTimeout(() => setCopied(null), 2000) }
   const editResult = (idx, value) => setResults(prev => prev.map((r, i) => i === idx ? { ...r, text: value } : r))
+
+  // Refinement: the user says what to change, the writer revises the finished
+  // prompt in place. Previous texts go on r.refineStack for ↶ Undo. `saved` is left
+  // alone, so a refined result shows up as "edited" (💾 Save edited prompt).
+  const refineResult = async (idx, instruction) => {
+    const r = resultsRef.current[idx]
+    if (!r || !r.text || !instruction.trim() || r.refining) return
+    setResults(prev => prev.map((x, i) => i === idx ? { ...x, refining: true, refineError: '' } : x))
+    try {
+      const { text: raw } = await callOllama(
+        effectiveWriter,
+        buildRefineUserText({ currentPrompt: r.text, instruction, scene, caption, h3Mode: r.h3Mode, targetLabel: t.label }),
+        systemPromptFor(t, frameMode, cfg.craftRules !== false, effectiveWriter) + REFINE_SYSTEM_ADDENDUM,
+        cfg, cfg.temperature)
+      const text = repairWriterOutput(raw, r.h3Mode)
+      if (!text.trim()) throw new Error('The model returned an empty prompt.')
+      setResults(prev => prev.map((x, i) => i === idx ? { ...x, text, refining: false, refineStack: [...(x.refineStack || []), x.text] } : x))
+      notifyDone('Prompt refined', t.label || '')
+    } catch (e) {
+      setResults(prev => prev.map((x, i) => i === idx ? { ...x, refining: false, refineError: e.message } : x))
+    }
+    unloadAfterRun(cfg)
+    return true
+  }
+  const undoRefine = (idx) => setResults(prev => prev.map((x, i) => {
+    if (i !== idx || !x.refineStack?.length) return x
+    return { ...x, text: x.refineStack[x.refineStack.length - 1], refineStack: x.refineStack.slice(0, -1), refineError: '' }
+  }))
 
   const writing = results.some(r => r.loading)
   const isLoading = visionBusy || writing
@@ -2886,6 +2946,10 @@ export default function App() {
               {target === 'minimax_h3' && r.text && !r.loading && !r.error && (
                 <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={[...imgs.refImages, ...refModVirtual.filter(l => l.tag === 'Subject').map(l => ({ role: l.role }))]}
                   anchors={(imgs.refImages || []).map((im, i) => ({ pictureN: i + 1, atSeconds: im.atSeconds })).filter(a => a.atSeconds != null)} />
+              )}
+              {r.text && !r.loading && !r.error && (
+                <RefineBar key={`refine-${i}-${r.label}`} busy={!!r.refining} canUndo={!!r.refineStack?.length} error={r.refineError}
+                  onRefine={(text) => refineResult(i, text)} onUndo={() => undoRefine(i)} />
               )}
               {r.imgError && <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Render failed: {r.imgError}</div>}
               {r.images?.length > 0 && (

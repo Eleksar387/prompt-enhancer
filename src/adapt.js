@@ -490,3 +490,25 @@ export function buildWriterUserText({
     : (frameDescription ? 'No scene description provided — propose ONE fitting cinematic moment of motion that suits the frame.' : 'No scene description provided.')
   return `${frame}Target duration: ${duration}\n\n${scenePart}${stylePart}${lengthPart}`
 }
+
+// ── Prompt refinement ────────────────────────────────────────────────────────
+// A follow-up edit of a FINISHED prompt: the user says what to change, the writer
+// revises the existing text. Appended to the target's normal system prompt so the
+// output format rules (sections, tags, NEGATIVE blocks, LoRA triggers) stay in force.
+export const REFINE_SYSTEM_ADDENDUM = `
+
+REFINEMENT MODE. You are NOT writing a new prompt from scratch. The user message contains a finished prompt and a change request. Apply ONLY the requested change; keep every other detail, field label, tag, number and trigger word exactly as it is. Return the complete revised prompt in the identical output format as the current prompt, with no commentary, no explanation and no code fence.`
+
+export function buildRefineUserText({ currentPrompt, instruction, scene = '', caption = '', h3Mode = null, targetLabel = '' }) {
+  const ctx = []
+  if (scene && scene.trim()) ctx.push(`Original scene / idea:\n${scene.trim()}`)
+  if (caption && caption.trim()) ctx.push(`Reference description (from the input image(s)):\n${caption.trim()}`)
+  return [
+    targetLabel ? `Target: ${targetLabel}` : '',
+    h3Mode ? `MODE: ${h3Mode}` : '',
+    ctx.length ? `Context the prompt was written from (for reference — do not re-derive the prompt from it):\n\n${ctx.join('\n\n')}` : '',
+    `CURRENT PROMPT:\n${currentPrompt.trim()}`,
+    `CHANGE REQUEST:\n${instruction.trim()}`,
+    'Return the full revised prompt now.',
+  ].filter(Boolean).join('\n\n')
+}

@@ -295,6 +295,10 @@ Each thumbnail is `draggable`; `onDragStart` calls `setDragImage({url,mediaType,
 
 Whenever an input image is loaded (any `frameMode`, any image-capable target), a "⇪ Copy to ComfyUI input" button appears next to the image panel(s), alongside a small ComfyUI server URL field. Clicking it calls `uploadImage()` in `src/comfy.js` for each currently-loaded image (reusing the same `currentImages()` helper the ZIP export uses for naming/ordering), which `POST`s each one to ComfyUI's own `/upload/image` endpoint — landing them in ComfyUI's `input/` folder, ready to pick from a `LoadImage` node's dropdown. Like Ollama's `OLLAMA_ORIGINS=*`, this needs ComfyUI started with `--enable-cors-header` for the browser to reach it. This is intentionally minimal — no workflow JSON, no prompt injection, no queueing; it only moves image bytes into ComfyUI's input folder.
 
+### Prompt refinement (✦ Refine)
+
+Under every finished result (standard pipeline, all targets) a `RefineBar` (`App.jsx`) takes a free-text change request ("make it moodier, drop the dialogue"). `refineResult(idx, instruction)` makes one `callOllama` with the target's normal system prompt + `REFINE_SYSTEM_ADDENDUM` and a user message from `buildRefineUserText` (`src/adapt.js` — current prompt incl. hand-edits, the request, plus scene/caption/MODE as context). Output goes through `repairWriterOutput` (the LoRA-trigger / H3-section repair shared with `runWriterCall`) and replaces that result's text; previous texts stack on `r.refineStack` for ↶ Undo. `saved` is untouched, so a refined result counts as edited and the existing 💾 Save edited prompt button persists it as a NEW history entry (no auto-save). Not in the Scriptwriter (it has per-item ✦ Rewrite) and not paused by Admin mode. `test/refine.test.js`.
+
 ### Prompt length control
 
 `PROMPT_LENGTH_OPTIONS` (Concise / Standard / Detailed) in `constants.js` maps to `PROMPT_LENGTH_INJECT` — instruction strings appended to the writer's user message in `runWriter()` as `lengthPart`. Default is `'standard'`. The `concise` key injects nothing (lets the system prompt's native length guidance stand).
