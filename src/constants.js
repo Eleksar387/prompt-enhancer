@@ -1669,7 +1669,7 @@ integrated_multimodal_description: [Shot 1] …
 overall_soundscape: …
 
 non_diegetic_music: …
-Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive").
+Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive"). Use it only to frame the shots — never write the ratio, resolution or orientation ("9:16", "portrait", "vertical frame") in the prompt text.
 
 I2VA (one FIRST FRAME description given):
 Begin with exactly:
@@ -1989,7 +1989,7 @@ export const TARGETS = {
     },
     slug: 'minimax', clipNoun: 'clip', clipShort: 'H3',
     clipSystem: SYSTEM_PROMPT_MINIMAX_H3,
-    defaultRefRatio: 'port916',
+    defaultRefRatio: 'land169',
     // The one prose field a missing LoRA trigger may be added to. Never
     // summary, subject_definitions, retention_analysis or either sound field,
     // and never inside quotes — dialogue and on-screen text alike are spoken

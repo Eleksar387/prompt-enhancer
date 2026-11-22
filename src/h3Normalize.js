@@ -48,6 +48,7 @@ export function normalizeH3Sections(text, mode, { musicOff = false, refs = null 
     const sec = sections.get(label)
     let body = sec.lines.join('\n').trim()
     if (label === 'non_diegetic_music' && musicOff) body = 'N/A'
+    if (label === 'detailed_description' || label === 'integrated_multimodal_description') body = stripRatioEcho(body)
     if (mode === 'Ref2VA' && refs?.length) {
       if (label === 'subject_definitions') body = ensurePictureLines(body, refs, 'def')
       if (label === 'retention_analysis') body = ensurePictureLines(body, refs, 'ret')
@@ -71,10 +72,22 @@ const PICTURE_ONLY = { environment: 'location', style: 'style', pose_composition
 const markerFor = (preserve) => (MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === preserve) || MINIMAX_H3_PRESERVE_OPTIONS[1]).marker
 const hintFor = (preserve) => (MINIMAX_H3_PRESERVE_OPTIONS.find(p => p.id === preserve) || MINIMAX_H3_PRESERVE_OPTIONS[1]).hint
 
-function defLine(kind, n) {
-  if (kind === 'location') return `<Picture ${n}> is the location reference, guiding the layout, setting and lighting of the place as shown in the reference image.`
-  if (kind === 'style') return `<Picture ${n}> is the style reference, guiding the palette, lighting and look as shown in the reference image.`
-  return `<Picture ${n}> is a storyboard reference, defining viewpoint, subject placement and shot order.`
+// First sentence(s) of a reference's description, ≤ max chars — what the image SHOWS,
+// so a fallback line describes the picture instead of only pointing at it.
+export function captionGist(caption, max = 220) {
+  const t = String(caption || '').replace(/\s+/g, ' ').trim()
+  if (!t) return ''
+  const m = t.match(/^.{20,}?[.!?](?=\s|$)/)
+  let g = m ? m[0] : t
+  if (g.length > max) g = g.slice(0, max).replace(/[\s,;:—-]+\S*$/, '') + '…'
+  return g.replace(/[.!?]$/, '')
+}
+
+function defLine(kind, n, gist) {
+  const what = gist ? ` — ${gist} —` : ''
+  if (kind === 'location') return `<Picture ${n}> is the location reference${what} guiding the layout, setting and lighting of the place.`
+  if (kind === 'style') return `<Picture ${n}> is the style reference${what} guiding the palette, lighting and look.`
+  return `<Picture ${n}> is a storyboard reference${what} defining viewpoint, subject placement and shot order.`
 }
 
 function ensurePictureLines(body, refs, which) {
@@ -85,7 +98,7 @@ function ensurePictureLines(body, refs, which) {
     const tag = `<Picture ${i + 1}>`
     const at = lines.findIndex(l => l.trimStart().startsWith(tag))
     if (which === 'def') {
-      if (at === -1) lines.push(defLine(kind, i + 1))
+      if (at === -1) lines.push(defLine(kind, i + 1, captionGist(r.caption)))
       return
     }
     const marker = markerFor(r.preserve)
@@ -94,6 +107,16 @@ function ensurePictureLines(body, refs, which) {
     lines[at] = lines[at].replace(/^(\s*<Picture \d+>[^:\n]*:\s*)[A-Za-z_]+(\s+-\s)/, `$1${marker}$2`)
   })
   return lines.join('\n').trim()
+}
+
+// The ratio is a render setting, not prompt content: drop "9:16 portrait" etc. from the
+// opening style text (everything before [Shot 1]) when it modifies shot/video/clip.
+const RATIO_ECHO_RE = /\b\d{1,2}:\d{1,2}\s+(?:(?:portrait|landscape|vertical|horizontal)\s+)?(?=(?:shot|video|clip|frame|format)\b)/gi
+export function stripRatioEcho(body) {
+  const i = body.search(/\[Shot 1\]/)
+  const head = i === -1 ? body : body.slice(0, i)
+  const fixed = head.replace(RATIO_ECHO_RE, '')
+  return fixed === head ? body : fixed + (i === -1 ? '' : body.slice(i))
 }
 
 // The user's Audience-only music note asks for no music at all.

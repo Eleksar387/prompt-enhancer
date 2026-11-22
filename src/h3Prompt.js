@@ -100,7 +100,7 @@ integrated_multimodal_description: [Shot 1] …
 overall_soundscape: …
 
 non_diegetic_music: …
-Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive").`
+Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive"). Use it only to frame the shots — never write the ratio, resolution or orientation ("9:16", "portrait", "vertical frame") in the prompt text.`
 export const SECTION_I2VA = `I2VA (one FIRST FRAME description given):
 Begin with exactly:
 For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
@@ -168,7 +168,7 @@ Banned words, anywhere in the prompt including the style opening: ${CRAFT_CLICHE
 
 const rule1 = () => `1. Write structural prose in English, present tense, in playback order. Spoken dialogue carries a leading [Language] tag and is written in the "Primary language:" language (rule 6). Visible on-screen text is the opposite: reproduce every sign, label, subtitle or banner verbatim in its original language inside English double quotes, with no [Language] tag, and name its typographic treatment and position in frame (e.g. condensed all-caps, lower third); never merely describe it, and never invent text that should not appear.`
 
-const rule1a = (isRef) => `1a. STYLE OPENING. Name the visual style at the very start in plain terms (live-action, 2D-animated, 3D CG, claymation, watercolor, vintage film, or the closest equivalent), followed by the light, palette and lens character. ${isRef
+const rule1a = (isRef) => `1a. STYLE OPENING. Name the visual style at the very start in plain terms (live-action, 2D-animated, 3D CG, claymation, watercolor, vintage film, or the closest equivalent), followed by the light, palette and lens character — never the aspect ratio, resolution or portrait/landscape orientation. ${isRef
   ? 'Give it one or two sentences of its own BEFORE [Shot 1] at the top of detailed_description — e.g. "The target video is live-action, with soft window light and a slightly desaturated colour palette."'
   : '[Shot 1] opens with the style tokens and then the opening composition — e.g. "[Shot 1] Live-action, a medium-wide shot frames …".'} Derive it from the reference image in the keyframe modes, otherwise from the "Film look:" line or the scene text; fold the look into the visuals and never restate it as on-screen text.`
 

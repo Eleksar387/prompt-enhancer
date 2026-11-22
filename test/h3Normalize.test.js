@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeH3Sections, musicIsOff } from '../src/h3Normalize'
+import { normalizeH3Sections, musicIsOff, captionGist, stripRatioEcho } from '../src/h3Normalize'
 import { systemPromptFor, TARGETS } from '../src/constants'
 import { buildH3SystemV2 } from '../src/h3Prompt'
 import { h3ProfileFor } from '../src/modelProfiles'
@@ -89,5 +89,33 @@ describe('Ref2VA reference coverage', () => {
   })
   it('is a no-op without refs', () => {
     expect(normalizeH3Sections(text, 'Ref2VA')).toContain('inspiration - sets the view')
+  })
+})
+
+describe('fallback Picture lines describe the image', () => {
+  const cap = 'Aerial top-down view of a dense allotment-garden neighborhood on a strict grid. Roofs are dark gray.'
+  it('captionGist takes the first sentence without its period', () => {
+    expect(captionGist(cap)).toBe('Aerial top-down view of a dense allotment-garden neighborhood on a strict grid')
+    expect(captionGist('')).toBe('')
+    expect(captionGist('x'.repeat(400), 50).length).toBeLessThanOrEqual(51)
+  })
+  it('a missing location line carries the caption gist', () => {
+    const out = normalizeH3Sections('subject_definitions:\nA\n\nretention_analysis:\nB', 'Ref2VA', { refs: [{ role: 'environment', preserve: 'inspiration', caption: cap }] })
+    expect(out).toContain('<Picture 1> is the location reference — Aerial top-down view of a dense allotment-garden neighborhood on a strict grid — guiding')
+  })
+  it('without a caption it falls back to the generic line', () => {
+    const out = normalizeH3Sections('subject_definitions:\nA\n\nretention_analysis:\nB', 'Ref2VA', { refs: [{ role: 'environment', preserve: 'inspiration' }] })
+    expect(out).toContain('<Picture 1> is the location reference guiding')
+  })
+})
+
+describe('ratio echo', () => {
+  it('drops "9:16 portrait" from the opening style text only', () => {
+    expect(stripRatioEcho('This is a 9:16 portrait shot, filmed in live-action.\n\n[Shot 1] (0.00–4.00s) A 16:9 sign hangs.'))
+      .toBe('This is a shot, filmed in live-action.\n\n[Shot 1] (0.00–4.00s) A 16:9 sign hangs.')
+  })
+  it('leaves clean text byte-identical', () => {
+    const t = 'Live-action, warm palette.\n\n[Shot 1] (0.00–4.00s) x'
+    expect(stripRatioEcho(t)).toBe(t)
   })
 })

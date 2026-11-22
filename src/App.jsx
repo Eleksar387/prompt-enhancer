@@ -52,7 +52,7 @@ import {
   refAudiosFromSnap,
 } from './workspace'
 import { buildSingleDirectorTimeline } from './directorExport'
-import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions, knownRefCaption, buildRefineUserText, REFINE_SYSTEM_ADDENDUM } from './adapt'
+import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions, knownRefCaption, extractRefImageCaption, buildRefineUserText, REFINE_SYSTEM_ADDENDUM } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
 import HighlightedTextarea from './components/HighlightedTextarea'
 import { stripCrossCutTags, sceneRequestsSpeech, wordBudget } from './dialogueSpans'
@@ -246,7 +246,7 @@ export default function App() {
   const [soundscape, setSoundscape]   = useState('')
   const [music, setMusic]             = useState('')
   const [h3RatioId, setH3RatioId]     = useState(
-    TARGETS['minimax_h3'].defaultFrameMode === 'ref' ? 'port916' : ''
+    'land169'
   )
   const [cameraOpen, setCameraOpen]   = useState(false)
   const [flashId, setFlashId]         = useState(null)
@@ -1226,6 +1226,9 @@ export default function App() {
   //
   // `saved` is set alongside `text` because the hand-edit detector (resultsEdited)
   // compares the two. A null `snapshot` means "don't record this in history".
+  // The reference-description block the writer was given (set in runWriter): the
+  // output repair reads it from here because a run's closure predates its own vision step.
+  const refCaptionBlockRef = useRef('')
   // Shared output repair for generation AND refinement.
   const repairWriterOutput = (raw, h3Mode) => {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
@@ -1234,7 +1237,7 @@ export default function App() {
     // Small writer models (profile 'compact') get their H3 section order/separators
     // repaired in code; every other model's output is left exactly as written.
     const fixSections = (raw) => (target === 'minimax_h3' && h3ProfileFor(effectiveWriter) === 'compact' && h3Mode)
-      ? normalizeH3Sections(raw, h3Mode, { musicOff: musicIsOff(music), refs: frameMode === 'ref' ? imgs.refImages.map(r => ({ role: r.role, preserve: r.preserve })) : null })
+      ? normalizeH3Sections(raw, h3Mode, { musicOff: musicIsOff(music), refs: frameMode === 'ref' ? imgs.refImages.map((r, i) => ({ role: r.role, preserve: r.preserve, caption: extractRefImageCaption(refCaptionBlockRef.current, i + 1) || '' })) : null })
       : raw
     return withLoraTriggers(target === 'minimax_h3' ? fixSections(stripCrossCutTags(raw)) : raw, activeLoras, target)
   }
@@ -1774,6 +1777,7 @@ export default function App() {
       refRoles: t.type === 'image' && hasImg ? stillImageRefs(workspace).map(imageRoleOf) : null,
     })
 
+    refCaptionBlockRef.current = frameDescription || ''
     const snapshot = buildSnapshot(frameDescription, hasImg, outputCount)
     // Captured now, from the exact frameMode/hasImg this message was built
     // for — not recomputed later from possibly-changed live state (see
@@ -1925,11 +1929,6 @@ export default function App() {
           <button key={p.id} onClick={() => setH3RatioId(p.id)} title={p.note} style={btn(h3RatioId === p.id)}>{p.label}</button>
         ))}
       </div>
-      {frameMode === 'ref' && (
-        <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '6px 0 0', lineHeight: 1.5 }}>
-          Ref2VA renders best at 9:16 portrait (the validated short-drama format).
-        </p>
-      )}
       {!h3RatioId && (
         <p style={{ fontSize: 13, color: 'var(--pe-warn)', margin: '4px 0 0', lineHeight: 1.5 }}>
           No ratio picked — defaulting to {selectedRatio.label}.
