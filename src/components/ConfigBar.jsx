@@ -185,6 +185,18 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
                 onChange={e => setCfg({ ...cfg, temperature: parseFloat(e.target.value) || 0 })}
               />
             </div>
+            <div style={{ width: 130 }}>
+              <label style={lbl}>Writer top_p</label>
+              <input
+                style={inputStyle} type="number" min={0} max={1} step={0.05}
+                value={cfg.topP ?? ''} placeholder="default"
+                title="Blank = provider default. Some Claude models reject temperature and top_p together (the app then retries without top_p)."
+                onChange={e => {
+                  const v = parseFloat(e.target.value)
+                  setCfg({ ...cfg, topP: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined })
+                }}
+              />
+            </div>
             <div style={{ width: 150 }}>
               <label style={lbl}>Max output tokens</label>
               <input

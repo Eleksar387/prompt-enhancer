@@ -93,11 +93,14 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   // on demand rather than assuming it up front, since guessing wrong (as a prior version
   // of this code did for Langdock) silently truncates output instead of erroring.
   let maxTokensKey = 'max_tokens'
-  const doFetch = (includeTemperature, maxTokens) => fetch(`${base}/chat/completions`, {
+  // Optional nucleus sampling; blank/unset = not sent (provider default).
+  const topPValue = typeof cfg.topP === 'number' && cfg.topP > 0 && cfg.topP <= 1 ? cfg.topP : null
+  const doFetch = (includeTemperature, maxTokens, includeTopP = true) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
       model, messages, [maxTokensKey]: maxTokens, stream: false,
       ...(includeTemperature ? { temperature } : {}),
+      ...(includeTopP && topPValue != null ? { top_p: topPValue } : {}),
       ...formatParam,
     }),
   })
@@ -117,7 +120,9 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     // Not every provider nests its error under `error.message` (OpenAI/OpenRouter's
     // shape) — Langdock's own errors are a top-level `{ message }`.
     try { const j = await res.clone().json(); msg = (j.error && (j.error.message || j.error)) || j.message || '' } catch {}
-    if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
+    if (topPValue != null && /top_p/i.test(msg) && /deprecated|not supported|unsupported|cannot both|only one|both/i.test(msg)) {
+      try { res = await doFetch(true, baseMaxTokens, false) } catch {}
+    } else if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
       try { res = await doFetch(false, baseMaxTokens) } catch {}
     } else if (/max_completion_tokens/i.test(msg) && maxTokensKey === 'max_tokens') {
       maxTokensKey = 'max_completion_tokens'
@@ -178,6 +183,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
         body: JSON.stringify({
           model, messages, [maxTokensKey]: baseMaxTokens, stream: false,
           temperature: Math.min(typeof temperature === 'number' ? temperature : 0.7, 0.3),
+          ...(topPValue != null ? { top_p: topPValue } : {}),
           ...(isCloud(cfg.base) ? {} : { frequency_penalty: 0.3 }),
           ...formatParam,
         }),
