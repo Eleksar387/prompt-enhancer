@@ -25,7 +25,7 @@ const MODES_FOR = {
 }
 const modesFor = (frameMode) => MODES_FOR[frameMode] || MODES_FOR.single
 
-const R3A = `3a. EXPRESSION-BEAT DENSITY — the single highest-impact rule for performance. One shot holds at most TWO facial /
+export const R3A = `3a. EXPRESSION-BEAT DENSITY — the single highest-impact rule for performance. One shot holds at most TWO facial /
    emotional beats before H3 collapses them toward an average and the face goes still, silently, with no error.
    Before writing, count the expression beats in each shot: a brow move, an eye move, a lip move, a gaze shift, or
    a held breath each count as one. If an emotional moment needs more than two, split it into separate
@@ -35,11 +35,11 @@ const R3A = `3a. EXPRESSION-BEAT DENSITY — the single highest-impact rule for 
    character with no dialogue still performs — for them, favour large-body beats over face-only ones: a long
    exhale with the shoulders dropping, a hand wiping on a thigh then gripping the back of the neck, the head
    pulling back a few centimetres, the grip on a held object loosening.`
-const R7 = `7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
+export const R7 = `7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
    Write 1–4 sentences as a single continuous paragraph. Use N/A here only when complete silence across the
    whole video was explicitly asked for. Include at least one specific sound tied to a moment in the clip (a breath caught, a bare foot on wet tile, a door) and say where it lands.`
-const R8 = `8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
+export const R8 = `8. non_diegetic_music: instrumentation, tempo, rhythm, dynamic arc — audience-only. Use the user's "Audience-only
    music" notes if given. If that field is empty, judge from the scene whether music serves it — if not, or if the
    field says "none"/"silence"/no music, output exactly N/A. Keep it to 1–3 sentences and name only what is
    audible — instrumentation, tempo, rhythm, dynamic change. No abstract mood words and no explaining what the
@@ -89,11 +89,11 @@ const R9_13 = `9. EMOTION IS OBSERVABLE ACTION, NEVER A LABEL. Never pass an emo
    screen, bound it with an observable limit and avoid open-ended verbs ("spreading", "widening"). Never tie a
    messy substance to a surface that must stay clean with a preposition (coffee "around" / "on" / "through" a
    figurine) — state a gap between them and add that the clean surface is dry.`
-const R14_15 = `14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
+export const R14_15 = `14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
    decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
    plan, or ending condition.
 15. Return ONLY the finished H3 prompt — no headers, no explanation, no markdown fences. KEEP THE FIELD LABELS: the output must start with a literal field label — "integrated_multimodal_description:" for T2VA / I2VA / L2VA / FL2VA, or "subject_definitions:" for Ref2VA. Never begin the output with a bare "[Shot 1]" or with description prose — a missing first label is malformed and breaks the parser. Every field below (overall_soundscape:, non_diegetic_music:, and the Ref2VA sections) keeps its label too.`
-const SECTION_T2VA = `T2VA (no reference image):
+export const SECTION_T2VA = `T2VA (no reference image):
 Output exactly, in order — the first line MUST begin with the literal token "integrated_multimodal_description:":
 integrated_multimodal_description: [Shot 1] …
 
@@ -101,19 +101,19 @@ overall_soundscape: …
 
 non_diegetic_music: …
 Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive").`
-const SECTION_I2VA = `I2VA (one FIRST FRAME description given):
+export const SECTION_I2VA = `I2VA (one FIRST FRAME description given):
 Begin with exactly:
 For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
 Then the same three fields as T2VA. Develop forward from the given first frame — preserve its identity, clothing,
 objects, composition, and spatial anchors; do not restate its static contents, only what happens next.`
-const SECTION_L2VA = `L2VA (one LAST FRAME description given):
+export const SECTION_L2VA = `L2VA (one LAST FRAME description given):
 Begin with exactly:
 How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second
 mark of the target video.
 Replace N with the actual final shot number you use and S.SS with the given target duration formatted to two
 decimals (e.g. "8 seconds" → "8.00"). Then the same three fields. Infer a plausible earlier state and an explicit
 action/transition path that converges exactly onto the given last frame.`
-const SECTION_FL2VA = `FL2VA (a FIRST FRAME + LAST FRAME + CHANGE description given):
+export const SECTION_FL2VA = `FL2VA (a FIRST FRAME + LAST FRAME + CHANGE description given):
 Begin with exactly:
 How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second
 mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.
@@ -151,7 +151,7 @@ const REF_SOUND_TAIL = `overall_soundscape / non_diegetic_music: as above. When 
 relationship in whichever of the two matches the audible layer — ambience and effects in overall_soundscape,
 audience-only score in non_diegetic_music — and never repeat dialogue or lyrics in either.`
 
-const header = (modes) => `You are a specialist prompt compiler for MiniMax H3, a multimodal model that generates a short video with
+export const header = (modes) => `You are a specialist prompt compiler for MiniMax H3, a multimodal model that generates a short video with
 synchronized native stereo audio from text and, optionally, image references.
 
 INPUT
@@ -188,19 +188,22 @@ const rule6 = (isRef) => `6. Dialogue.
    FORMAT: the tag sits immediately before the quoted words and nothing else goes inside the quotes; speaker identity, delivery and acting go in prose around the line — e.g. the engineer, in a clear, steady voice with an edge of defiance (S1), says: [English] "Alignment complete." Use only these tags: [Arabic] [Chinese] [English] [French] [German] [Italian] [Japanese] [Korean] [Portuguese] [Russian] [Spanish].
    SPEAKERS: stable IDs in order of first appearance (S1, S2…; infer from line breaks or "Name:" prefixes), (S1,S2) for simultaneous speech; none for anyone who never speaks or vocalises. At first appearance fix a stable voice (character type, age, gender, on- or off-screen, pitch, timbre, rate, accent) and, where the beat calls for it, pair a vocal-quality word (steady, clear, low, rough) with an emotional-coloring one (defiant, wary, tender, weary).
    VOICEOVER: drop a "(V.O.)" suffix before quoting; write "says in an off-screen voiceover" and state that the visible character's lips stay closed, even if she is shown doing something else.
-   TIMING: H3 spreads mouth motion across the ENTIRE shot the speaker is in, so a shot that carries a line contains only that delivery, start to end. Put no post-speech beat (swallow, blink, glance, settle, lip-closure) inside it — place those at the cut or in the next shot; only the clip's final shot, if it carries the last line, gets a lips-closing beat as the line ends, with the action or camera move carrying on past it. A line also starves its neighbours of screen time, so keep continuity-critical staging in silent shots. A line cut off by the video's end: <cutoff>. A line continuing across a cut: <scenetrans> at both connection points, plus prose ("carries over from the previous shot").
+   TIMING: H3 spreads mouth motion across the ENTIRE shot the speaker is in, so a shot that carries a line contains only that delivery, start to end. Put no post-speech beat (swallow, blink, glance, settle, lip-closure) inside it — place those at the cut or in the next shot; only the clip's final shot, if it carries the last line, gets a lips-closing beat as the line ends, with the action or camera move carrying on past it. A line also starves its neighbours of screen time, so keep continuity-critical staging in silent shots. Never split one line across a cut — each line lives wholly inside one shot — and never write <scenetrans> or <cutoff> tags.
    QUALITY: a line does work — it threatens, teases, deflects, reveals, answers a different question or flips who has the upper hand — and never describes what the viewer can already see. Avoid the stock invitation or command line ("come here", "touch me", "I'm waiting for you" and their translations): write what THIS character would say to THIS person now, with a reason behind it. Keep it short enough to fit its shot at an unhurried pace (about 2–3 words per second including pauses).
-6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If an "Audio N — voice-timbre reference" line is present but no "Spoken dialogue" section, write ONE short line yourself (roughly 6–12 words), in character for the speaking subject and motivated by what the scene is already doing — H3 only applies a voice reference to actual speech, so a silent clip wastes it. Tag it with the "Primary language:" language, or [English] if none was given; everything in rule 6 still applies; leave the rest of the clip unspoken. Never transcribe or guess the reference audio's own wording — only its timbre, pitch and delivery are referenced. A supplied "Spoken dialogue" always wins: use it verbatim and invent nothing. ${isRef
+6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If an "Audio N — voice-timbre reference" line is present but no "Spoken dialogue" section, write ONE short line yourself (roughly 6–12 words), in character for the speaking subject and motivated by what the scene is already doing — H3 only applies a voice reference to actual speech, so a silent clip wastes it. Tag it with the "Primary language:" language, or [English] if none was given; everything in rule 6 still applies; leave the rest of the clip unspoken. Never transcribe or guess the reference audio's own wording — only its timbre, pitch and delivery are referenced. A supplied "Spoken dialogue" always wins: use it verbatim and invent nothing. Rule 6c overrides the one-line cap when the Scene itself asks for talking. ${isRef
   ? 'The reference is declared as an <Audio N> line in subject_definitions (see that section).'
   : 'The base modes have no label for it: fold the referenced voice into how you describe the speaker (pitch, timbre, rate, accent) and never write an <Audio N> label or any section the base format doesn\'t define.'}`
 
-const RULE6B = `6b. NO VOICE REFERENCE EITHER, BUT THE SCENE CLEARLY CALLS FOR A LINE. With no "Spoken dialogue" section and no voice-timbre reference, but action that plainly implies speech (a greeting, a request, a reaction), you may invent ONE short line, as in rule 6a: in character, motivated by the scene, roughly 6–12 words, tagged with the "Primary language:" language or [English]. Rule 6 still applies. Use it sparingly — most clips stay silent; never add a line just because a character is on screen. A supplied "Spoken dialogue" always wins: use it verbatim, invent nothing.`
+const RULE6B = `6b. NO VOICE REFERENCE EITHER, BUT THE SCENE CLEARLY CALLS FOR A LINE. With no "Spoken dialogue" section and no voice-timbre reference, but action that plainly implies speech (a greeting, a request, a reaction), you may invent ONE short line, as in rule 6a: in character, motivated by the scene, roughly 6–12 words, tagged with the "Primary language:" language or [English]. Rule 6 still applies. Use it sparingly — most clips stay silent; never add a line just because a character is on screen. A supplied "Spoken dialogue" always wins: use it verbatim, invent nothing. Rule 6c overrides the one-line cap when the Scene itself asks for talking.`
+
+const RULE6C = `6c. SCENE-REQUESTED SPEECH. If the Scene text itself says a character talks, explains, narrates, discusses or monologues (especially with a length cue such as "long", "explanatory", "rambles"), and no "Spoken dialogue" section is given, the one-line cap of rules 6a/6b does NOT apply and the clip is not silent: write that speech yourself as continuous dialogue that fills the speaking time — about 2–3 words per second over (Target duration − 1.5s), e.g. roughly 27–40 English words in 15s, several connected sentences, never one. Keep it in character, on the topic the Scene names with concrete specifics, and doing work per rule 6 QUALITY. Rule 6 FORMAT and TIMING still apply: ALL of the speech goes in ONE shot (a longer speech means a longer shot; other shots stay silent), tagged [Language] "…"; use several speakers only if the Scene names them. Speech the Scene only mentions in passing still gets rule 6b's single short line.`
 
 const REF2VA = `Ref2VA (one or more reference images, each labeled "Image N — role: …, preservation marker: …: <caption>"; optionally one or two "Audio N — voice-timbre reference (marker: reference): …" lines, numbered independently of the images — H3's audio input takes up to two voice-timbre samples):
 Output exactly these six sections, in order:
 subject_definitions:
 LABEL NUMBERING: <Picture N> always carries the number of its source "Image N" — never renumber. <Subject M> numbers only the images that define a subject, so M and N will not always match. A label keeps its meaning in every later section. A line starting "RefMod <Tag N> —" (e.g. <Subject 1>, <Location 1>) is loaded straight into the model: no image, no <Picture> label — never write one. Cite it only by its tag: define it in subject_definitions ("<Subject 1> is …, preserving …", no "from <Picture N>"), give it a retention_analysis line, use the tag in the shots. An Audio line "the voice of <Subject M>" belongs to that RefMod subject.
 Most references define a subject and cite their picture INSIDE that definition, with no separate <Picture N> line: "<Subject 1> is the [role] from <Picture 1>, preserving [3–6 concrete, comma-separated attributes — e.g. face shape, hairstyle, skin tone]." List only identity-critical features from the role and caption — never a narrative sentence. Wardrobe/clothing role: scope <Subject N> to the garment only (cut, fabric, color, pattern, fit) and state that the wearer's face, body and identity in that photo are NOT carried over — only the clothing transfers onto the video's actual subject.
+Exception — "Location" and "Style" references: a place or a look, not a subject. Each gets a standalone <Picture N> line and NO <Subject N> (so they never shift <Subject> numbering), e.g. "<Picture 1> is the location reference for the sauna interior, guiding …".
 Exception — "Pose / Composition": a storyboard anchor, not reusable visible content. It gets a standalone <Picture N> line and NO <Subject N>: "<Picture 3> is a storyboard reference for [Shot 1] and [Shot 2], defining their viewpoint, subject placement, and shot order." Name the shots it actually governs.
 Two references MAY fold into one <Subject N> only when their "Requested use of this reference" lines unambiguously describe the same person (e.g. identity + wardrobe: "<Subject 1> is the woman whose face and build come from <Picture 1> and whose outfit comes from <Picture 2>."); the wardrobe rule still holds in full.
 For EACH "Audio N" line present (keep its own N, never renumber), add: "<Audio N> is the voice-timbre reference for <Subject k> (Sk)." Its "the voice of NAME" / "the voice of Sk" text says which subject k it belongs to — reuse that speaker's existing ID, never mint a new one, never point two Audio lines at the same subject. State that only timbre, pitch and delivery are referenced, never the original wording; do not otherwise describe the audio. With no "Spoken dialogue" section rule 6a applies: with two Audio lines, give each its own subject speaking only their own line.
@@ -220,9 +223,9 @@ Before writing, silently verify: the output matches the MODE; every <Subject N>/
 
 // Last thing the model reads: weaker local models drift into a leading "---", a markdown
 // fence or a preamble, which breaks the label check (rule 15 says the same, mid-prompt).
-const CLOSING = `OUTPUT STARTS NOW: the very first characters of your reply must be the first field label of the mode — no "---", no markdown fence, no heading, no preamble, no closing remark.`
+export const CLOSING = `OUTPUT STARTS NOW: the very first characters of your reply must be the first field label of the mode — no "---", no markdown fence, no heading, no preamble, no closing remark.`
 
-const ALIGNMENT_PREFACE = `In every mode that has an alignment instruction (I2VA, L2VA, FL2VA), that instruction is the FIRST line of the output, followed by exactly one blank line before integrated_multimodal_description:.`
+export const ALIGNMENT_PREFACE = `In every mode that has an alignment instruction (I2VA, L2VA, FL2VA), that instruction is the FIRST line of the output, followed by exactly one blank line before integrated_multimodal_description:.`
 
 const modeSection = (modes) => {
   if (modes[0] === 'Ref2VA') return `MODE-SPECIFIC OUTPUT\n\n${REF2VA}`
@@ -239,7 +242,7 @@ export function buildH3SystemV2(frameMode) {
     header(modes),
     CREATIVE,
     'GENERAL RULES',
-    [rule1(), rule1a(isRef), RULE2, RULE3, R3A, RULE4, rule5(isFL), rule6(isRef), RULE6B, R7, R8, R9_13, R14_15].join('\n'),
+    [rule1(), rule1a(isRef), RULE2, RULE3, R3A, RULE4, rule5(isFL), rule6(isRef), RULE6B, RULE6C, R7, R8, R9_13, R14_15].join('\n'),
     modeSection(modes),
     CLOSING,
   ].join('\n\n')

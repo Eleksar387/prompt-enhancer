@@ -1,11 +1,12 @@
 import { useState, memo } from 'react'
-import { isAnthropic, isGrok, isOpenRouter, isLangdock, providerOf } from '../api'
+import { isAnthropic, isGrok, isOpenRouter, isLlamaCpp, isLangdock, providerOf } from '../api'
 import { notifySupported, notifyEnabled, setNotifyEnabled, requestNotifyPermission } from '../notify'
 
 const OLLAMA_BASE = 'http://localhost:11434/v1'
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 const GROK_BASE = 'https://api.x.ai/v1'
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
+const LLAMACPP_BASE = 'http://localhost:8080/v1'
 // Langdock has no browser CORS support — this must stay the relative, proxied path
 // (vite.config.js's /langdock entry), never the absolute api.langdock.com URL.
 const LANGDOCK_BASE = '/langdock/openai/eu/v1'
@@ -37,11 +38,11 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
     borderColor: active ? 'var(--pe-accent)' : 'var(--pe-line)',
     background: active ? 'var(--pe-accent-bg)' : 'var(--pe-surface)',
     color: active ? 'var(--pe-accent-ink)' : 'var(--pe-ink-3)',
-    fontSize: 13, cursor: 'pointer',
+    fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
   })
 
   // One API key field serves every provider, so switching presets used to leave the previous
-  // provider's key in place (an OpenRouter key sent to Claude/Grok = auth failure). Keep a key
+  // provider's key in place (a Langdock key sent to Claude/Grok = auth failure). Keep a key
   // per provider in cfg.apiKeys and swap it in/out with the preset.
   const switchProvider = (base) => {
     const from = providerOf(cfg.base), to = providerOf(base)
@@ -54,9 +55,10 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
   const anthropic = isAnthropic(cfg.base)
   const grok = isGrok(cfg.base)
   const openrouter = isOpenRouter(cfg.base)
+  const llamacpp = isLlamaCpp(cfg.base)
   const langdock = isLangdock(cfg.base)
   const cloud = anthropic || grok || openrouter || langdock
-  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : openrouter ? 'OpenRouter' : langdock ? 'Langdock' : cfg.base
+  const providerLabel = anthropic ? 'Anthropic API' : grok ? 'Grok API' : openrouter ? 'OpenRouter' : langdock ? 'Langdock' : llamacpp ? 'llama.cpp' : cfg.base
 
   const statusText = modelStatus.loading
     ? 'connecting…'
@@ -83,9 +85,9 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
           {/* Provider presets */}
           <div>
             <label style={lbl}>Provider</label>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button style={presetBtn(!cloud)} onClick={() => switchProvider(OLLAMA_BASE)}>
-                Ollama (local)
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button style={presetBtn(llamacpp)} onClick={() => switchProvider(LLAMACPP_BASE)}>
+                llama.cpp (local)
               </button>
               <button style={presetBtn(anthropic)} onClick={() => switchProvider(ANTHROPIC_BASE)}>
                 Claude API
@@ -134,6 +136,15 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
                   <span style={{ color: 'var(--pe-accent-ink)' }}>openai/gpt-4o</span>,{' '}
                   <span style={{ color: 'var(--pe-accent-ink)' }}>google/gemini-2.5-flash</span>.
                 </>
+              ) : llamacpp ? (
+                <>
+                  llama.cpp's <span style={{ color: 'var(--pe-accent-ink)' }}>llama-server</span> at{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>{LLAMACPP_BASE}</span>, e.g.{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>llama-server -m model.gguf -c 16384 --port 8080</span>.
+                  The MiniMax H3 prompt needs about 16k context. Image inputs need a multimodal model
+                  (<span style={{ color: 'var(--pe-accent-ink)' }}>--mmproj</span>, or{' '}
+                  <span style={{ color: 'var(--pe-accent-ink)' }}>-hf</span> with a multimodal repo).
+                </>
               ) : langdock ? (
                 <>
                   Langdock's OpenAI-compatible endpoint, reached through this app's local dev-server
@@ -159,11 +170,11 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 220px' }}>
-              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : openrouter ? 'OpenRouter API key' : langdock ? 'Langdock API key' : 'API key (Open WebUI / remote only)'}</label>
+              <label style={lbl}>{anthropic ? 'Anthropic API key' : grok ? 'xAI API key' : openrouter ? 'OpenRouter API key' : langdock ? 'Langdock API key' : llamacpp ? 'API key (only if started with --api-key)' : 'API key (Open WebUI / remote only)'}</label>
               <input
                 style={inputStyle} value={cfg.apiKey}
                 onChange={e => setKey(e.target.value)}
-                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : openrouter ? 'sk-or-v1-…' : langdock ? 'your Langdock API key' : 'leave blank for local Ollama'}
+                placeholder={anthropic ? 'sk-ant-…' : grok ? 'xai-…' : openrouter ? 'sk-or-v1-…' : langdock ? 'your Langdock API key' : 'leave blank for a local server'}
                 type="password" spellCheck={false}
               />
             </div>
@@ -260,7 +271,7 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
             🎬 Creative craft rules for MiniMax H3 prompts
           </label>
 
-          {!cloud && (
+          {!cloud && !llamacpp && (
             <label style={{ fontSize: 13, color: 'var(--pe-ink-3)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
               title="After a generation finishes, asks Ollama to evict every model it has loaded (keep_alive 0) so the RAM/VRAM is free for other work. Evicts all loaded Ollama models, not just this app's; the next generation has to reload the model, so it starts slower.">
               <input type="checkbox" checked={!!cfg.unloadAfter} onChange={e => setCfg({ ...cfg, unloadAfter: e.target.checked })} />
@@ -281,6 +292,8 @@ function ConfigBar({ cfg, setCfg, models, modelStatus, reloadModels, onClearCapt
             <div style={{ fontSize: 13, color: 'var(--pe-warn)', background: 'var(--pe-warn-bg)', border: '1px solid var(--pe-warn-line)', borderRadius: 6, padding: '8px 11px', lineHeight: 1.5 }}>
               {cloud
                 ? 'Could not connect. Check your API key and that the base URL is correct.'
+                : llamacpp
+                ? 'Couldn\'t reach llama-server at this URL. Is it running? Start it with e.g. `llama-server -m model.gguf -c 16384 --port 8080` (if you used another port, set it in the Base URL above). You can still type model names manually below.'
                 : 'Couldn\'t list models. Most common cause: CORS. Set OLLAMA_ORIGINS=* and restart Ollama. You can still type model names manually below.'}
             </div>
           )}

@@ -23,7 +23,7 @@ const id = args.find((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('
 const e = JSON.parse(fs.readFileSync(path.join(here, 'baseline', `${id}.json`), 'utf8'))
 
 const [keyLine = '', baseLine = ''] = fs.readFileSync(path.join(here, '.key'), 'utf8').split('\n').map(l => l.trim())
-const baseFor = (k) => k.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : k.startsWith('sk-or-') ? 'https://openrouter.ai/api/v1' : 'https://api.x.ai/v1'
+const baseFor = (k) => k.startsWith('sk-ant-') ? 'https://api.anthropic.com/v1' : 'https://api.x.ai/v1'
 const cfg = { ...DEFAULT_CFG, apiKey: keyLine, base: baseLine || baseFor(keyLine) }
 let model = flag('--model')
 if (!model) model = pickWriter(await fetchModels(cfg))

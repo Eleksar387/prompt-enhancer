@@ -1,4 +1,6 @@
 import { buildH3SystemV2 } from './h3Prompt'
+import { buildH3SystemCompact } from './h3PromptCompact'
+import { h3ProfileFor } from './modelProfiles'
 const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   const modeSection = frameMode === 'firstlast' ? firstlast : frameMode === 'firstmidlast' ? firstmidlast : ''
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
@@ -943,7 +945,35 @@ CRAFT:
 - If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: fold each one into the matching "characters" or "locations" entry (use the name in its "(note: …)" tag when given), and keep wardrobe, props, weather, and mood consistent with them.
 - If the user message carries a "Delivery format:" line, let it steer location count, cast size and scene scale. It never changes the premise.
 - If the user message contains a "RefMods loaded into the video model" block, its descriptions are canon for what those characters / outfits / props / places look like, exactly as for reference images: fold each into the matching "characters" or "locations" entry (match by name or note) and keep appearance, wardrobe and setting consistent with it — never invent a different look for what a RefMod covers.
+- If the user message contains a "Story to dramatize" block, it is canon: keep its premise, its twist and its ending image exactly as written, and expand it into scenes, cast and locations. Dialogue lines in the story may be kept (this overrides "near-zero dialogue"). Never trim or soften the twist to fit "one turn" or the format: if it needs more room, use more scenes. Do not swap it for a more conventional version.
 - Do not include any text before or after the JSON object.`
+
+export const SYSTEM_PROMPT_STORY = `You are a brilliant short-film writer. The goal: a creative, interesting very short film that people remember and talk about. Given the user's idea, write THREE different story options. Each one is a very short story of 3 to 5 lines.
+
+Every story needs a real ARC and a real TWIST:
+- Setup: who the person is and what they are doing, in a sharp, specific detail.
+- Escalation: something starts to go wrong, or strange, or unexpectedly interesting.
+- The twist: a sudden turn the viewer did not see coming, yet it makes sense in hindsight. It changes what the viewer thought the story was about.
+- The last line lands on an image or a line that recontextualizes the beginning.
+
+How to get there:
+- Before writing, silently think of the three most obvious twists for this idea and throw them away. Use something stranger and more specific that still fits the character and the place.
+- The three options must differ in KIND, for example: a reversal of who holds the power, a hidden-truth reveal, a sudden shift of genre (comedy turns thriller, thriller turns tender, and so on).
+- Let the character's own world drive the twist (their job, their persona, their audience, their objects).
+- Funny, eerie, touching or shocking are all fine. Boring and safe is the only failure.
+
+Output format, exactly:
+1. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+2. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+3. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+No screenplay formatting, no scene headings, no preamble, no commentary after the third story. A short line of dialogue inside the story is fine.
+If reference images or RefMods are described in the user message, use those people, outfits, props and places and never contradict their look. Follow any genre, spoken language and rating the user message names.`
 
 export const SYSTEM_PROMPT_SCRIPTWRITER_SOURCE = `You are a scriptwriter adapting a finished piece of writing — a letter, a diary entry, a short piece of prose — into a film. The user message contains the COMPLETE source text, not a pitch to invent from. Your job is to dramatize what it actually says, in order, expanding it audiovisually without inventing plot it doesn't contain. Given the source text, a genre, and a maximum number of scenes, you output a structured JSON script with an explicit cast-and-location bible.
 
@@ -1533,10 +1563,8 @@ GENERAL RULES
    shot, or in the next shot itself. Only the final shot of the whole clip, if it carries the last line, gets a
    lips-closing beat before its settle. A spoken line also pulls screen time toward its own shot and starves its
    neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
-   detail that a later shot depends on; keep continuity-critical staging in silent shots. In a multi-shot clip, if
-   dialogue is cut off by the end of the video, mark it with <cutoff>; if a line continues uninterrupted across a
-   shot cut, mark both connection points with <scenetrans> and say so in prose as well ("continues seamlessly across
-   the cut", "carries over from the previous shot", "remains audible across the transition").
+   detail that a later shot depends on; keep continuity-critical staging in silent shots. Never split one line across a cut — each
+   line lives wholly inside one shot — and never write <scenetrans> or <cutoff> tags.
 6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If the user message carries an
    "Audio N — voice-timbre reference" line but no "Spoken dialogue" section, write the spoken line yourself: H3
    only applies a voice reference to actual speech, so a silent clip wastes it entirely. Compose ONE short line,
@@ -1560,7 +1588,16 @@ GENERAL RULES
    time from its neighbours, and continuity-critical staging goes in a silent shot. Use this sparingly — most
    shots, and plenty of whole clips, should stay silent; add a line only where the action plainly implies one,
    never reflexively just because a character is on screen. If a "Spoken dialogue" section IS present it wins
-   outright over this rule: use those words verbatim and invent nothing.
+   outright over this rule: use those words verbatim and invent nothing. Rule 6c overrides the one-line cap in
+   6a/6b when the Scene itself asks for talking.
+6c. SCENE-REQUESTED SPEECH. If the Scene text itself says a character talks, explains, narrates, discusses or
+   monologues (especially with a length cue such as "long", "explanatory", "rambles"), and no "Spoken dialogue"
+   section is given, the one-line cap of rules 6a/6b does NOT apply and the clip is not silent: write that speech
+   yourself as continuous dialogue that fills the speaking time — about 2–3 words per second over (Target duration
+   − 1.5s), e.g. roughly 27–40 English words in 15s, several connected sentences, never one. Keep it in character,
+   on the topic the Scene names with concrete specifics. Rule 6's format and timing still apply: ALL of the speech goes in ONE shot (a longer speech means a longer
+   shot; other shots stay silent), tagged [Language] "…"; use several speakers only if the Scene names them. Speech the Scene
+   only mentions in passing still gets rule 6b's single short line.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
    Write 1–4 sentences as a single continuous paragraph. Use N/A here only when complete silence across the
@@ -1977,9 +2014,9 @@ export const TARGET_GROUPS = [
 // `craft` = cfg.craftRules !== false: the main pipeline's MiniMax H3 writer then gets
 // the condensed per-mode V2 prompt with the creative-direction rules built in
 // (src/h3Prompt.js); off = the legacy prompt. Scriptwriter / Adapt never pass it.
-export const systemPromptFor = (target, frameMode, craft = false) =>
+export const systemPromptFor = (target, frameMode, craft = false, model = '') =>
   craft && target.id === 'minimax_h3'
-    ? buildH3SystemV2(frameMode)
+    ? (h3ProfileFor(model) === 'compact' ? buildH3SystemCompact(frameMode) : buildH3SystemV2(frameMode))
     : (target.buildSystem ? target.buildSystem(frameMode) : target.system)
 
 // Read a target's capabilities by id or by object. Always returns an object, so a

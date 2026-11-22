@@ -27,7 +27,7 @@ export const entryHasImages = (h) => !!(
 export const entrySearchText = (h) => {
   const parts = [h.project, h.model, entryTargetLabel(entryTargetId(h))]
   if (h.type === 'scriptwriter') {
-    parts.push(h.idea, h.script?.title, h.script?.logline, h.script?.look)
+    parts.push(h.idea, h.story, h.script?.title, h.script?.logline, h.script?.look)
     for (const c of h.script?.characters || []) parts.push(c.name, c.appearance, c.wardrobe)
     for (const l of h.script?.locations || []) parts.push(l.name, l.description)
     parts.push(JSON.stringify(h.script?.scenes || ''), JSON.stringify(h.directorsCut?.shots || ''))
@@ -52,9 +52,12 @@ export const modelProvider = (m) => {
   if (s === 'template') return 'Template'
   if (s.includes('claude') || s.includes('anthropic')) return 'Claude'
   if (s.includes('grok')) return 'Grok'
+  // llama.cpp model ids are GGUF file names (or `org/repo-GGUF:quant`); an Ollama tag never
+  // ends in `.gguf`, so this tells them apart without threading cfg.base through here.
+  if (s.includes('.gguf') || /-gguf(:|$)/.test(s)) return 'llama.cpp'
   // OpenRouter model ids are always provider-prefixed (`openai/gpt-4o`, `google/gemini-…`);
-  // an Ollama tag never contains a slash, so this is a safe way to tell them apart without
-  // threading cfg.base through here.
+  // an Ollama tag never contains a slash. Checked after the GGUF test above, since an
+  // `org/repo-GGUF:quant` id also contains a slash.
   if (s.includes('/')) return 'OpenRouter'
   return 'Ollama'
 }

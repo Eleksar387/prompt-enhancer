@@ -12,7 +12,7 @@ import {
   SPOKEN_LANGUAGES, DEFAULT_SPOKEN_LANG, spokenLangDef,
   systemPromptFor, caps, aspectParts, MINIMAX_H3_RESOLUTIONS,
 } from './constants'
-import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isLangdock, isCloud, setUnloadQuiet, unloadAfterRun } from './api'
+import { loadCfg, saveCfg, callOllama, generateImages, generateImagesGemini, generateVideo, fetchModels, pickWriter, pickVision, providerOf, isAnthropic, isGrok, isOpenRouter, isLlamaCpp, isLangdock, isCloud, setUnloadQuiet, unloadAfterRun } from './api'
 import { loadComfyCfg, saveComfyCfg, uploadImage as uploadComfyImage, sendShot as sendComfyShot } from './comfy'
 import {
   listHistory, getHistoryEntry, addHistoryEntry, deleteHistoryEntry, updateHistoryEntry,
@@ -26,7 +26,7 @@ import {
 } from './db'
 import { btn, selStyle, presetById, syllableBudget, imageHash, visionCacheKey, mapWithConcurrency, blobUrlToBase64, shrinkToJpeg, exportTimestamp } from './utils'
 import { loadLoras, saveLoras, lorasByIds, withLoraTriggers, targetTakesLoras, loraManifestEntries } from './loras'
-import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries, describeRefModImage, refModLabels, refModReferenceLines, buildAudioBlock, refModVoiceKey } from './refmods'
+import { loadRefMods, saveRefMods, refModsByIds, targetTakesRefMods, refModManifestEntries, describeRefModImage, refModLabels, countRealSubjects, refModReferenceLines, buildAudioBlock, refModVoiceKey } from './refmods'
 import ConfigBar from './components/ConfigBar'
 import ModelSelect from './components/ModelSelect'
 import ImagePanel from './components/ImagePanel'
@@ -41,6 +41,8 @@ import QueuePanel from './components/QueuePanel'
 import HistoryPanel from './components/HistoryPanel'
 import { useHistoryFilters } from './hooks/useHistoryFilters'
 import { useAdminReview } from './hooks/useAdminReview'
+import { h3ProfileFor } from './modelProfiles'
+import { normalizeH3Sections, musicIsOff } from './h3Normalize'
 import { useRenderSettings } from './hooks/useRenderSettings'
 import { useQueue } from './hooks/useQueue'
 import { useImageSlots } from './hooks/useImageSlots'
@@ -50,8 +52,10 @@ import {
   refAudiosFromSnap,
 } from './workspace'
 import { buildSingleDirectorTimeline } from './directorExport'
-import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions } from './adapt'
+import { buildStylePart, buildWriterUserText, h3ModeFor, DISTILL_SYSTEM, buildDistillUserText, shouldDistill, acceptDistilled, H3_REF_DISTILL_SYSTEM, buildH3RefDistillUserText, splitDistilledCaptions, knownRefCaption } from './adapt'
 import H3SyntaxBadge from './components/H3SyntaxBadge'
+import HighlightedTextarea from './components/HighlightedTextarea'
+import { stripCrossCutTags, sceneRequestsSpeech, wordBudget } from './dialogueSpans'
 import { notifyDone, setNotifyQuiet } from './notify'
 import { buildManualH3, buildManualSeed, buildH3Template } from './manualH3'
 
@@ -88,6 +92,8 @@ const blobToBase64 = (blob) => new Promise((resolve, reject) => {
   fr.onerror = () => reject(fr.error)
   fr.readAsDataURL(blob)
 })
+
+const resultTA = (target) => (target === 'minimax_h3' ? HighlightedTextarea : 'textarea')
 
 export default function App() {
   const [cfg, setCfg]                 = useState(loadCfg)
@@ -207,7 +213,7 @@ export default function App() {
   // prompt by what it is (<Subject 1>, <Location 1>) — no image, no <Picture n> (refmods.js).
   const refModVirtual = (target === 'minimax_h3' && frameMode === 'ref')
     ? refModLabels(refMods, activeRefModIds, {
-        realSubjectCount: imgs.refImages.filter(im => im.role !== 'pose_composition').length,
+        realSubjectCount: countRealSubjects(imgs.refImages),
       })
     : []
   const [soundscape, setSoundscape]   = useState('')
@@ -239,7 +245,7 @@ export default function App() {
   // Declared after `t`/`frameMode` further down would be neater, but state has to
   // come before the effects that use it; the hook itself owns the reset-on-target
   // -change effect. See src/hooks/useAdminReview.js.
-  const admin = useAdminReview(TARGETS[target], frameMode, cfg.craftRules !== false)
+  const admin = useAdminReview(TARGETS[target], frameMode, cfg.craftRules !== false, models.length ? writerModel : writerManual.trim())
   // Queue: pending "generate this later" items, persisted server-side (see db.js).
   // The hook owns its state and the run bookkeeping every job kind shares; the two
   // job bodies stay here, below. See src/hooks/useQueue.js.
@@ -1091,7 +1097,7 @@ export default function App() {
     const hasImg = hasRequiredImages(workspace)
     if (!canGenerateFrom(workspace)) return
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return }
-    if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
+    if (hasImg && !effectiveVision && needsVisionCall()) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return }
     // A description that came with the loaded image ("Reuse image") rides in the
     // snapshot's caption slot so the queued run reuses it instead of calling the
     // vision model (see snapshotToWorkspace). Image targets only — the only
@@ -1197,7 +1203,12 @@ export default function App() {
     // Put back any active LoRA trigger the writer dropped or mangled, in the
     // shape this target's output format expects. RefMods have no trigger to
     // repair — they load via file/strength alone (see src/refmods.js).
-    const repair = (raw) => withLoraTriggers(raw, activeLoras, target)
+    // Small writer models (profile 'compact') get their H3 section order/separators
+    // repaired in code; every other model's output is left exactly as written.
+    const fixSections = (raw) => (target === 'minimax_h3' && h3ProfileFor(effectiveWriter) === 'compact' && h3Mode)
+      ? normalizeH3Sections(raw, h3Mode, { musicOff: musicIsOff(music), refs: frameMode === 'ref' ? imgs.refImages.map(r => ({ role: r.role, preserve: r.preserve })) : null })
+      : raw
+    const repair = (raw) => withLoraTriggers(target === 'minimax_h3' ? fixSections(stripCrossCutTags(raw)) : raw, activeLoras, target)
 
     if (outputCount === 1) {
       const lbl = effectiveWriter
@@ -1341,6 +1352,19 @@ export default function App() {
     ], role?.visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model)
   }
 
+  // True when generating needs the vision model: some loaded image has no
+  // description yet under its role. Frame-mode (LTX) captions are never stored
+  // per image, so those always need it.
+  const needsVisionCall = () => {
+    const undescribed = (im, roleId) => !knownRefCaption(im, imageMeta, roleId, im.hash || imageHash(im.base64))
+    if (frameMode === 'ref') {
+      const rid = (im) => (MINIMAX_H3_REF_ROLES.find(r => r.id === im.role) || MINIMAX_H3_REF_ROLES[0]).id
+      return (imgs.refImages || []).some(im => undescribed(im, rid(im)))
+    }
+    if (t.type === 'image') return stillImageRefs(workspace).some(im => undescribed(im, imageRoleOf(im)))
+    return true
+  }
+
   // src overrides the live workspace state — passed by captionForEntry(h) to
   // re-describe a stored history entry's images without touching the workspace.
   const captionImages = async (src = null) => {
@@ -1361,10 +1385,20 @@ export default function App() {
       // its parallel slots blend concurrent multimodal requests, so two refs come
       // back with a mixed description; cloud providers isolate requests, so fan out.
       const refs = s.refImages || []
-      const captions = await mapWithConcurrency(refs, isCloud(cfg.base) ? refs.length : 1, (im) => cachedVision([
-        { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
-        { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
-      ], role(im.role).visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model))
+      // An image that already has a description under its role (gallery edit,
+      // earlier run, pick/restore) is used as-is — no vision request, so a
+      // text-only model works when everything is described. Same rule as the
+      // still-image branch's describeOne().
+      let reusedRefs = 0
+      const captions = await mapWithConcurrency(refs, isCloud(cfg.base) ? refs.length : 1, (im) => {
+        const known = knownRefCaption(im, imageMeta, role(im.role).id, im.hash || imageHash(im.base64))
+        if (known) { reusedRefs++; return known }
+        return cachedVision([
+          { type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.base64 } },
+          { type: 'text', text: `Describe this reference image as instructed. ${role(im.role).visionFocus || ''}`.trim() },
+        ], role(im.role).visionSystem || VISION_PROMPT_MINIMAX_H3_REF, stats, model)
+      })
+      if (reusedRefs) stats.reused = reusedRefs
       // Persist each reference's full caption to the per-image record, independent
       // of any trimming below — mirrors the still-image branch's describeOne()
       // (patchImageMeta call further down in this function), including its guard:
@@ -1596,7 +1630,7 @@ export default function App() {
     }
 
     if (!effectiveWriter) { setGlobalError('Pick a Writer model (open ⚙ Local backend → Reload models, or type one).'); return { ok: false, error: 'no writer model' } }
-    if (hasImg && !effectiveVision) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return { ok: false, error: 'no vision model' } }
+    if (hasImg && !effectiveVision && needsVisionCall()) { setGlobalError('Image inputs need a Vision model — pick one or type one (e.g. qwen2.5vl:7b).'); return { ok: false, error: 'no vision model' } }
     abortAllVideos()
     setGlobalError(''); setCopied(null); setCaption(''); setSavedCaption(''); setVisionStats(null); setAdaptSourceOverride(null); admin.setPending(false)
 
@@ -1693,11 +1727,15 @@ export default function App() {
       ? buildAudioBlock(imgs.refAudios, { refModLabels: refModVirtual, only: hasImg ? 'refmod' : 'all' })
       : ''
     const writerFrameDescription = refModLines ? [frameDescription, refModLines, refModAudio].filter(Boolean).join('\n\n') : frameDescription
+    // A Scene that asks for talking, with no typed Dialogue: give the writer a number.
+    const wb = tcaps.structured && show.dialogue && !dialogue.trim() && sceneRequestsSpeech(scene)
+      ? wordBudget(syllableBudget(duration, '', show.spokenLang ? spokenLangId : null)) : null
+    const speechBudget = wb ? `\n\nSpeech budget: about ${wb[0]}–${wb[1]} spoken words fit this clip (rule 6c) — put them all in one shot.` : ''
     const userText = buildWriterUserText({
       target, targetType: t.type, frameMode, scene, duration,
       frameDescription: writerFrameDescription, hasImg, refModsOnly: !!refModLines && !frameDescription,
       ratio: selectedRatio, soundscape, music,
-      stylePart, lengthPart,
+      stylePart: stylePart + speechBudget, lengthPart,
       // Derived from the same list captionImages() described — so a lone
       // reference with no primary card still carries its role.
       refRole: t.type === 'image' && hasImg ? imageRoleOf(stillImageRefs(workspace)[0]) : null,
@@ -1717,7 +1755,7 @@ export default function App() {
       return { ok: false, error: 'paused for admin review' }
     }
 
-    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode, cfg.craftRules !== false), snapshot, h3Mode })
+    return runWriterCall({ user: userText, system: systemPromptFor(t, frameMode, cfg.craftRules !== false, effectiveWriter), snapshot, h3Mode })
   }
 
   // Assigns enhanceRef every render (like resultsRef.current = results above),
@@ -2202,7 +2240,7 @@ export default function App() {
           </label>
           {models.length > 0
             ? <ModelSelect models={models} value={writerModel} onChange={e => { setWriterModel(e.target.value); rememberModel('writer', e.target.value) }} />
-            : <input style={selStyle} value={writerManual} onChange={e => { setWriterManual(e.target.value); rememberModel('writer', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
+            : <input style={selStyle} value={writerManual} onChange={e => { setWriterManual(e.target.value); rememberModel('writer', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLlamaCpp(cfg.base) ? 'model.gguf' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'mistral-nemo'} spellCheck={false} />}
         </div>
         {showImage && (
           <div style={{ flex: '1 1 240px' }}>
@@ -2211,7 +2249,7 @@ export default function App() {
             </label>
             {models.length > 0
               ? <ModelSelect models={models} value={visionModel} onChange={e => { setVisionModel(e.target.value); rememberModel('vision', e.target.value) }} />
-              : <input style={selStyle} value={visionManual} onChange={e => { setVisionManual(e.target.value); rememberModel('vision', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
+              : <input style={selStyle} value={visionManual} onChange={e => { setVisionManual(e.target.value); rememberModel('vision', e.target.value.trim()) }} placeholder={isAnthropic(cfg.base) ? 'claude-sonnet-4-6' : isGrok(cfg.base) ? 'grok-4' : isOpenRouter(cfg.base) ? 'anthropic/claude-sonnet-4-6' : isLlamaCpp(cfg.base) ? 'model.gguf' : isLangdock(cfg.base) ? 'claude-sonnet-4-6' : 'qwen2.5vl:7b'} spellCheck={false} />}
           </div>
         )}
       </div>
@@ -2589,7 +2627,7 @@ export default function App() {
             <div style={{ marginTop: 12 }}>
               <textarea value={admin.system} onChange={e => admin.setSystem(e.target.value)} rows={12}
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-surface)', border: '1px solid var(--pe-line)', borderRadius: 8, padding: '10px 12px', color: 'var(--pe-ink-2)', fontSize: 13.5, fontFamily: 'monospace', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode, cfg.craftRules !== false))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
+              <button onClick={() => admin.setSystem(systemPromptFor(t, frameMode, cfg.craftRules !== false, effectiveWriter))} style={{ marginTop: 6, fontSize: 13, color: 'var(--pe-ink-3)', background: 'none', border: '1px solid var(--pe-line)', borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>Reset to default</button>
             </div>
           )}
         </div>
@@ -2636,19 +2674,6 @@ export default function App() {
       {/* Global error */}
       {globalError && (
         <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>{globalError}</div>
-      )}
-
-      </div>
-      )}
-      {/* ================= END CENTER · COMPOSE ================= */}
-
-      {/* ================= RIGHT · OUTPUT ================= */}
-      <div style={{ gridColumn: '3', display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
-
-      {!scriptwriterMode && results.length === 0 && !caption && !globalError && (
-        <div style={{ background: 'var(--pe-surface)', border: '1px dashed var(--pe-line)', borderRadius: 12, padding: '28px 24px', color: 'var(--pe-ink-3)', fontSize: 15, lineHeight: 1.6 }}>
-          Your enhanced {t.type === 'image' ? 'image prompt' : t.type === 'text' ? 'script' : 'prompt'} will appear here. Fill in the scene (or load a reference image) and hit <span style={{ color: 'var(--pe-accent-ink)', fontWeight: 600 }}>Enhance Prompt</span>.
-        </div>
       )}
 
       {/* Vision caption — editable; stored on the history entry */}
@@ -2852,12 +2877,12 @@ export default function App() {
               </div>
               {r.loading && <div style={{ padding: '18px 20px', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, fontSize: 13, color: 'var(--pe-ink-3)' }}>Generating…</div>}
               {r.error && <div style={{ padding: '12px 14px', background: 'var(--pe-danger-bg)', border: '1px solid var(--pe-danger-line)', borderRadius: 8, fontSize: 13, color: 'var(--pe-danger)' }}>Error: {r.error}</div>}
-              {r.text && (
-                <textarea value={r.text} onChange={e => editResult(i, e.target.value)}
+              {r.text && (() => { const ResultTA = resultTA(target); return (
+                <ResultTA value={r.text} onChange={e => editResult(i, e.target.value)}
                   rows={Math.max(4, Math.ceil(r.text.length / 70))} spellCheck={false}
                   style={{ width: '100%', boxSizing: 'border-box', background: 'var(--pe-rail)', border: '1px solid var(--pe-line)', borderRadius: 10, padding: '18px 20px', fontSize: 13.5, lineHeight: 1.8, color: 'var(--pe-ink)', whiteSpace: 'pre-wrap', fontFamily: 'var(--pe-mono)', resize: 'vertical', outline: 'none', transition: 'border-color 0.15s' }}
                   onFocus={e => e.target.style.borderColor = 'var(--pe-accent)'} onBlur={e => e.target.style.borderColor = 'var(--pe-line)'} />
-              )}
+              )})()}
               {target === 'minimax_h3' && r.text && !r.loading && !r.error && (
                 <H3SyntaxBadge text={r.text} mode={r.h3Mode} refImages={[...imgs.refImages, ...refModVirtual.filter(l => l.tag === 'Subject').map(l => ({ role: l.role }))]}
                   anchors={(imgs.refImages || []).map((im, i) => ({ pictureN: i + 1, atSeconds: im.atSeconds })).filter(a => a.atSeconds != null)} />
@@ -2939,6 +2964,14 @@ export default function App() {
           onClose={() => setAdaptSourceOverride(null)}
         />
       )}
+
+      </div>
+      )}
+      {/* ================= END CENTER · COMPOSE ================= */}
+
+      {/* ================= RIGHT · OUTPUT ================= */}
+      <div style={{ gridColumn: '3', display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+
 
       {/* History — the list, its filters and its cards live in HistoryPanel,
           which is memoized: the hidden file input stays here because App owns

@@ -17,8 +17,8 @@ describe('buildH3SystemV2', () => {
   const firstlast = buildH3SystemV2('firstlast')
 
   it('is much shorter than legacy', () => {
-    expect(ref.length).toBeLessThan(28000)
-    expect(single.length).toBeLessThan(22000)
+    expect(ref.length).toBeLessThan(29500)
+    expect(single.length).toBeLessThan(23000)
     expect(ref.length).toBeLessThan(legacy.length)
   })
 
@@ -113,5 +113,15 @@ describe('buildH3SystemV2', () => {
 
   it('tells the writer not to leak its own rules', () => {
     expect(ref).toContain('never name, quote or label them in the output')
+  })
+})
+
+describe('rule 6c (scene-requested speech)', () => {
+  it('is in both V2 and legacy, and 6a/6b defer to it', () => {
+    expect(buildH3SystemV2('ref')).toContain('6c. SCENE-REQUESTED SPEECH')
+    expect(buildH3SystemV2('single')).toContain('6c. SCENE-REQUESTED SPEECH')
+    expect(legacy).toContain('6c. SCENE-REQUESTED SPEECH')
+    expect(buildH3SystemV2('single')).toContain('Rule 6c overrides the one-line cap')
+    expect(legacy).toContain('Rule 6c overrides the one-line cap')
   })
 })

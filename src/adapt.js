@@ -164,6 +164,22 @@ export function resolveRefCaption(im, roleId, blockText, refImageIndex) {
   return refImageIndex != null ? (extractRefImageCaption(blockText, refImageIndex) || '') : ''
 }
 
+// The description an image already has under one role, trimmed — or ''. Used to
+// skip the vision model entirely for an image that is already described.
+// Priority: the per-image record (`imageMeta[hash].captions[role]`: gallery edits,
+// earlier runs) → what came with the loaded image (`im.captions[role]`, a pick /
+// restore / queue) → the legacy flat `im.caption`, own role only. Text under a
+// DIFFERENT role is never used. `hash` is passed in (the caller already has
+// `im.hash || imageHash(im.base64)`), keeping this module free of utils imports.
+export function knownRefCaption(im, imageMeta, roleId, hash) {
+  const own = im?.role || ROLE_NONE
+  const t = imageMeta?.[hash]?.captions?.[roleId]
+    || im?.captions?.[roleId]
+    || (roleId === own ? im?.caption : '')
+    || ''
+  return String(t).trim()
+}
+
 const sceneOr = (scene, fallback) => (scene && scene.trim() ? scene.trim() : fallback)
 
 // ── per-target field blocks, shared by both message builders ───────────────
