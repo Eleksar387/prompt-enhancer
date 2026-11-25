@@ -38,3 +38,12 @@ describe('RefMod subject numbering', () => {
     expect(refModLabels(lib, ['a'], { realSubjectCount: countRealSubjects(imgs) })[0].label).toBe('<Subject 1>')
   })
 })
+
+describe('<d> dialogue wrapper', () => {
+  it('tints <d>[Language] words</d> and still the legacy quoted form', () => {
+    const t = 'She says, <d>[English] Hello there.</d> Then [German] "Tschüss" ends.'
+    const s = splitDialogue(t)
+    expect(s.map(x => x.text).join('')).toBe(t)
+    expect(s.filter(x => x.dialogue).map(x => x.text)).toEqual(['<d>[English] Hello there.</d>', '[German] "Tschüss"'])
+  })
+})

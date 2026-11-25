@@ -72,9 +72,9 @@ const buildVariants = (writer) => VARIANT_TEMPS.map((temp, i) => ({
 // would otherwise become literal prose in the assembled prompt.
 const MANUAL_H3_LEGEND_REF =
   '[Shot N] marks each cut · <Subject N>/<Picture N> per your reference list below · '
-  + '(S1) the first time a subject speaks · [Language] "…" is spoken dialogue'
+  + '(S1) the first time a subject speaks · <d>[Language] …</d> is spoken dialogue'
 const MANUAL_H3_LEGEND_DEFAULT =
-  '[Shot N] marks each cut · (S1) the first time a speaker appears · [Language] "…" is spoken dialogue'
+  '[Shot N] marks each cut · (S1) the first time a speaker appears · <d>[Language] …</d> is spoken dialogue'
 
 // "Generate for" rail groups, with any ungrouped target swept into a trailing
 // "Other" group so a newly-added TARGETS entry is never silently hidden.
@@ -2562,7 +2562,7 @@ export default function App() {
       )}
 
       {/* Spoken language — nothing left to drive it in Manual mode; the user
-          tags [Language] "…" directly in their own typed prose. */}
+          wraps <d>[Language] …</d> directly in their own typed prose. */}
       {show.spokenLang && !manualUI && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -2577,7 +2577,7 @@ export default function App() {
       )}
 
       {/* Dialogue — in Manual mode, dialogue goes straight into the typed prose
-          as [Language] "…" (rule 6/6a), so this separate field is inert. */}
+          as <d>[Language] …</d> (rule 6/6a), so this separate field is inert. */}
       {show.dialogue && !manualUI && (
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--pe-ink-2)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>

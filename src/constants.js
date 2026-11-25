@@ -1,4 +1,5 @@
 import { buildH3SystemV2 } from './h3Prompt'
+import { R4_FACING, R5_REAL_CUTS, R6_LINE_LAST, R13A, R13B, REF_PLACE_AND_LOOK } from './h3Notes'
 const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   const modeSection = frameMode === 'firstlast' ? firstlast : frameMode === 'firstmidlast' ? firstmidlast : ''
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
@@ -1128,6 +1129,8 @@ Rules:
   - a time jump beyond a same-location lighting shift (e.g. "hours later");
   - two or more of the above — or of these plus dialogue, a camera move, and a lighting change — stacked into one setup, even if the script wrote it as a single scene.
   Never carry a subject-list change into a clip that still holds the old subject list's reference-image pin. If a planned clip trips more than one of the "NEW clip" triggers at once, split it into separate clips. When a subject-list change is genuinely in doubt, split rather than fold it into an existing reference-image conditioning — but only for the triggers above, never just to make clips shorter.
+- RISKY CONTENT: H3 usually draws these badly from a reference photo — doors and handles, trips and falls, sitting down, someone vanishing into an effect, an explosion behind a runner. Do not make one of them a clip's primary_beat; plan around it (open the clip with the person already seated, or cut to the settled aftermath) and say so in "notes". Product shots, mood pieces, big weather and quiet two-person scenes render best.
+- STITCHING: a clip nearly stops in its last second and its first and last frames are held still, so stitched clips slow at the joins. Keep the final second free of plot beats and add "trim held frames at the join" to "notes" for any clip that is followed by a continuation of the same action.
 - primary_beat is always physical and observable. Translate feeling into muscle and body action; never pass an emotion label ('shocked', 'relieved', 'conflicted') into any field.
 - camera_movement is ONE move — no 'then' / 'followed by'. Default to a move motivated by the clip's own beat (push in, pull back, track, pan, arc, tilt, pedestal) rather than to stillness, and don't repeat the same move in back-to-back clips of the same scene. Use a genuinely locked-off frame only when the clip's own beat calls for it, stated positively ("a locked-off frame holds on …"), never as a list of movements that must NOT happen — that kind of blanket "nothing moves" instruction risks bleeding across the whole clip and freezing motion that should happen.
 - Decide each clip's camera from its eyeline: if the thing the character looks at is not in frame, place the camera in that direction. Never resolve it with a head-turn toward the lens.
@@ -1430,12 +1433,12 @@ the visual description, never restate it as on-screen text).
 
 GENERAL RULES
 1. Write all structural prose in English, present tense, describing the video in playback order. Non-English text
-   belongs in exactly two places, and they behave differently: spoken dialogue — a [Language] tag immediately
-   followed by the quoted words, e.g. [German] "Wir müssen gehen." — is written in the "Primary language:" language
-   (translated into it if it was supplied in another — rule 6) and carries that leading tag, while exact visible
-   on-screen text is NEVER translated but reproduced in its original language, wrapped in English double quotes with
-   spelling and punctuation preserved exactly, and carries no [Language] tag — that absence is what tells the two
-   apart. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
+   belongs in exactly two places, and they behave differently: spoken dialogue — wrapped in <d> tags with a
+   [Language] tag first inside them, e.g. <d>[German] Wir müssen gehen.</d> — is written in the "Primary language:"
+   language (translated into it if it was supplied in another — rule 6) and carries that <d> wrapper, while exact
+   visible on-screen text is NEVER translated but reproduced in its original language, wrapped in English double
+   quotes with spelling and punctuation preserved exactly, and carries no <d> tag — that absence is what tells the
+   two apart. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
    frame must be typed verbatim in quotes — never merely described — with its typographic treatment (e.g. condensed,
    all-caps, serif) and where it sits in frame (e.g. centered, lower third) named. If no text should appear on
    screen, don't invent any.
@@ -1506,7 +1509,7 @@ GENERAL RULES
    Decide each shot's camera from what its characters are looking at: if the thing a character looks at is not in frame, H3 makes them stare into
    the lens. Do not fix that by adding a head-turn or "looks up at the camera" — that fights blocking the scene has
    already fixed; instead place the camera in the direction the character is already looking, and state explicitly
-   that they do NOT look into the lens.
+   that they do NOT look into the lens.${R4_FACING}
 5. Cuts only when they introduce new information (subject, space, state, viewpoint, time) — prefer camera movement
    over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, " followed by a cut phrase
    — vary it naturally rather than repeating the same wording every time (e.g. "the camera cuts to", "the shot
@@ -1532,7 +1535,7 @@ GENERAL RULES
    budget in rule 3. Multiple markers placed close together with no real change in subject,
    space, state, viewpoint, or time between them should become sequential camera behavior
    within the SAME shot, not separate cuts. Only start a new [Shot N] when a marker coincides
-   with genuine new information.
+   with genuine new information.${R5_REAL_CUTS}
 6. Dialogue: if the user message includes a "Spoken dialogue" section, its quoted text is the content of the speech
    — never invent additional words, drop any, or reorder them. Render it in the "Primary language:" language: if it
    was supplied in another language, translate it into natural, idiomatic speech in that language, keep proper names
@@ -1545,9 +1548,9 @@ GENERAL RULES
    (defiant, wary, tender, weary) rather than reaching for one flat adjective — the combination gives the voice
    model something to act on, not just describe. A character who never speaks, sings, or makes an off-screen vocal
    sound gets no speaker ID at all. Write speaker identity, delivery, and any acting beat as prose around the line,
-   never inside the quotes; write the language tag immediately before the quoted words and nothing else inside
-   them, e.g.: the engineer, in a clear, steady voice with an edge of defiance (S1), says: [English] "Alignment
-   complete." Use one of
+   never inside the <d> tags; wrap exactly the spoken words in <d>…</d>, with the language tag first inside the
+   wrapper and nothing else, e.g.: the engineer, in a clear, steady voice with an edge of defiance (S1), says:
+   <d>[English] Alignment complete.</d> Use one of
    these exact language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian]
    [Japanese] [Korean] [Portuguese] [Russian] [Spanish]. A speaker name carrying a "(V.O.)" suffix (e.g. "STEFFI
    (V.O.): line") is always a voiceover — drop the "(V.O.)" suffix itself before quoting the words, but write it up exactly
@@ -1562,7 +1565,7 @@ GENERAL RULES
    lips-closing beat before its settle. A spoken line also pulls screen time toward its own shot and starves its
    neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
    detail that a later shot depends on; keep continuity-critical staging in silent shots. Never split one line across a cut — each
-   line lives wholly inside one shot — and never write <scenetrans> or <cutoff> tags.
+   line lives wholly inside one shot — and never write <scenetrans> or <cutoff> tags.${R6_LINE_LAST}
 6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If the user message carries an
    "Audio N — voice-timbre reference" line but no "Spoken dialogue" section, write the spoken line yourself: H3
    only applies a voice reference to actual speech, so a silent clip wastes it entirely. Compose ONE short line,
@@ -1594,7 +1597,7 @@ GENERAL RULES
    yourself as continuous dialogue that fills the speaking time — about 2–3 words per second over (Target duration
    − 1.5s), e.g. roughly 27–40 English words in 15s, several connected sentences, never one. Keep it in character,
    on the topic the Scene names with concrete specifics. Rule 6's format and timing still apply: ALL of the speech goes in ONE shot (a longer speech means a longer
-   shot; other shots stay silent), tagged [Language] "…"; use several speakers only if the Scene names them. Speech the Scene
+   shot; other shots stay silent), wrapped in <d>[Language] …</d>; use several speakers only if the Scene names them. Speech the Scene
    only mentions in passing still gets rule 6b's single short line.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
@@ -1650,6 +1653,8 @@ GENERAL RULES
    screen, bound it with an observable limit and avoid open-ended verbs ("spreading", "widening"). Never tie a
    messy substance to a surface that must stay clean with a preposition (coffee "around" / "on" / "through" a
    figurine) — state a gap between them and add that the clean surface is dry.
+${R13A}
+${R13B}
 14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
    decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
    plan, or ending condition.
@@ -1759,10 +1764,11 @@ labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2
 rules as above. Cite a <Picture N> anchor in natural prose where it applies — "the shot begins from <Picture 1>",
 "the shot's keyframe corresponds to <Picture 2>", "the shot ends on <Picture 3>", "the framing follows
 <Picture 3>". When a referenced subject speaks, carry both labels: "<Subject 2> (S1) turns to her and says,
-[English] "…"" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
+<d>[English] …</d>" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
 an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
 word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
 happening in each shot.
+${REF_PLACE_AND_LOOK}
 APPEARANCE BELONGS TO subject_definitions, NOT HERE. This section's job is action, camera, and story events —
 not a second description of what the references show. Give a referenced subject's defining trait one short
 descriptive phrase (a few words, not a restated caption) at its FIRST appearance only, then use its <Subject N>
@@ -1775,7 +1781,7 @@ field. [Shot 1] (0.00–4.00s) <Subject 1> stands at a workbench, her hands pres
 the bench buzzes once and lights up — the trigger — and her eyes drop to it, her shoulders drawing in as she
 reads the screen. At 4.00s, the camera cuts to [Shot 2] (4.00–10.00s), a close push in with small amplitude:
 <Subject 1> straightens, sets her jaw, and looks up toward the doorway (S1), saying in a clear, steady voice with
-an edge of defiance, [English] "I'm not asking again." She holds the look through the final 1.5 seconds, her
+an edge of defiance, <d>[English] I'm not asking again.</d> She holds the look through the final 1.5 seconds, her
 breath rising and falling once, slow and even, her jaw staying set — the shot ends on that held gaze." Note what
 this does: the style opening precedes [Shot 1]; each shot's range is derived from its own cut timestamp and the
 next one (rule 5); the phone buzzing physically causes her reaction, which physically causes her decision to

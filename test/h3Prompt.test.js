@@ -17,8 +17,8 @@ describe('buildH3SystemV2', () => {
   const firstlast = buildH3SystemV2('firstlast')
 
   it('is much shorter than legacy', () => {
-    expect(ref.length).toBeLessThan(29500)
-    expect(single.length).toBeLessThan(23000)
+    expect(ref.length).toBeLessThan(32000)
+    expect(single.length).toBeLessThan(25000)
     expect(ref.length).toBeLessThan(legacy.length)
   })
 
@@ -123,5 +123,22 @@ describe('rule 6c (scene-requested speech)', () => {
     expect(legacy).toContain('6c. SCENE-REQUESTED SPEECH')
     expect(buildH3SystemV2('single')).toContain('Rule 6c overrides the one-line cap')
     expect(legacy).toContain('Rule 6c overrides the one-line cap')
+  })
+})
+
+describe('third-party H3 notes (2026-11-25)', () => {
+  const ref2 = buildH3SystemV2('ref')
+  const single2 = buildH3SystemV2('single')
+  it('shared rules are in legacy and V2', () => {
+    for (const s of ['13a. NOTHING EXISTS UNLESS A LINE SAYS SO', '13b. CONTENT H3 DRAWS BADLY', 'SHOT MARKS ARE FOR REAL CUTS', 'Put the spoken line LAST', 'restate which way the subject faces']) {
+      expect(legacy).toContain(s)
+      expect(ref2).toContain(s)
+      expect(single2).toContain(s)
+    }
+  })
+  it('background-not-kept rule is Ref2VA only', () => {
+    expect(ref2).toContain('is not kept.')
+    expect(legacy).toContain('is not kept.')
+    expect(single2).not.toContain('is not kept.')
   })
 })

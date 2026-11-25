@@ -1,7 +1,7 @@
-// Pure helpers for spoken dialogue in an H3 prompt: `[Language] "…"`.
+// Pure helpers for spoken dialogue in an H3 prompt: `<d>[Language] words</d>` (the older `[Language] "…"` form is still recognised so restored history keeps its tint).
 export const H3_LANG_TAGS = ['Arabic', 'Chinese', 'English', 'French', 'German', 'Italian', 'Japanese', 'Korean', 'Portuguese', 'Russian', 'Spanish']
 
-const DIALOGUE_RE = new RegExp(`\\[(?:${H3_LANG_TAGS.join('|')})\\]\\s*(?:"[^"]*"|“[^”]*”)`, 'g')
+const DIALOGUE_RE = new RegExp(`<d>\\s*\\[(?:${H3_LANG_TAGS.join('|')})\\][^<]*</d>|\\[(?:${H3_LANG_TAGS.join('|')})\\]\\s*(?:"[^"]*"|“[^”]*”)`, 'g')
 
 // Split text into [{ text, dialogue }] segments (concatenating them gives back `text`).
 export function splitDialogue(text) {

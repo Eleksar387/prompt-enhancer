@@ -1,6 +1,6 @@
 // "Manual mode" for the standalone MiniMax H3 pipeline — the user writes the
 // story/shot breakdown themselves, directly in H3's own inline tag syntax
-// ([Shot N], <Subject N>, <Picture N>, [Language] "…", (Sk)), and this module
+// ([Shot N], <Subject N>, <Picture N>, <d>[Language] …</d>, (Sk)), and this module
 // deterministically wraps it into a schema-correct H3 prompt with ZERO AI
 // calls: no vision captioning, no writer LLM. It reuses only what's already
 // captured with zero AI — each reference image's `role`/`preserve`/`note`
@@ -463,7 +463,7 @@ export function buildManualH3({ mode, storyText, soundscape, music, duration, re
 
 const PLAIN_SEED =
   '[Shot 1] Cinematic, live-action, a woman turns towards the door…\n'
-  + 'At 00:03.500, the camera cuts to her, who says, [German] "Wir müssen gehen."\n'
+  + 'At 00:03.500, the camera cuts to her, who says, <d>[German] Wir müssen gehen.</d>\n'
   + '[Shot 2] …'
 
 // Shared by buildManualSeed (below) and buildTemplateBody (the "Manual
@@ -516,7 +516,7 @@ export function buildManualSeed(refImages, refAudios) {
   // voice reference with no supplied words still needs one to act on, and
   // Manual mode's own validation blocks exactly this gap (an <Audio N> bound
   // to a subject that never gets a speaker id). So when 1-2 audios are bound,
-  // the seed writes one [Language] "…" line per bound subject, each its own
+  // the seed writes one <d>[Language] …</d> line per bound subject, each its own
   // shot, each its own speaker id (S1, S2…) in binding order — never just the
   // main subject, since the bound subject may be a different reference
   // entirely (e.g. a voice bound to the wardrobe or environment subject).
@@ -528,10 +528,10 @@ export function buildManualSeed(refImages, refAudios) {
 
   if (bound.length) {
     let out = `[Shot 1] Cinematic, live-action, ${opener}${mainClause}…\n`
-      + `At 00:03.500, the camera cuts to <Subject ${bound[0].subjectM}> (${bound[0].speakerId}), who says, [German] "${DIALOGUE_LINES[0]}"`
+      + `At 00:03.500, the camera cuts to <Subject ${bound[0].subjectM}> (${bound[0].speakerId}), who says, <d>[German] ${DIALOGUE_LINES[0]}</d>`
     let shotN = 2
     for (let i = 1; i < bound.length; i++) {
-      out += `\n[Shot ${shotN}] At 00:0${3 + shotN * 3}.000, the camera cuts to <Subject ${bound[i].subjectM}> (${bound[i].speakerId}), who says, [German] "${DIALOGUE_LINES[i] || DIALOGUE_LINES[0]}"`
+      out += `\n[Shot ${shotN}] At 00:0${3 + shotN * 3}.000, the camera cuts to <Subject ${bound[i].subjectM}> (${bound[i].speakerId}), who says, <d>[German] ${DIALOGUE_LINES[i] || DIALOGUE_LINES[0]}</d>`
       shotN++
     }
     out += `\n[Shot ${shotN}] …`
@@ -540,7 +540,7 @@ export function buildManualSeed(refImages, refAudios) {
 
   const speakerTag = mainSubject ? `<Subject ${mainSubject.subjectM}> (S1)` : 'her'
   return withAnchors(`[Shot 1] Cinematic, live-action, ${opener}${mainClause}…\n`
-    + `At 00:03.500, the camera cuts to ${speakerTag}, who says, [German] "${DIALOGUE_LINES[0]}"\n`
+    + `At 00:03.500, the camera cuts to ${speakerTag}, who says, <d>[German] ${DIALOGUE_LINES[0]}</d>\n`
     + `[Shot 2] …`)
 }
 
@@ -580,7 +580,7 @@ const templateDialogueLine = (spokenLangTag, dialogue, delivery) => {
   const d = (dialogue || '').trim()
   if (!d || !spokenLangTag) return ''
   const deliveryNote = (delivery || '').trim() ? `, delivery: ${delivery.trim()}` : ''
-  return `${spokenLangTag} "${d}"${deliveryNote}`
+  return `<d>${spokenLangTag} ${d}</d>${deliveryNote}`
 }
 
 // Everything below is wrapped in one `[Shot 1] …` block on purpose — no

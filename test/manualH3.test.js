@@ -325,7 +325,7 @@ describe('buildManualSeed', () => {
   it('falls back to the plain example with no non-pose references', () => {
     expect(buildManualSeed([])).toBe(
       '[Shot 1] Cinematic, live-action, a woman turns towards the door…\n'
-      + 'At 00:03.500, the camera cuts to her, who says, [German] "Wir müssen gehen."\n'
+      + 'At 00:03.500, the camera cuts to her, who says, <d>[German] Wir müssen gehen.</d>\n'
       + '[Shot 2] …'
     )
     expect(buildManualSeed([ref({ hash: 'p', role: 'pose_composition' })])).toBe(buildManualSeed([]))
@@ -340,7 +340,7 @@ describe('buildManualSeed', () => {
     expect(buildManualSeed(refImages)).toBe(
       "[Shot 1] Cinematic, live-action, <Subject 1> stands by the window, wearing <Subject 2>'s jacket, "
       + 'framed against the backdrop from <Picture 3>…\n'
-      + 'At 00:03.500, the camera cuts to <Subject 1> (S1), who says, [German] "Wir müssen gehen."\n'
+      + 'At 00:03.500, the camera cuts to <Subject 1> (S1), who says, <d>[German] Wir müssen gehen.</d>\n'
       + '[Shot 2] …'
     )
   })
@@ -379,7 +379,7 @@ describe('buildManualSeed', () => {
     const seed = buildManualSeed(refImages, refAudios)
     expect(seed).toContain('<Subject 1> (S1)')
     expect(seed).toContain('<Subject 2> (S2)')
-    expect(seed).toMatch(/\[German\] "[^"]*"[\s\S]*\[German\] "[^"]*"/)
+    expect(seed).toMatch(/<d>\[German\] [^<]*<\/d>[\s\S]*<d>\[German\] [^<]*<\/d>/)
     // Every shot the seed writes must be [Shot N] tagged, so the seed always
     // passes its own validator's "no [Shot N] markers" check too.
     expect(parseShots(seed).length).toBeGreaterThanOrEqual(3)
@@ -448,7 +448,7 @@ describe('buildTemplateBody (the "Manual Prompt" button)', () => {
 
   it('renders typed dialogue + delivery with the given language tag, no subject tag in a non-ref mode', () => {
     const body = buildTemplateBody({ mode: 'T2VA', refImages: [], refAudios: [], scene: '', dialogue: 'We need to leave now.', delivery: 'urgent, hushed', spokenLangTag: '[English]', ...settings })
-    expect(body).toContain('The subject says, [English] "We need to leave now.", delivery: urgent, hushed.')
+    expect(body).toContain('The subject says, <d>[English] We need to leave now.</d>, delivery: urgent, hushed.')
   })
 
   it('omits the dialogue line entirely when nothing is typed', () => {
@@ -473,7 +473,7 @@ describe('buildTemplateBody (the "Manual Prompt" button)', () => {
   it('Ref2VA with dialogue and no bound audio attaches it to the main subject with a real (S1) tag', () => {
     const refImages = [ref({ hash: 'a', role: 'subject_identity', note: 'her face and build' })]
     const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios: [], scene: '', dialogue: 'We need to go.', delivery: '', spokenLangTag: '[English]', ...settings })
-    expect(body).toContain('<Subject 1> (S1), who says, [English] "We need to go."')
+    expect(body).toContain('<Subject 1> (S1), who says, <d>[English] We need to go.</d>')
     const { usage } = parseShotLabelUsage(body)
     expect(usage['Subject 1']).toEqual([1])
     expect(parseSubjectSpeakers(body)).toEqual({ 1: 'S1' })
@@ -486,7 +486,7 @@ describe('buildTemplateBody (the "Manual Prompt" button)', () => {
     ]
     const refAudios = [{ subjectRef: 'b' }]
     const body = buildTemplateBody({ mode: 'Ref2VA', refImages, refAudios, scene: '', dialogue: 'Hold still.', delivery: '', spokenLangTag: '[English]', ...settings })
-    expect(body).toContain('<Subject 2> (S1), who says, [English] "Hold still."')
+    expect(body).toContain('<Subject 2> (S1), who says, <d>[English] Hold still.</d>')
     expect(body).not.toContain('<Subject 1> (S1)')
   })
 
@@ -716,7 +716,7 @@ describe('buildManualSeed — demonstrates an Add Guide anchor when one is confi
   it('is unchanged (no anchor line) with nothing anchored — existing behavior preserved', () => {
     expect(buildManualSeed([])).toBe(
       '[Shot 1] Cinematic, live-action, a woman turns towards the door…\n'
-      + 'At 00:03.500, the camera cuts to her, who says, [German] "Wir müssen gehen."\n'
+      + 'At 00:03.500, the camera cuts to her, who says, <d>[German] Wir müssen gehen.</d>\n'
       + '[Shot 2] …'
     )
   })

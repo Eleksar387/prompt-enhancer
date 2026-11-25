@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { splitDialogue } from '../dialogueSpans'
 
-// A textarea whose spoken dialogue (`[Language] "…"`) is tinted. The textarea
+// A textarea whose spoken dialogue (`<d>[Language] …</d>`) is tinted. The textarea
 // text is transparent and sits over a backdrop with identical typography.
 export default function HighlightedTextarea({ value, onChange, rows, style, onFocus, onBlur }) {
   const back = useRef(null)
