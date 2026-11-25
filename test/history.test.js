@@ -99,6 +99,8 @@ describe('modelProvider / modelFilterLabel', () => {
     expect(modelProvider('x-ai/grok-4')).toBe('Grok')
     expect(modelProvider('openai/gpt-4o')).toBe('OpenRouter')
     expect(modelProvider('google/gemini-2.5-flash')).toBe('OpenRouter')
+    expect(modelProvider('qwen2.5-7b-instruct-q4_k_m.gguf')).toBe('llama.cpp')
+    expect(modelProvider('ggml-org/gemma-3-4b-it-GGUF:Q4_K_M')).toBe('llama.cpp')
     expect(modelProvider('qwen2.5:14b')).toBe('Ollama')
     expect(modelProvider('')).toBe('—')
     expect(modelProvider(undefined)).toBe('—')

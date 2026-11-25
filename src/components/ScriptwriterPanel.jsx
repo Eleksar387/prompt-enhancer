@@ -7,7 +7,7 @@ import {
   // prompts (clip writers, frame-still writers) are NOT imported any more — they
   // come from the target table via clipSystem / FRAME_SYSTEM, so adding a target
   // does not mean adding an import here.
-  SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_SCRIPTWRITER_SOURCE, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
+  SYSTEM_PROMPT_STORY, SYSTEM_PROMPT_SCRIPTWRITER, SYSTEM_PROMPT_SCRIPTWRITER_SOURCE, SYSTEM_PROMPT_DIRECTOR, SYSTEM_PROMPT_DIRECTOR_H3,
   VISION_PROMPT_SCRIPTWRITER, VISION_PROMPT_MINIMAX_H3_REF,
   MINIMAX_H3_RESOLUTIONS, MINIMAX_H3_REF_ROLES, MINIMAX_H3_PRESERVE_OPTIONS, H3_MULTIFRAME_ADDENDUM,
   aspectParts, aspectSceneHint, aspectFramingHint,
@@ -25,11 +25,12 @@ import {
 import { lorasByIds, loraInstruction, withLoraTriggers, loraManifestEntries } from '../loras'
 import { generateId } from '../db'
 import { loadComfyCfg, saveComfyCfg, sendShot, fetchComfyOutputs, fetchComfyImageBlob } from '../comfy'
+import { parseStoryOptions } from '../storyOptions'
 import ScriptwriterRefImages from './ScriptwriterRefImages'
 import ScriptwriterVoiceRefs from './ScriptwriterVoiceRefs'
 import LoraPanel from './LoraPanel'
 import RefModPanel from './RefModPanel'
-import { refModsByIds, refModInstruction, refModManifestEntries, targetTakesRefMods, refModCanonBlock, refModHasLook, describeRefModImage, refModLabels, refModReferenceLines, refModVoiceKey } from '../refmods'
+import { refModsByIds, refModInstruction, refModManifestEntries, targetTakesRefMods, refModCanonBlock, refModHasLook, describeRefModImage, refModLabels, countRealSubjects, refModReferenceLines, refModVoiceKey } from '../refmods'
 import HistoryImageGallery from './HistoryImageGallery'
 import QueuePanel from './QueuePanel'
 import { notifyDone } from '../notify'
@@ -543,7 +544,7 @@ const PACING_LINE = {
   loose:    'Pacing: LOOSE — extra coverage is welcome; more reaction and insert clips are fine.',
 }
 
-const STEPS = ['Script', "Director's Cut", 'Video Prompts']
+const STEPS = ['Story', 'Script', "Director's Cut", 'Video Prompts']
 
 export default function ScriptwriterPanel({
   cfg, writerModel, visionModel = '', initialState = null, onSaveHistory = null,
@@ -589,6 +590,9 @@ export default function ScriptwriterPanel({
 
   const [phase, setPhase] = useState(initialState?.phase || 'input')
   const [idea, setIdea] = useState(initialState?.idea || '')
+  // The compact whole-story lines written BEFORE the full script (phase 'story').
+  const [story, setStory] = useState(initialState?.story || '')
+  const [storyOptions, setStoryOptions] = useState(Array.isArray(initialState?.storyOptions) ? initialState.storyOptions : [])
   const [genre, setGenre] = useState(initialState?.genre || 'auto')
   // NSFW toggle. Every LLM call in the chain reads `nsfwLine`, so the rating
   // set here survives all the way to the clip prompts instead of being applied
@@ -610,6 +614,7 @@ export default function ScriptwriterPanel({
   // (window.__peLastH3Messages) plus the existing per-clip "✦ Rewrite" button,
   // rather than N editable review panels. Never used for a Full Auto run —
   // see the autoActive checks at each pause site.
+  const [reviewPhase0, setReviewPhase0] = useState(null)   // { system, user, refs, revertTo } | null
   const [reviewPhase1, setReviewPhase1] = useState(null)   // { system, user, refs } | null
   const [reviewPhase2, setReviewPhase2] = useState(null)   // { system, user, refs } | null
   const [sceneCount, setSceneCount] = useState(initialState?.sceneCount || 1)
@@ -1001,10 +1006,12 @@ export default function ScriptwriterPanel({
   }
 
   // --- history payload assembly (shared by all four save sites) -----------
-  const basePayload = (phaseName, refsOverride) => {
+  const basePayload = (phaseName, refsOverride, storyOverride, optionsOverride) => {
     const refs = refsOverride || refImages
     return {
       id: sessionId.current, ts: Date.now(), type: 'scriptwriter',
+      story: (storyOverride ?? story).trim(),
+      storyOptions: optionsOverride ?? storyOptions,
       model: writerModel,
       vision: refs.some(im => im.caption && im.caption.trim()) ? visModel : null,
       idea: idea.trim(), genre, mature, sourceMode, sceneCount, runtime, phase: phaseName,
@@ -1029,6 +1036,57 @@ export default function ScriptwriterPanel({
     onSaveHistory(payload)
   }
 
+  // Phase 0 — the compact story. A few plain lines (no JSON) that the full script
+  // is then written FROM, so the premise is chosen before the schema work starts.
+  const runPhase0 = async (opts = {}) => {
+    if (!idea.trim() || sourceMode) return
+    const revertTo = opts.revertTo === 'story' ? 'story' : 'input'
+    setError(''); setRawFallback('')
+    let refs = refImages
+    if (refImages.some(im => im.base64 && !im.caption?.trim())) {
+      try { refs = await captionRefImages() }
+      catch (e) {
+        setError(e?.isRefusal
+          ? e.message
+          : 'Could not read the reference images (see the note above). Fix the vision model or remove the images to continue.')
+        return
+      }
+    }
+    const genreHint = genre === 'auto' ? 'Infer a suitable genre from the story idea.' : `Genre: ${genre}`
+    const refBlock = assembleRefBlock(refs, REF_HEADING_CANON)
+    const sceneHint = aspectSceneHint(aspectRes(aspectRatio))
+    const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
+    const refModCanon = promptTarget === 'minimax_h3' ? refModCanonBlock(activeRefMods, promptTarget) : ''
+    const runtimeLn = runtime > 0 ? `\nTarget runtime: about ${runtime} seconds.` : ''
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}${runtimeLn}${nsfwLine}${refBlock}${refModCanon}\n\nWrite the three story options now.`
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      window.__peLastPhase0Message = { system: SYSTEM_PROMPT_STORY, user: userMsg }
+    }
+    if (adminMode && !autoActive) {
+      setReviewPhase0({ system: SYSTEM_PROMPT_STORY, user: userMsg, refs, revertTo })
+      return
+    }
+    await sendPhase0(SYSTEM_PROMPT_STORY, userMsg, refs, revertTo)
+  }
+  const sendPhase0 = async (system, userMsg, refs, revertTo = 'input') => {
+    setPhase('storying')
+    try {
+      const { text } = await callOllama(writerModel, userMsg, system, cfg, 1.0)
+      const opts = parseStoryOptions(text)
+      if (!opts.length) throw new Error('The model returned no story. Try again.')
+      setStoryOptions(opts)
+      setStory(opts[0])
+      setPhase('story')
+      persistStateNow(undefined, refs, undefined, 'story', undefined, undefined, opts[0], opts)
+      if (!autoActive) { notifyDone('Story ready', opts[0].slice(0, 80)); unloadAfterRun(cfg) }
+    } catch (e) {
+      setError(e.message)
+      setPhase(revertTo)
+    }
+  }
+  const phase0Ref = useRef(null)
+  phase0Ref.current = runPhase0
+
   const runPhase1 = async () => {
     if (!idea.trim()) return
     setError(''); setRawFallback('')
@@ -1051,7 +1109,10 @@ export default function ScriptwriterPanel({
     const refModCanon = promptTarget === 'minimax_h3' ? refModCanonBlock(activeRefMods, promptTarget) : ''
     const budget = sourceMode ? null : sceneBudget(runtime, sceneCap)
     const sceneLine = budget ? runtimeLine(budget) : `Maximum number of scenes: ${sceneCount}`
-    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\n${sceneLine}${formatLine}${nsfwLine}${refBlock}${refModCanon}\n\nOutput only valid JSON.`
+    const storyText = sourceMode ? '' : story.trim()
+    const storyBlock = storyText ? `\n\nStory to dramatize (canon — keep its premise, turn and ending; expand it into scenes, cast and locations):\n${storyText}` : ''
+    const revertTo = storyText ? 'story' : 'input'
+    const userMsg = `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(pickedLangLabel)}\n${sceneLine}${formatLine}${nsfwLine}${refBlock}${refModCanon}${storyBlock}\n\nOutput only valid JSON.`
     const phase1System = sourceMode ? SYSTEM_PROMPT_SCRIPTWRITER_SOURCE : SYSTEM_PROMPT_SCRIPTWRITER
     // DEV-only prompt inspection, independent of Admin mode below — lets a prod
     // (or non-admin) run be checked too. Open the browser console
@@ -1062,15 +1123,15 @@ export default function ScriptwriterPanel({
     // Full Auto (autoActive) always sends straight through — an admin pause
     // there would hang the queued job, since nothing would ever click Send.
     if (adminMode && !autoActive) {
-      setReviewPhase1({ system: phase1System, user: userMsg, refs })
+      setReviewPhase1({ system: phase1System, user: userMsg, refs, revertTo })
       return
     }
-    await sendPhase1(phase1System, userMsg, refs)
+    await sendPhase1(phase1System, userMsg, refs, revertTo)
   }
   // The actual Phase 1 call + result handling — split out of runPhase1 so
   // Admin mode can hold the assembled message for review/edit first and call
   // this only once the user clicks Send (see reviewPhase1 above).
-  const sendPhase1 = async (system, userMsg, refs) => {
+  const sendPhase1 = async (system, userMsg, refs, revertTo = 'input') => {
     setPhase('scripting')
     try {
       const { text } = await callOllama(writerModel, userMsg, system, cfg, 0.7, { format: 'json' })
@@ -1084,7 +1145,7 @@ export default function ScriptwriterPanel({
       if (!autoActive) { notifyDone('Script ready', data.title || ''); unloadAfterRun(cfg) }
     } catch (e) {
       setError(e.message)
-      setPhase('input')
+      setPhase(revertTo)
     }
   }
   // Reassigned every render (like enhanceRef in App.jsx) so the Full Auto
@@ -1105,6 +1166,7 @@ export default function ScriptwriterPanel({
     const formatLine = sceneHint ? `\nDelivery format: ${sceneHint}` : ''
     const userMsg =
       `Story idea: ${idea.trim()}\n${genreHint}${spokenLangLine(filmLangLabel)}${formatLine}${nsfwLine}\n\n`
+      + (story.trim() && !sourceMode ? `Story to dramatize (canon — stay inside it):\n${story.trim()}\n\n` : '')
       + `You already wrote this script (title, bible and all scenes):\n${JSON.stringify(script, null, 2)}${refBlock}\n\n`
       + `Rewrite ONLY scene ${scene.id}${scene.title ? ` ("${scene.title}")` : ''}. `
       + `Give a fresh version of the same story beat — you may change the action, blocking or dialogue — but keep it consistent with the surrounding scenes, reuse the existing characters and locations by their exact names, and keep the same scene "id". `
@@ -1468,7 +1530,7 @@ export default function ScriptwriterPanel({
   // carries them.
   const virtualRefsFor = (realRefs) => (promptTarget === 'minimax_h3'
     ? refModLabels(refMods, activeRefModIds, {
-        realSubjectCount: realRefs.filter(im => im.role !== 'pose_composition').length,
+        realSubjectCount: countRealSubjects(realRefs),
       })
     : [])
   const buildH3ShotMessage = (shot, ratio, refsList = refImages) => {
@@ -1738,7 +1800,7 @@ export default function ScriptwriterPanel({
         setIdea(buildAutoIdea(autoJob.hint))
         setAutoActive(true)
       })
-      phase1Ref.current()
+      phase0Ref.current()
     }, 0)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount only
@@ -1755,13 +1817,14 @@ export default function ScriptwriterPanel({
   // job's content is the problem, so it must NOT be reported ok.
   useEffect(() => {
     if (!autoActive || autoDoneRef.current) return
-    if (phase === 'script' && script && !error) { phase2Ref.current() }
+    if (phase === 'story' && story.trim() && !script && !error) { phase1Ref.current() }
+    else if (phase === 'script' && script && !error) { phase2Ref.current() }
     else if (phase === 'dircut' && directorsCut && !error) { phase3Ref.current() }
     else if (phase === 'done') {
       autoDoneRef.current = true; setAutoActive(false)
       unloadAfterRun(cfg)
       onAutoJobDone?.({ ok: true })
-    } else if (error && (phase === 'input' || phase === 'script' || phase === 'dircut')) {
+    } else if (error && (phase === 'input' || phase === 'story' || phase === 'script' || phase === 'dircut')) {
       autoDoneRef.current = true; setAutoActive(false)
       unloadAfterRun(cfg)
       onAutoJobDone?.({ ok: false, error })
@@ -2365,17 +2428,17 @@ export default function ScriptwriterPanel({
   // screen that doesn't exist.
   const refImagesPanelRef = useRef(null)
   const scrollToRefImages = () => refImagesPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  const persistStateNow = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride) => {
+  const persistStateNow = (framePromptsOverride, refsOverride, cutOverride, phaseOverride, promptsOverride, scriptOverride, storyOverride, optionsOverride) => {
     const scr = scriptOverride || script
-    if (!onSaveHistory || !scr) return
+    if (!onSaveHistory || (!scr && !(storyOverride ?? story).trim())) return
     // Always store every artifact that exists, regardless of the current screen —
     // the record must carry the WHOLE path (script → cut → prompts) so a restore
     // can drop the user back on any step with the others intact. `phase` alone
     // says which screen they were last on.
     const fp = promptsOverride !== undefined ? promptsOverride : finalPrompts
     commitHistory({
-      ...basePayload(phaseOverride || phase, refsOverride || refImages),
-      script: scr,
+      ...basePayload(phaseOverride || phase, refsOverride || refImages, storyOverride, optionsOverride),
+      script: scr || null,
       directorsCut: cutOverride || directorsCut || null,
       finalPrompts: (fp && fp.length)
         ? fp.map(p => ({ shotNumber: p.shotNumber, sceneTitle: p.sceneTitle, text: p.text || '', usage: p.usage || null }))
@@ -2414,12 +2477,13 @@ export default function ScriptwriterPanel({
   // "← Back to …" buttons) — pure navigation, never re-runs the LLM. Each jump is
   // written to history so a restore lands on the same screen.
   const stepReachable = (target) => {
+    if (target === 'story')  return !sourceMode && !!story.trim()
     if (target === 'script') return !!script
     if (target === 'dircut') return !!directorsCut
     if (target === 'done')   return finalPrompts.length > 0
     return false
   }
-  const navBusy = () => ['scripting', 'directing', 'prompting'].includes(phase)
+  const navBusy = () => ['storying', 'scripting', 'directing', 'prompting'].includes(phase)
     || sceneBusy !== null || shotBusy !== null || promptBusy !== null
   const navigateTo = (target) => {
     if (navBusy() || phase === target || !stepReachable(target)) return
@@ -2962,12 +3026,13 @@ export default function ScriptwriterPanel({
     )
   }
 
-  const stepIdx = ['input', 'scripting', 'script', 'directing'].includes(phase) ? 0
-    : phase === 'dircut' ? 1
-    : 2
-  const STEP_PHASE = ['script', 'dircut', 'done']
+  const stepIdx = ['input', 'storying', 'story'].includes(phase) ? 0
+    : ['scripting', 'script', 'directing'].includes(phase) ? 1
+    : phase === 'dircut' ? 2
+    : 3
+  const STEP_PHASE = ['story', 'script', 'dircut', 'done']
 
-  const isLoading = ['scripting', 'directing', 'prompting'].includes(phase) || !!reviewPhase1 || !!reviewPhase2
+  const isLoading = ['storying', 'scripting', 'directing', 'prompting'].includes(phase) || !!reviewPhase0 || !!reviewPhase1 || !!reviewPhase2
   const refModPanel = refModsOn && (
     <RefModPanel
       refMods={refMods} activeIds={activeRefModIds} editable={!isLoading}
@@ -3081,7 +3146,7 @@ export default function ScriptwriterPanel({
       />
 
       {/* Phase 1 — input */}
-      {['input', 'scripting'].includes(phase) && (
+      {(['input', 'scripting'].includes(phase) || (phase === 'storying' && !story.trim())) && (
         <div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <button onClick={() => setAutoMode(false)} disabled={isLoading} style={btn(!autoMode)}>Guided</button>
@@ -3177,10 +3242,16 @@ export default function ScriptwriterPanel({
                 hint={'(style LoRAs for the whole film — a character LoRA is bound to a cast member in the Cast list instead)'}
                 comfyUrl={comfyCfg.url} />
                 {refModPanel}
-              <button onClick={runPhase1} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
-                {captioning ? '👁 Reading reference images…' : phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script'}
+              <button onClick={sourceMode ? runPhase1 : runPhase0} disabled={!idea.trim() || isLoading || captioning} style={genBtn(!idea.trim() || isLoading || captioning)}>
+                {captioning ? '👁 Reading reference images…' : phase === 'storying' ? '✦ Writing story…' : phase === 'scripting' ? '✦ Writing script…' : sourceMode ? '✦ Write Script' : '✦ Write Story'}
               </button>
-              {renderAdminReview('Phase 1 (Script)', reviewPhase1, setReviewPhase1, (r) => sendPhase1(r.system, r.user, r.refs))}
+              {!sourceMode && (
+                <button type="button" disabled={!idea.trim() || isLoading || captioning} style={{ ...ghostBtn, marginLeft: 10 }}
+                  onClick={() => { flushSync(() => setStory('')); phase1Ref.current() }}
+                  title="Skip the story step and write the full script straight from the idea">skip story → write script</button>
+              )}
+              {renderAdminReview('Phase 0 (Story)', reviewPhase0, setReviewPhase0, (r) => sendPhase0(r.system, r.user, r.refs, r.revertTo))}
+              {renderAdminReview('Phase 1 (Script)', reviewPhase1, setReviewPhase1, (r) => sendPhase1(r.system, r.user, r.refs, r.revertTo))}
             </>
           ) : (
             <div>
@@ -3320,6 +3391,38 @@ export default function ScriptwriterPanel({
                 style={{ ...field({ background: 'var(--pe-danger-bg)', color: 'var(--pe-danger)', fontSize: 13, fontFamily: 'monospace', resize: 'vertical' }) }} />
             </div>
           )}
+        </div>
+      )}
+
+      {/* Phase 0 — the compact story, written before the script */}
+      {(phase === 'story' || (phase === 'storying' && story.trim())) && (
+        <div style={{ ...card }}>
+          <label style={lbl}>Story <span style={{ textTransform: 'none', letterSpacing: 0 }}>(pick one of three options, edit it freely, or rewrite for new ones)</span></label>
+          <div style={{ fontSize: 12.5, color: 'var(--pe-ink-3)', marginBottom: 8, lineHeight: 1.5 }}>Idea: {idea.trim()}</div>
+          {storyOptions.length > 1 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              {storyOptions.map((o, i) => (
+                <button key={i} type="button" disabled={isLoading} onClick={() => { setStory(o); persistState(undefined, undefined, undefined, 'story') }}
+                  title={o} style={{ ...btn(story.trim() === o.trim()), flex: '1 1 150px', textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.4 }}>
+                  <strong>Option {i + 1}</strong><br />{o.split('\n')[0].slice(0, 60)}
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea value={story} rows={7} disabled={phase === 'storying'}
+            onChange={e => { setStory(e.target.value); persistState(undefined, undefined, undefined, 'story') }}
+            style={field({ resize: 'vertical', lineHeight: 1.55 })} onFocus={focusBorder} onBlur={blurBorder} />
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            <button disabled={isLoading || !story.trim()} style={genBtn(isLoading || !story.trim())}
+              onClick={() => {
+                if (script && !window.confirm('Writing a new script replaces the current script, Director\'s Cut and prompts. Continue?')) return
+                runPhase1()
+              }}>{phase === 'scripting' ? '✦ Writing script…' : '✦ Write Script from this story'}</button>
+            <button disabled={isLoading} style={ghostBtn} onClick={() => runPhase0({ revertTo: 'story' })}>
+              {phase === 'storying' ? '↻ Rewriting…' : '↻ New story options'}
+            </button>
+            {script && <button disabled={isLoading} style={ghostBtn} onClick={() => navigateTo('script')}>→ Script (keep current)</button>}
+          </div>
         </div>
       )}
 

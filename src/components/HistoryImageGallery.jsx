@@ -490,7 +490,35 @@ export const pickPayload = (img, base) => ({
 // only thing that changes per keystroke elsewhere in the app is nothing at all —
 // `img` comes from a memoized collectImages() and every callback is stable, so a
 // tile re-renders only when it is the one whose info panel opened or closed.
-const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart, onRemove }) {
+function Lightbox({ img, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div
+      role="dialog" aria-label="Full-size image" data-testid="image-lightbox"
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16 }}
+    >
+      <button
+        onClick={onClose} aria-label="Close"
+        style={{ position: 'absolute', top: 12, right: 16, fontSize: 22, color: '#fff', background: 'none', border: 'none', cursor: 'pointer' }}
+      >✕</button>
+      <img
+        src={img.url} alt={img.fileName}
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: '92vw', maxHeight: '88vh', objectFit: 'contain', borderRadius: 6 }}
+      />
+      <div style={{ color: '#ddd', fontSize: 13 }} onClick={(e) => e.stopPropagation()}>
+        {img.fileName} · {roleIcon(img.role)} {roleLabel(img.role)}
+      </div>
+    </div>
+  )
+}
+
+const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragStart, onRemove, onZoom }) {
   const pick = onPick ? async () => {
     const resolved = await resolveDragImage({ url: img.url, mediaType: img.mediaType, fileName: img.fileName, hash: img.hash })
     if (!resolved) return
@@ -539,6 +567,16 @@ const Tile = memo(function Tile({ img, selected, onPick, onToggleInfo, onDragSta
           padding: 0, textAlign: 'center', background: selected ? 'var(--pe-accent-ink)' : 'rgba(8,8,16,0.72)', color: '#fff',
         }}
       >i</button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onZoom(img) }}
+        title="View full size"
+        aria-label="View full size"
+        style={{
+          position: 'absolute', bottom: 20, right: 3, width: 18, height: 18, borderRadius: '50%',
+          border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '18px',
+          padding: 0, textAlign: 'center', background: 'rgba(8,8,16,0.72)', color: '#fff',
+        }}
+      >🔍</button>
       {img.slot === 'library' && onRemove && (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(img.key) }}
@@ -610,6 +648,9 @@ function HistoryImageGallery({
     } catch { /* older browsers */ }
   }, [])
   const toggleInfo = useCallback((key) => setInfoFor(k => (k === key ? null : key)), [])
+  const [zoomImg, setZoomImg] = useState(null)
+  const onZoom = useCallback((img) => setZoomImg(img), [])
+  const closeZoom = useCallback(() => setZoomImg(null), [])
 
   // A real OS file drag, never the gallery's own in-app hasDragImage drag
   // (dropping a tile dragged out of this same gallery back onto it must stay
@@ -658,14 +699,15 @@ function HistoryImageGallery({
           ) : (<>
           <p style={{ fontSize: 13, color: 'var(--pe-ink-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
             Images used in past generations{onAddLibraryImages ? ', plus any you drag in here directly' : ''}. Drag one onto an image slot below{onPick ? ', or click it' : ''}
-            {pickHint ? ` — ${pickHint}` : ''}. Click the <strong>i</strong> badge to read or edit an image's vision description.
+            {pickHint ? ` — ${pickHint}` : ''}. Click 🔍 to view an image full size, or the <strong>i</strong> badge to read or edit its vision description.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
             {shown.map((img) => (
               <Tile key={img.key} img={img} selected={infoFor === img.key}
-                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} onRemove={onRemoveLibraryImage} />
+                onPick={onPick} onToggleInfo={toggleInfo} onDragStart={onDragStart} onRemove={onRemoveLibraryImage} onZoom={onZoom} />
             ))}
           </div>
+          {zoomImg && <Lightbox img={zoomImg} onClose={closeZoom} />}
           {infoImg && (
             <ImageInfoPanel img={infoImg} onSaveCaption={onSaveCaption} onSaveRefImageCaption={onSaveRefImageCaption} onDescribeRefImage={onDescribeRefImage}
               onSaveLibraryCaption={onSaveLibraryCaption} onSetLibraryRole={onSetLibraryRole} onDescribeLibraryImage={onDescribeLibraryImage}

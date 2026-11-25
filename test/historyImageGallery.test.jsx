@@ -451,3 +451,12 @@ describe('ImageInfoPanel — every image has a role', () => {
     expect(html).not.toContain('Pose / Composition')
   })
 })
+
+describe('HistoryImageGallery — full-size zoom button', () => {
+  it('still renders with the zoom button wired in (smoke only)', () => {
+    const history = [entry('', undefined)]
+    const html = renderToStaticMarkup(<HistoryImageGallery history={history} onPick={() => {}} />)
+    // The gallery opens in an effect, which static markup doesn't run, so this is a smoke test only.
+    expect(typeof html).toBe('string')
+  })
+})

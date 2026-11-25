@@ -71,6 +71,9 @@ const capitalise = (s) => s.replace(/^(\s*)([a-z])/, (_, sp, c) => sp + c.toUppe
 export function cleanShotText(text, { subjectSlotOf = () => null, speakerRef = () => '@voice(a speaker)' } = {}) {
   let t = String(text || '')
 
+  // 0) writer `<d>[Lang] words</d>` → the quoted form step 1 lifts (the older `[Lang] "words"` still works too)
+  t = t.replace(/<d>\s*\[([A-Za-z][A-Za-z ]*)\]\s*([^<]*?)\s*<\/d>/gi, (_, lang, words) => `[${lang}] "${words.replace(/"/g, "'")}"`)
+
   // 1) lift each `[Lang] "…"` sentence into its own `@ref` line, keeping its place in the text
   t = t.replace(/([^.!?\n]*?)\[([A-Za-z][A-Za-z ]*)\]\s*["“]([^"”]+)["”][.!?]?/g, (all, prefix, lang, quote) => {
     const s = prefix.match(/\(S(\d+)\)/)

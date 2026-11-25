@@ -36,6 +36,9 @@ function toOpenAIContent(userContent) {
 export const isAnthropic = (base) => (base || '').includes('anthropic.com')
 export const isGrok = (base) => (base || '').includes('api.x.ai')
 export const isOpenRouter = (base) => (base || '').includes('openrouter.ai')
+// llama.cpp's `llama-server` — a local OpenAI-compatible server, default port 8080. Recognized by
+// that port on localhost; any other port still works as a generic local base.
+export const isLlamaCpp = (base) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):8080(\/|$)/i.test(base || '')
 // Langdock's completion API has no browser CORS support, so it's only ever reached through the
 // Vite dev/preview proxy at the relative /langdock path (vite.config.js) — but also recognize the
 // absolute URL from Langdock's own docs, since a pasted copy of that needs to be normalized back
@@ -43,7 +46,7 @@ export const isOpenRouter = (base) => (base || '').includes('openrouter.ai')
 export const isLangdock = (base) => (base || '').includes('/langdock') || (base || '').includes('langdock.com')
 // Which provider slot a base URL belongs to — keys the per-provider API key store (cfg.apiKeys).
 export const providerOf = (base) =>
-  isAnthropic(base) ? 'anthropic' : isGrok(base) ? 'grok' : isOpenRouter(base) ? 'openrouter' : isLangdock(base) ? 'langdock' : 'other'
+  isAnthropic(base) ? 'anthropic' : isGrok(base) ? 'grok' : isOpenRouter(base) ? 'openrouter' : isLangdock(base) ? 'langdock' : isLlamaCpp(base) ? 'llamacpp' : 'other'
 // Any hosted provider — as opposed to a local/self-hosted Ollama-compatible server.
 export const isCloud = (base) => isAnthropic(base) || isGrok(base) || isOpenRouter(base) || isLangdock(base)
 
@@ -61,7 +64,7 @@ export function authHeaders(cfg) {
       'anthropic-dangerous-direct-browser-access': 'true',
     }
   }
-  // Grok (xAI), OpenRouter, and Ollama all speak plain OpenAI-style bearer auth.
+  // Grok (xAI), OpenRouter, Langdock, Ollama and llama.cpp all speak plain OpenAI-style bearer auth.
   return { 'Authorization': `Bearer ${cfg.apiKey}` }
 }
 
@@ -80,18 +83,24 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   const headers = { 'Content-Type': 'application/json', ...authHeaders(cfg) }
   // `format` is an Ollama-specific field name, not part of the OpenAI-compatible
   // surface — only send it to an actual Ollama-family server.
-  const formatParam = opts.format && !isCloud(cfg.base) ? { format: opts.format } : {}
+  // llama-server instead takes the OpenAI `response_format`, which it compiles to a grammar.
+  const formatParam = !opts.format || isCloud(cfg.base) ? {}
+    : isLlamaCpp(cfg.base) ? { response_format: { type: 'json_object' } }
+    : { format: opts.format }
   // Every provider here (including Langdock, for a Claude-routed request) honors plain
   // `max_tokens`. Some OpenAI o-series/GPT-5-family models reject it outright and name
   // `max_completion_tokens` in the error instead — the retry below switches to that key
   // on demand rather than assuming it up front, since guessing wrong (as a prior version
   // of this code did for Langdock) silently truncates output instead of erroring.
   let maxTokensKey = 'max_tokens'
-  const doFetch = (includeTemperature, maxTokens) => fetch(`${base}/chat/completions`, {
+  // Optional nucleus sampling; blank/unset = not sent (provider default).
+  const topPValue = typeof cfg.topP === 'number' && cfg.topP > 0 && cfg.topP <= 1 ? cfg.topP : null
+  const doFetch = (includeTemperature, maxTokens, includeTopP = true) => fetch(`${base}/chat/completions`, {
     method: 'POST', headers,
     body: JSON.stringify({
       model, messages, [maxTokensKey]: maxTokens, stream: false,
       ...(includeTemperature ? { temperature } : {}),
+      ...(includeTopP && topPValue != null ? { top_p: topPValue } : {}),
       ...formatParam,
     }),
   })
@@ -101,7 +110,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     res = await doFetch(true, baseMaxTokens)
   } catch (e) {
     const label = isAnthropic(cfg.base) ? 'api.anthropic.com' : isGrok(cfg.base) ? 'api.x.ai' : isOpenRouter(cfg.base) ? 'openrouter.ai' : isLangdock(cfg.base) ? 'api.langdock.com' : base
-    throw new Error(`Network error reaching ${label}. ${isCloud(cfg.base) ? 'Check your internet connection.' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
+    throw new Error(`Network error reaching ${label}. ${isCloud(cfg.base) ? 'Check your internet connection.' : isLlamaCpp(cfg.base) ? 'Is llama-server running (default port 8080)?' : 'Is Ollama running and is OLLAMA_ORIGINS set?'} (${e.message})`)
   }
   // Some newer Claude models reject a custom temperature outright; retry once without it.
   // Some OpenAI o-series/GPT-5-family models reject `max_tokens` and name
@@ -111,7 +120,9 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
     // Not every provider nests its error under `error.message` (OpenAI/OpenRouter's
     // shape) — Langdock's own errors are a top-level `{ message }`.
     try { const j = await res.clone().json(); msg = (j.error && (j.error.message || j.error)) || j.message || '' } catch {}
-    if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
+    if (topPValue != null && /top_p/i.test(msg) && /deprecated|not supported|unsupported|cannot both|only one|both/i.test(msg)) {
+      try { res = await doFetch(true, baseMaxTokens, false) } catch {}
+    } else if (/temperature/i.test(msg) && /deprecated|not supported|unsupported/i.test(msg)) {
       try { res = await doFetch(false, baseMaxTokens) } catch {}
     } else if (/max_completion_tokens/i.test(msg) && maxTokensKey === 'max_tokens') {
       maxTokensKey = 'max_completion_tokens'
@@ -144,7 +155,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
   }
   if (!rawText) {
     if (msg.reasoning) {
-      throw new Error(`${model} ran out of output length while "thinking"${retried ? ' even after retrying with a much larger token budget' : ''} and never produced a final answer. Raise "Max output tokens" in ⚙ Backend, try a less reasoning-heavy model, or — if that doesn't help — its Ollama context window (num_ctx) itself is likely the real ceiling; increase that server-side (e.g. OLLAMA_CONTEXT_LENGTH or a Modelfile PARAMETER num_ctx).`)
+      throw new Error(`${model} ran out of output length while "thinking"${retried ? ' even after retrying with a much larger token budget' : ''} and never produced a final answer. Raise "Max output tokens" in ⚙ Backend, try a less reasoning-heavy model, or — if that doesn't help — its context window itself is likely the real ceiling; increase that server-side (${isLlamaCpp(cfg.base) ? "llama-server's -c / --ctx-size" : 'e.g. OLLAMA_CONTEXT_LENGTH or a Modelfile PARAMETER num_ctx'}).`)
     }
     throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
   }
@@ -172,6 +183,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
         body: JSON.stringify({
           model, messages, [maxTokensKey]: baseMaxTokens, stream: false,
           temperature: Math.min(typeof temperature === 'number' ? temperature : 0.7, 0.3),
+          ...(topPValue != null ? { top_p: topPValue } : {}),
           ...(isCloud(cfg.base) ? {} : { frequency_penalty: 0.3 }),
           ...formatParam,
         }),
@@ -183,7 +195,7 @@ export async function callOllama(model, userContent, system, cfg, temperature, o
       }
     } catch {}
     if (!second || looksDegenerate(second)) {
-      throw new Error(`${model} got stuck repeating itself and the output was discarded (also on a retry at a lower temperature). Try again, pick another Writer model, or — for a local Ollama model — check that its context length is large enough (the MiniMax H3 prompt needs roughly 16k tokens).`)
+      throw new Error(`${model} got stuck repeating itself and the output was discarded (also on a retry at a lower temperature). Try again, pick another Writer model, or — for a local model — check that its context length is large enough (the MiniMax H3 prompt needs roughly 16k tokens).`)
     }
     text = second
   }
@@ -216,7 +228,7 @@ export const unloadAfterRun = (cfg) => { if (!unloadQuiet) unloadOllamaModels(cf
 // with keep_alive: 0. Best-effort — never throws. No-op for cloud bases or when the
 // "unload after generation" option is off.
 export async function unloadOllamaModels(cfg) {
-  if (!cfg || !cfg.unloadAfter || isCloud(cfg.base)) return
+  if (!cfg || !cfg.unloadAfter || isCloud(cfg.base) || isLlamaCpp(cfg.base)) return
   try {
     const origin = (cfg.base || '').replace(/\/+$/, '').replace(/\/v1$/, '')
     const res = await fetch(`${origin}/api/ps`)

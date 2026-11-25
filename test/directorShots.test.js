@@ -88,3 +88,13 @@ describe('attachAnchorsToSegments', () => {
     expect(r.warnings.join()).toContain('left out')
   })
 })
+
+describe('cleanShotText — <d> dialogue wrapper', () => {
+  it('lifts <d>[Lang] words</d> into the same @ref line as the quoted form', () => {
+    const opts = { subjectSlotOf: () => 1, speakerRef: () => '@ref1' }
+    const a = cleanShotText('<Subject 1> (S1) turns, saying in a clear, steady voice, <d>[English] We have to go.</d>', opts)
+    const b = cleanShotText('<Subject 1> (S1) turns, saying in a clear, steady voice, [English] "We have to go."', opts)
+    expect(a).toBe(b)
+    expect(a).toContain('@ref1 [English] says in a clear, steady voice: We have to go.')
+  })
+})

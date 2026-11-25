@@ -4,17 +4,23 @@ import { selStyle } from '../utils'
 const FILTER_THRESHOLD = 8
 
 // A plain <select> is hard to scan once a provider lists dozens or hundreds of models
-// (OpenRouter especially). Above FILTER_THRESHOLD options this adds a small text box
+// (llama.cpp router mode, Langdock). Above FILTER_THRESHOLD options this adds a small text box
 // that narrows the <select> to models whose name contains the typed substring —
 // no fuzzy matching, no custom dropdown/keyboard handling, just <select> plus a filter.
 function ModelSelect({ models, value, onChange, style }) {
   const [filter, setFilter] = useState('')
 
+  // Alphabetical (case-insensitive, numeric-aware: gpt-4 before gpt-10) — display order only;
+  // the auto-pickers (pickWriter/pickVision) still see the provider's own order.
+  const sorted = useMemo(
+    () => [...models].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })),
+    [models])
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    if (!q) return models
-    return models.filter(m => m.toLowerCase().includes(q))
-  }, [models, filter])
+    if (!q) return sorted
+    return sorted.filter(m => m.toLowerCase().includes(q))
+  }, [sorted, filter])
 
   // The current value must stay a real <option> even when it's filtered out —
   // otherwise typing a search term would silently blank/change the selection.

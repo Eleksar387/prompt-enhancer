@@ -102,6 +102,11 @@ export const refModManifestEntries = (library, ids) =>
 export const REF_MOD_TAG = {
   subject_identity: 'Subject', environment: 'Location', wardrobe: 'Wardrobe', product_object: 'Object', style: 'Style',
 }
+// Roles whose real reference image gets a <Subject M> number. A location, style or
+// pose image is cited as a standalone <Picture N> and takes no Subject number, so it
+// must not push a RefMod's <Subject 1> up.
+export const SUBJECT_NUMBERED_ROLES = ['subject_identity', 'wardrobe', 'product_object']
+export const countRealSubjects = (refImages) => (refImages || []).filter(im => SUBJECT_NUMBERED_ROLES.includes(im.role)).length
 // -> [{ refMod, file, strength, tag, index, label: '<Subject 1>', role, preserve }]
 export function refModLabels(library, ids, { realSubjectCount = 0 } = {}) {
   const counts = { Subject: realSubjectCount }

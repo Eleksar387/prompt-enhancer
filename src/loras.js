@@ -133,7 +133,7 @@ export function loraInstruction(active, targetId) {
     + (fields
       ? ` In this format they belong in the ${fields[0]} (or ${fields[1]}) field only: `
         + `never in summary, subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music, and `
-        + `never inside quotes — quoted text is spoken dialogue or rendered on screen exactly as written.`
+        + `never inside <d> tags or quotes — those hold spoken dialogue or on-screen text exactly as written.`
       : '')
 }
 
@@ -159,7 +159,7 @@ const proseOf = (text, fields) => {
     if (!m) continue
     const rest = text.slice(m.index + m[0].length)
     const end = rest.search(/\n[ \t]*[a-z_]+[ \t]*:/i)
-    return (end < 0 ? rest : rest.slice(0, end)).replace(/"[^"]*"/g, ' ')
+    return (end < 0 ? rest : rest.slice(0, end)).replace(/<d>[\s\S]*?<\/d>/gi, ' ').replace(/"[^"]*"/g, ' ')
   }
   return null
 }

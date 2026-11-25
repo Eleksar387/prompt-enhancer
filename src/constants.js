@@ -1,4 +1,5 @@
 import { buildH3SystemV2 } from './h3Prompt'
+import { R4_FACING, R5_REAL_CUTS, R6_LINE_LAST, R13A, R13B, REF_PLACE_AND_LOOK } from './h3Notes'
 const buildLtx = (intro, firstlast, firstmidlast, rest) => (frameMode) => {
   const modeSection = frameMode === 'firstlast' ? firstlast : frameMode === 'firstmidlast' ? firstmidlast : ''
   return [intro, modeSection, rest].filter(Boolean).join('\n\n')
@@ -943,7 +944,35 @@ CRAFT:
 - If the user message contains a "Reference images provided by the user" block, treat those descriptions as canon: fold each one into the matching "characters" or "locations" entry (use the name in its "(note: …)" tag when given), and keep wardrobe, props, weather, and mood consistent with them.
 - If the user message carries a "Delivery format:" line, let it steer location count, cast size and scene scale. It never changes the premise.
 - If the user message contains a "RefMods loaded into the video model" block, its descriptions are canon for what those characters / outfits / props / places look like, exactly as for reference images: fold each into the matching "characters" or "locations" entry (match by name or note) and keep appearance, wardrobe and setting consistent with it — never invent a different look for what a RefMod covers.
+- If the user message contains a "Story to dramatize" block, it is canon: keep its premise, its twist and its ending image exactly as written, and expand it into scenes, cast and locations. Dialogue lines in the story may be kept (this overrides "near-zero dialogue"). Never trim or soften the twist to fit "one turn" or the format: if it needs more room, use more scenes. Do not swap it for a more conventional version.
 - Do not include any text before or after the JSON object.`
+
+export const SYSTEM_PROMPT_STORY = `You are a brilliant short-film writer. The goal: a creative, interesting very short film that people remember and talk about. Given the user's idea, write THREE different story options. Each one is a very short story of 3 to 5 lines.
+
+Every story needs a real ARC and a real TWIST:
+- Setup: who the person is and what they are doing, in a sharp, specific detail.
+- Escalation: something starts to go wrong, or strange, or unexpectedly interesting.
+- The twist: a sudden turn the viewer did not see coming, yet it makes sense in hindsight. It changes what the viewer thought the story was about.
+- The last line lands on an image or a line that recontextualizes the beginning.
+
+How to get there:
+- Before writing, silently think of the three most obvious twists for this idea and throw them away. Use something stranger and more specific that still fits the character and the place.
+- The three options must differ in KIND, for example: a reversal of who holds the power, a hidden-truth reveal, a sudden shift of genre (comedy turns thriller, thriller turns tender, and so on).
+- Let the character's own world drive the twist (their job, their persona, their audience, their objects).
+- Funny, eerie, touching or shocking are all fine. Boring and safe is the only failure.
+
+Output format, exactly:
+1. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+2. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+3. TITLE IN CAPITALS
+3 to 5 lines of story.
+
+No screenplay formatting, no scene headings, no preamble, no commentary after the third story. A short line of dialogue inside the story is fine.
+If reference images or RefMods are described in the user message, use those people, outfits, props and places and never contradict their look. Follow any genre, spoken language and rating the user message names.`
 
 export const SYSTEM_PROMPT_SCRIPTWRITER_SOURCE = `You are a scriptwriter adapting a finished piece of writing — a letter, a diary entry, a short piece of prose — into a film. The user message contains the COMPLETE source text, not a pitch to invent from. Your job is to dramatize what it actually says, in order, expanding it audiovisually without inventing plot it doesn't contain. Given the source text, a genre, and a maximum number of scenes, you output a structured JSON script with an explicit cast-and-location bible.
 
@@ -1100,6 +1129,8 @@ Rules:
   - a time jump beyond a same-location lighting shift (e.g. "hours later");
   - two or more of the above — or of these plus dialogue, a camera move, and a lighting change — stacked into one setup, even if the script wrote it as a single scene.
   Never carry a subject-list change into a clip that still holds the old subject list's reference-image pin. If a planned clip trips more than one of the "NEW clip" triggers at once, split it into separate clips. When a subject-list change is genuinely in doubt, split rather than fold it into an existing reference-image conditioning — but only for the triggers above, never just to make clips shorter.
+- RISKY CONTENT: H3 usually draws these badly from a reference photo — doors and handles, trips and falls, sitting down, someone vanishing into an effect, an explosion behind a runner. Do not make one of them a clip's primary_beat; plan around it (open the clip with the person already seated, or cut to the settled aftermath) and say so in "notes". Product shots, mood pieces, big weather and quiet two-person scenes render best.
+- STITCHING: a clip nearly stops in its last second and its first and last frames are held still, so stitched clips slow at the joins. Keep the final second free of plot beats and add "trim held frames at the join" to "notes" for any clip that is followed by a continuation of the same action.
 - primary_beat is always physical and observable. Translate feeling into muscle and body action; never pass an emotion label ('shocked', 'relieved', 'conflicted') into any field.
 - camera_movement is ONE move — no 'then' / 'followed by'. Default to a move motivated by the clip's own beat (push in, pull back, track, pan, arc, tilt, pedestal) rather than to stillness, and don't repeat the same move in back-to-back clips of the same scene. Use a genuinely locked-off frame only when the clip's own beat calls for it, stated positively ("a locked-off frame holds on …"), never as a list of movements that must NOT happen — that kind of blanket "nothing moves" instruction risks bleeding across the whole clip and freezing motion that should happen.
 - Decide each clip's camera from its eyeline: if the thing the character looks at is not in frame, place the camera in that direction. Never resolve it with a head-turn toward the lens.
@@ -1402,12 +1433,12 @@ the visual description, never restate it as on-screen text).
 
 GENERAL RULES
 1. Write all structural prose in English, present tense, describing the video in playback order. Non-English text
-   belongs in exactly two places, and they behave differently: spoken dialogue — a [Language] tag immediately
-   followed by the quoted words, e.g. [German] "Wir müssen gehen." — is written in the "Primary language:" language
-   (translated into it if it was supplied in another — rule 6) and carries that leading tag, while exact visible
-   on-screen text is NEVER translated but reproduced in its original language, wrapped in English double quotes with
-   spelling and punctuation preserved exactly, and carries no [Language] tag — that absence is what tells the two
-   apart. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
+   belongs in exactly two places, and they behave differently: spoken dialogue — wrapped in <d> tags with a
+   [Language] tag first inside them, e.g. <d>[German] Wir müssen gehen.</d> — is written in the "Primary language:"
+   language (translated into it if it was supplied in another — rule 6) and carries that <d> wrapper, while exact
+   visible on-screen text is NEVER translated but reproduced in its original language, wrapped in English double
+   quotes with spelling and punctuation preserved exactly, and carries no <d> tag — that absence is what tells the
+   two apart. ON-SCREEN TEXT: any sign, label, subtitle, or banner actually visible in the
    frame must be typed verbatim in quotes — never merely described — with its typographic treatment (e.g. condensed,
    all-caps, serif) and where it sits in frame (e.g. centered, lower third) named. If no text should appear on
    screen, don't invent any.
@@ -1478,7 +1509,7 @@ GENERAL RULES
    Decide each shot's camera from what its characters are looking at: if the thing a character looks at is not in frame, H3 makes them stare into
    the lens. Do not fix that by adding a head-turn or "looks up at the camera" — that fights blocking the scene has
    already fixed; instead place the camera in the direction the character is already looking, and state explicitly
-   that they do NOT look into the lens.
+   that they do NOT look into the lens.${R4_FACING}
 5. Cuts only when they introduce new information (subject, space, state, viewpoint, time) — prefer camera movement
    over a cut otherwise. Shot 1 has no timestamp. Each later shot begins "At MM:SS.mmm, " followed by a cut phrase
    — vary it naturally rather than repeating the same wording every time (e.g. "the camera cuts to", "the shot
@@ -1504,7 +1535,7 @@ GENERAL RULES
    budget in rule 3. Multiple markers placed close together with no real change in subject,
    space, state, viewpoint, or time between them should become sequential camera behavior
    within the SAME shot, not separate cuts. Only start a new [Shot N] when a marker coincides
-   with genuine new information.
+   with genuine new information.${R5_REAL_CUTS}
 6. Dialogue: if the user message includes a "Spoken dialogue" section, its quoted text is the content of the speech
    — never invent additional words, drop any, or reorder them. Render it in the "Primary language:" language: if it
    was supplied in another language, translate it into natural, idiomatic speech in that language, keep proper names
@@ -1517,9 +1548,9 @@ GENERAL RULES
    (defiant, wary, tender, weary) rather than reaching for one flat adjective — the combination gives the voice
    model something to act on, not just describe. A character who never speaks, sings, or makes an off-screen vocal
    sound gets no speaker ID at all. Write speaker identity, delivery, and any acting beat as prose around the line,
-   never inside the quotes; write the language tag immediately before the quoted words and nothing else inside
-   them, e.g.: the engineer, in a clear, steady voice with an edge of defiance (S1), says: [English] "Alignment
-   complete." Use one of
+   never inside the <d> tags; wrap exactly the spoken words in <d>…</d>, with the language tag first inside the
+   wrapper and nothing else, e.g.: the engineer, in a clear, steady voice with an edge of defiance (S1), says:
+   <d>[English] Alignment complete.</d> Use one of
    these exact language tags and never invent another: [Arabic] [Chinese] [English] [French] [German] [Italian]
    [Japanese] [Korean] [Portuguese] [Russian] [Spanish]. A speaker name carrying a "(V.O.)" suffix (e.g. "STEFFI
    (V.O.): line") is always a voiceover — drop the "(V.O.)" suffix itself before quoting the words, but write it up exactly
@@ -1533,10 +1564,8 @@ GENERAL RULES
    shot, or in the next shot itself. Only the final shot of the whole clip, if it carries the last line, gets a
    lips-closing beat before its settle. A spoken line also pulls screen time toward its own shot and starves its
    neighbours — do not make a dialogue shot also the one responsible for establishing or continuing background
-   detail that a later shot depends on; keep continuity-critical staging in silent shots. In a multi-shot clip, if
-   dialogue is cut off by the end of the video, mark it with <cutoff>; if a line continues uninterrupted across a
-   shot cut, mark both connection points with <scenetrans> and say so in prose as well ("continues seamlessly across
-   the cut", "carries over from the previous shot", "remains audible across the transition").
+   detail that a later shot depends on; keep continuity-critical staging in silent shots. Never split one line across a cut — each
+   line lives wholly inside one shot — and never write <scenetrans> or <cutoff> tags.${R6_LINE_LAST}
 6a. A VOICE REFERENCE WITH NO SUPPLIED WORDS STILL NEEDS A LINE. If the user message carries an
    "Audio N — voice-timbre reference" line but no "Spoken dialogue" section, write the spoken line yourself: H3
    only applies a voice reference to actual speech, so a silent clip wastes it entirely. Compose ONE short line,
@@ -1560,7 +1589,16 @@ GENERAL RULES
    time from its neighbours, and continuity-critical staging goes in a silent shot. Use this sparingly — most
    shots, and plenty of whole clips, should stay silent; add a line only where the action plainly implies one,
    never reflexively just because a character is on screen. If a "Spoken dialogue" section IS present it wins
-   outright over this rule: use those words verbatim and invent nothing.
+   outright over this rule: use those words verbatim and invent nothing. Rule 6c overrides the one-line cap in
+   6a/6b when the Scene itself asks for talking.
+6c. SCENE-REQUESTED SPEECH. If the Scene text itself says a character talks, explains, narrates, discusses or
+   monologues (especially with a length cue such as "long", "explanatory", "rambles"), and no "Spoken dialogue"
+   section is given, the one-line cap of rules 6a/6b does NOT apply and the clip is not silent: write that speech
+   yourself as continuous dialogue that fills the speaking time — about 2–3 words per second over (Target duration
+   − 1.5s), e.g. roughly 27–40 English words in 15s, several connected sentences, never one. Keep it in character,
+   on the topic the Scene names with concrete specifics. Rule 6's format and timing still apply: ALL of the speech goes in ONE shot (a longer speech means a longer
+   shot; other shots stay silent), wrapped in <d>[Language] …</d>; use several speakers only if the Scene names them. Speech the Scene
+   only mentions in passing still gets rule 6b's single short line.
 7. overall_soundscape: ambience, physical/diegetic sounds, and non-verbal human sounds only — never repeat dialogue
    here. Use the user's "Ambient / diegetic sound" notes if given; otherwise invent restrained, fitting ambience.
    Write 1–4 sentences as a single continuous paragraph. Use N/A here only when complete silence across the
@@ -1615,6 +1653,8 @@ GENERAL RULES
    screen, bound it with an observable limit and avoid open-ended verbs ("spreading", "widening"). Never tie a
    messy substance to a surface that must stay clean with a preposition (coffee "around" / "on" / "through" a
    figurine) — state a gap between them and add that the clean surface is dry.
+${R13A}
+${R13B}
 14. Keep the whole prompt comfortably under 7,000 characters. If it's running long, cut duplicate adjectives and
    decorative environmental detail before cutting dialogue, visible text, reference roles, the action path, camera
    plan, or ending condition.
@@ -1632,7 +1672,7 @@ integrated_multimodal_description: [Shot 1] …
 overall_soundscape: …
 
 non_diegetic_music: …
-Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive").
+Use the given aspect ratio as a concrete, non-adaptive ratio (never "adaptive"). Use it only to frame the shots — never write the ratio, resolution or orientation ("9:16", "portrait", "vertical frame") in the prompt text.
 
 I2VA (one FIRST FRAME description given):
 Begin with exactly:
@@ -1724,10 +1764,11 @@ labels where each reference's effect applies. Use shot markers [Shot 1], [Shot 2
 rules as above. Cite a <Picture N> anchor in natural prose where it applies — "the shot begins from <Picture 1>",
 "the shot's keyframe corresponds to <Picture 2>", "the shot ends on <Picture 3>", "the framing follows
 <Picture 3>". When a referenced subject speaks, carry both labels: "<Subject 2> (S1) turns to her and says,
-[English] "…"" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
+<d>[English] …</d>" — <Subject N> is who they are, (Sx) is the voice; keep the same form, marked off-screen, for
 an off-screen line. Dialogue-dense material should fit the complete spoken timeline rather than pad toward the
 word count, and a one-shot clip is not automatically shorter — spread the detail by how much is actually
 happening in each shot.
+${REF_PLACE_AND_LOOK}
 APPEARANCE BELONGS TO subject_definitions, NOT HERE. This section's job is action, camera, and story events —
 not a second description of what the references show. Give a referenced subject's defining trait one short
 descriptive phrase (a few words, not a restated caption) at its FIRST appearance only, then use its <Subject N>
@@ -1740,7 +1781,7 @@ field. [Shot 1] (0.00–4.00s) <Subject 1> stands at a workbench, her hands pres
 the bench buzzes once and lights up — the trigger — and her eyes drop to it, her shoulders drawing in as she
 reads the screen. At 4.00s, the camera cuts to [Shot 2] (4.00–10.00s), a close push in with small amplitude:
 <Subject 1> straightens, sets her jaw, and looks up toward the doorway (S1), saying in a clear, steady voice with
-an edge of defiance, [English] "I'm not asking again." She holds the look through the final 1.5 seconds, her
+an edge of defiance, <d>[English] I'm not asking again.</d> She holds the look through the final 1.5 seconds, her
 breath rising and falling once, slow and even, her jaw staying set — the shot ends on that held gaze." Note what
 this does: the style opening precedes [Shot 1]; each shot's range is derived from its own cut timestamp and the
 next one (rule 5); the phone buzzing physically causes her reaction, which physically causes her decision to
@@ -1952,7 +1993,7 @@ export const TARGETS = {
     },
     slug: 'minimax', clipNoun: 'clip', clipShort: 'H3',
     clipSystem: SYSTEM_PROMPT_MINIMAX_H3,
-    defaultRefRatio: 'port916',
+    defaultRefRatio: 'land169',
     // The one prose field a missing LoRA trigger may be added to. Never
     // summary, subject_definitions, retention_analysis or either sound field,
     // and never inside quotes — dialogue and on-screen text alike are spoken
@@ -1977,7 +2018,7 @@ export const TARGET_GROUPS = [
 // `craft` = cfg.craftRules !== false: the main pipeline's MiniMax H3 writer then gets
 // the condensed per-mode V2 prompt with the creative-direction rules built in
 // (src/h3Prompt.js); off = the legacy prompt. Scriptwriter / Adapt never pass it.
-export const systemPromptFor = (target, frameMode, craft = false) =>
+export const systemPromptFor = (target, frameMode, craft = false, model = '') =>
   craft && target.id === 'minimax_h3'
     ? buildH3SystemV2(frameMode)
     : (target.buildSystem ? target.buildSystem(frameMode) : target.system)
